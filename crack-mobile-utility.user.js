@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.3.0.11
+// @version      4.3.0.13
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -24,7 +24,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.3.0.11';
+    const VERSION = '4.3.0.13';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -2110,6 +2110,13 @@
       color: var(--ac);
     }
     .qputil .chip.ck .ci { opacity: 1; }
+    #cmu-settings-panel .qputil .chip .cmu-side-setting-icon {
+      width: 15px !important;
+      height: 15px !important;
+      flex: 0 0 15px !important;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
     .qputil .chip:disabled,
     .qputil .chip[aria-disabled="true"] {
       opacity: .38;
@@ -7250,8 +7257,8 @@
         </div>
       </div>`;
     }
-    function qChip(action, key, label, checked, disabled = false) {
-        return `<button type="button" class="chip ${checked ? 'ck' : ''}" data-action="${action}" data-key="${key}" ${disabled ? 'disabled aria-disabled="true"' : ''}>${Q_CHECK_ICON}${label}</button>`;
+    function qChip(action, key, label, checked, disabled = false, iconHtml = Q_CHECK_ICON) {
+        return `<button type="button" class="chip ${checked ? 'ck' : ''}" data-action="${action}" data-key="${key}" ${disabled ? 'disabled aria-disabled="true"' : ''}>${iconHtml || Q_CHECK_ICON}${label}</button>`;
     }
     function qChipWrap(id, chips, enabled = true) {
         return `<div class="chips ${enabled ? '' : 'off'}" id="${id}">${chips || ''}</div>`;
@@ -8303,11 +8310,37 @@
         ['deducted', '차감']
     ];
     const SIDE_PART_LABELS = [
-        ['modelButton', '모델'], ['guideButton', '가이드'], ['profileButton', '프로필'], ['noteButton', '노트'],
+        ['modelButton', '모델'], ['guideButton', '가이드'], ['profileButton', '프로필'], ['profileBoxButton', '프로필 박스'], ['noteButton', '노트'],
         ['outputButton', '출력'], ['summaryButton', '요약'], ['imageButton', '이미지'], ['archiveButton', '보관함'],
         ['roomBackgroundButton', '이미지 테마'], ['scenePainterButton', '모바일 삽화'], ['wishManagerButton', 'Wish RP'], ['sceneBlurButton', 'CSP 테마'],
         ['startButton', '시작'], ['loreButton', '로어'], ['translatorButton', '번역'], ['aiSummaryButton', 'AI 요약'], ['gameHudButton', '게임 HUD']
     ];
+    const SIDE_PART_ICON_KEYS = Object.freeze({
+        modelButton: 'model',
+        guideButton: 'guide',
+        profileButton: 'profile',
+        profileBoxButton: 'profileBox',
+        noteButton: 'note',
+        outputButton: 'output',
+        summaryButton: 'summary',
+        imageButton: 'image',
+        archiveButton: 'archive',
+        roomBackgroundButton: 'roomBackground',
+        scenePainterButton: 'scenePainter',
+        wishManagerButton: 'wishManager',
+        sceneBlurButton: 'sceneBlur',
+        startButton: 'start',
+        loreButton: 'lore',
+        translatorButton: 'translator',
+        aiSummaryButton: 'aiSummary',
+        gameHudButton: 'gameHud',
+    });
+    function sidePartSettingIcon(key) {
+        const icon = SIDE_ICON[SIDE_PART_ICON_KEYS[key]];
+        if (!icon)
+            return Q_CHECK_ICON;
+        return String(icon).replace(/class="[^"]*chud-btn-icon[^"]*"/, 'class="ci cmu-side-setting-icon"');
+    }
     function renderDashboardPartRows() {
         const visible = getDashVisible();
         return DASH_PART_LABELS.map(([key, label]) => qChip('q-dash-chip', key, label, visible[key] !== false)).join('');
@@ -8321,7 +8354,9 @@
     }
     function renderSidebarPartRows() {
         const visible = sideLoadVisible();
-        return getAvailableSideEntries().map(([key, label]) => qChip('q-side-chip', key, label, visible[key] !== false)).join('');
+        return getAvailableSideEntries().map(([key, label]) =>
+            qChip('q-side-chip', key, label, visible[key] !== false, false, sidePartSettingIcon(key))
+        ).join('');
     }
     function loadRsVisibility() {
         try {
@@ -10015,6 +10050,7 @@
         modelButton: true,
         guideButton: true,
         profileButton: true,
+        profileBoxButton: true,
         noteButton: true,
         outputButton: true,
         summaryButton: true,
@@ -10044,6 +10080,7 @@
     // Wish RP Manager는 새 방 진입 뒤 자체 DOM을 다시 붙이는 동안 짧은 공백이 생길 수 있다.
     const CMU_INTEGRATION_SEEN = {
         wishManager: false,
+        profileBox: false,
     };
     const COMPACT_MODEL = {
         menu: null,
@@ -10087,6 +10124,7 @@
         model: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 3.5 6.5v11L12 22l8.5-4.5v-11L12 2Zm0 2.2 5.9 3.1L12 10.4 6.1 7.3 12 4.2ZM5.5 9l5.5 2.9v7.2l-5.5-2.9V9Zm13 0v7.2L13 19.1v-7.2L18.5 9Z"/></svg>',
         guide: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg>',
         profile: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 22c1.8-4 4.4-6 8-6s6.2 2 8 6"/></svg>',
+        profileBox: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2.25"/><path d="M5.8 16c.55-2.05 1.65-3.1 3.2-3.1s2.65 1.05 3.2 3.1"/><path d="M15 8h3"/><path d="M15 12h3"/><path d="M15 16h2"/></svg>',
         note: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
         output: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h16"/></svg>',
         summary: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 5h14v14H5z"/><path d="M8 9h8M8 13h5"/></svg>',
@@ -10447,6 +10485,49 @@
             return false;
         }
     }
+    function isProfileBoxInstalledLite() {
+        const w = getPublicWindow();
+        let hooked = false;
+        try {
+            hooked = !!(w?.__CPM_NETWORK_HOOKED__ || w?.__CPM_XHR_HOOKED__ || window?.__CPM_NETWORK_HOOKED__ || window?.__CPM_XHR_HOOKED__);
+        }
+        catch (_) { }
+        const detected = !!(hooked ||
+            document.getElementById('cpm-root') ||
+            document.getElementById('cpm-launcher') ||
+            document.getElementById('cpm-embedded-launcher') ||
+            document.querySelector('[data-cpm-profile-fallback="true"]') ||
+            document.querySelector('.cpm-external-profile-launcher:not(#chud-profile-box-btn)'));
+        if (detected)
+            CMU_INTEGRATION_SEEN.profileBox = true;
+        return detected || CMU_INTEGRATION_SEEN.profileBox;
+    }
+    function getProfileBoxTriggerLite() {
+        return document.getElementById('cpm-launcher') ||
+            document.getElementById('cpm-embedded-launcher') ||
+            document.querySelector('[data-cpm-profile-fallback="true"]') ||
+            document.querySelector('.cpm-external-profile-launcher:not(#chud-profile-box-btn)');
+    }
+    function openProfileBoxLite() {
+        if (document.getElementById('cpm-root'))
+            return true;
+        const tryOpen = () => {
+            const trigger = getProfileBoxTriggerLite();
+            return trigger ? fireClickSequence(trigger) : false;
+        };
+        if (tryOpen())
+            return true;
+        let opened = false;
+        const waits = [160, 420, 800, 1300];
+        waits.forEach((ms, index) => setTimeout(() => {
+            if (opened)
+                return;
+            opened = !!document.getElementById('cpm-root') || tryOpen();
+            if (!opened && index === waits.length - 1)
+                showToast('프로필 박스 버튼을 찾지 못함');
+        }, ms));
+        return true;
+    }
     function isWishRpManagerInstalledLite() {
         const detected = !!(document.documentElement?.getAttribute('data-wish-rp-manager-ready') ||
             document.getElementById('wish-rp-toolbar-launcher') ||
@@ -10492,6 +10573,7 @@
             modelButton: true,
             guideButton: true,
             profileButton: true,
+            profileBoxButton: isProfileBoxInstalledLite(),
             noteButton: true,
             outputButton: true,
             summaryButton: true,
@@ -11783,7 +11865,8 @@
             const buttons = {
                 modelButton: makeSideButton('modelButton', 'chud-model-btn', '모델 빠른 선택', SIDE_ICON.model, openCompactModelPicker),
                 guideButton: makeSideButton('guideButton', 'chud-guide-btn', '플레이 가이드', SIDE_ICON.guide, () => clickFirst([/플레이\s*가이드/, /가이드/], '플레이 가이드')),
-                profileButton: makeSideButton('profileButton', 'chud-profile-btn', '대화 프로필', SIDE_ICON.profile, () => clickFirst([/대화\s*프로필/, /프로필/], '대화 프로필')),
+                profileButton: makeSideButton('profileButton', 'chud-native-profile-btn', '크랙 기본 프로필', SIDE_ICON.profile, () => clickFirst([/대화\s*프로필/, /프로필/], '대화 프로필')),
+                profileBoxButton: makeSideButton('profileBoxButton', 'chud-profile-box-btn', '프로필 박스', SIDE_ICON.profileBox, openProfileBoxLite),
                 noteButton: makeSideButton('noteButton', 'chud-note-btn', '유저 노트', SIDE_ICON.note, () => clickFirst([/유저\s*노트/, /노트/], '유저 노트')),
                 outputButton: makeSideButton('outputButton', 'chud-output-btn', '답변 길이 및 생각 조절', SIDE_ICON.output, openOutputSettingsLite),
                 summaryButton: makeSideButton('summaryButton', 'chud-summary-btn', '요약 메모리', SIDE_ICON.summary, openSummaryMemoryLite),
@@ -11799,8 +11882,12 @@
                 aiSummaryButton: makeSideButton('aiSummaryButton', 'chud-ai-summary-btn', 'AI 요약', SIDE_ICON.aiSummary, openAiSummaryLite),
                 gameHudButton: makeSideButton('gameHudButton', 'chud-game-hud-btn', '게임 HUD', SIDE_ICON.gameHud, openGameHudLite),
             };
+            // Profile Box 1.2.x는 기존 프로필 버튼을 외부 런처로 가로채므로,
+            // 크랙 기본 프로필은 해당 선택자에서 분리하고 전용 프로필 박스 버튼만 연동한다.
+            buttons.profileButton.dataset.sideKey = 'nativeProfileButton';
+            buttons.profileBoxButton.dataset.cpmExternalProfileLauncher = 'true';
             DASH_SIDE.btns = buttons;
-            content.append(buttons.modelButton, buttons.guideButton, buttons.profileButton, buttons.noteButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.gameHudButton);
+            content.append(buttons.modelButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.gameHudButton);
             bar.append(content);
         }
         if (bar.parentElement !== shell)
