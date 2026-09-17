@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.3.0.10
+// @version      4.3.0.11
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -24,7 +24,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.3.0.10';
+    const VERSION = '4.3.0.11';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -10040,6 +10040,11 @@
         available: null,
         btns: {},
     };
+    // SPA 채팅방 이동 순간 외부 확장 DOM이 잠깐 사라져도, 이미 감지한 연동 버튼은 숨기지 않는다.
+    // Wish RP Manager는 새 방 진입 뒤 자체 DOM을 다시 붙이는 동안 짧은 공백이 생길 수 있다.
+    const CMU_INTEGRATION_SEEN = {
+        wishManager: false,
+    };
     const COMPACT_MODEL = {
         menu: null,
         nativeShell: null,
@@ -10096,7 +10101,7 @@
         aiSummary: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 4 7l8 4 8-4-8-4Z"/><path d="M4 12l8 4 8-4"/><path d="M4 17l8 4 8-4"/></svg>',
         gameHud: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7.2 7.6h9.6c2.15 0 3.62 1.42 4.12 4l.7 3.62c.36 1.88-.54 3.18-1.9 3.18-.8 0-1.5-.38-2.08-1.06l-1.24-1.44H7.6l-1.24 1.44c-.58.68-1.28 1.06-2.08 1.06-1.36 0-2.26-1.3-1.9-3.18l.7-3.62c.5-2.58 1.97-4 4.12-4z"/><path d="M7.2 10.2v3.6M5.4 12h3.6"/><circle cx="16.25" cy="10.9" r=".82" fill="currentColor" stroke="none"/><circle cx="18.2" cy="13.05" r=".82" fill="currentColor" stroke="none"/></svg>',
         scenePainter: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 4.2 19.8 9.3"/><path d="m13.5 5.4 5.1 5.1-8.35 8.35-5.95 1.2 1.2-5.95z"/><path d="m5.5 14.1 4.4 4.4"/><path d="M15.8 3.1c.74-.74 1.94-.74 2.68 0l2.42 2.42c.74.74.74 1.94 0 2.68l-2.3 2.3-5.1-5.1z"/></svg>',
-        wishManager: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M20.2 4.2c-3.9.7-7.5 2.2-10.3 4.5C7.7 10.5 6.1 12.7 5 15.1c2.3-.4 4.4-1.2 6.4-2.4-1.2 1.9-2.8 3.4-4.6 4.6 2.1-.2 4.1-.9 5.9-2-1 1.4-2.2 2.6-3.7 3.5 4.9-1.3 8.6-5.6 11.2-14.6Z"/><path d="M5 15.1c-.6 1.5-.9 3-1 4.6"/></svg>',
+        wishManager: '<svg class="chud-btn-icon chud-wish-heart-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21.35 10.55 20.03C5.4 15.36 2 12.27 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.77-3.4 6.86-8.55 11.54L12 21.35Z"/></svg>',
     };
     function isOwnElement(el) {
         return !!el?.closest?.(`#${ID.panel}, #${ID.toolbarWrapper}, #chud-infobar, #chud-sidebar, #chud-info-menu, #chud-side-menu, #igx-live-popup, #cmu-compact-model-menu, #rpcm-overlay, #csp-v35-root`);
@@ -10443,12 +10448,15 @@
         }
     }
     function isWishRpManagerInstalledLite() {
-        return !!(document.documentElement?.getAttribute('data-wish-rp-manager-ready') ||
+        const detected = !!(document.documentElement?.getAttribute('data-wish-rp-manager-ready') ||
             document.getElementById('wish-rp-toolbar-launcher') ||
             document.querySelector('[data-rpcm-open-manager="1"]') ||
             document.getElementById('rpcm-fab') ||
             document.getElementById('rpcm-mobile-button-host') ||
             document.getElementById('rpcm-overlay'));
+        if (detected)
+            CMU_INTEGRATION_SEEN.wishManager = true;
+        return detected || CMU_INTEGRATION_SEEN.wishManager;
     }
     function openWishRpManagerLite() {
         const tryOpen = () => {
@@ -10626,6 +10634,63 @@
     }
     document.addEventListener('crack-ai-summary:ready', refreshIntegratedSideButtonsLite);
     document.addEventListener('wish-rp-manager:ready', refreshIntegratedSideButtonsLite);
+    function scheduleIntegratedSideButtonsRouteRefreshLite() {
+        // Crack은 SPA라 새 채팅방 진입 시 외부 확장 버튼이 본문보다 늦게 재주입될 수 있다.
+        // 새로고침 없이도 늦게 붙은 Wish RP/통합 버튼을 다시 감지해 사이드바에 복원한다.
+        [0, 120, 320, 700, 1300, 2200, 3600].forEach(ms => setTimeout(() => {
+            if (!isChatRoomPath())
+                return;
+            refreshIntegratedSideButtonsLite();
+        }, ms));
+    }
+    function getOutputSettingsTriggerLite() {
+        // 2026-09 Crack UI의 현재 명칭은 '답변 길이 및 생각 조절'.
+        // 구버전 명칭(출력량/출력 설정)도 함께 남겨 호환한다.
+        return findClickableByTextOrLabel([
+            /답변\s*길이\s*및\s*생각\s*조절/,
+            /답변\s*길이/,
+            /출력량(?:\s*(?:조절|설정))?/,
+            /출력\s*설정/,
+        ]);
+    }
+    function tryOpenOutputSettingsLite() {
+        const trigger = getOutputSettingsTriggerLite();
+        return trigger ? fireClickSequence(trigger) : false;
+    }
+    function openOutputSettingsLite() {
+        if (tryOpenOutputSettingsLite())
+            return true;
+
+        // 이 항목은 우측 '채팅방 설정' 메뉴가 닫혀 있으면 DOM에 없거나 비표시 상태다.
+        // 유틸 버튼에서 바로 누를 때 원본 메뉴를 잠깐 열고 원본 행을 그대로 클릭한다.
+        const openRoomMenu = () => {
+            if (isCmuRoomPanelOpen())
+                return true;
+            const toggle = findCmuRoomMenuToggle();
+            if (!toggle)
+                return false;
+            const ok = fireClickSequence(toggle);
+            if (ok)
+                scheduleCmuEdgeMenuStateSync();
+            return ok;
+        };
+        openRoomMenu();
+
+        let opened = false;
+        const waits = [80, 180, 340, 600, 950, 1450, 2100];
+        waits.forEach((ms, index) => setTimeout(() => {
+            if (opened)
+                return;
+            if (index === 2 && !isCmuRoomPanelOpen())
+                openRoomMenu();
+            opened = tryOpenOutputSettingsLite();
+            if (!opened && index === waits.length - 1)
+                showToast('답변 길이 및 생각 조절 버튼을 찾지 못함');
+        }, ms));
+        showToast('답변 길이 설정 준비 중 · 설정 메뉴를 여는 중');
+        return true;
+    }
+
     function getStartSettingTriggerLite() {
         const title = Array.from(document.querySelectorAll('p, span')).find((el) => {
             if (!(el instanceof HTMLElement))
@@ -11720,7 +11785,7 @@
                 guideButton: makeSideButton('guideButton', 'chud-guide-btn', '플레이 가이드', SIDE_ICON.guide, () => clickFirst([/플레이\s*가이드/, /가이드/], '플레이 가이드')),
                 profileButton: makeSideButton('profileButton', 'chud-profile-btn', '대화 프로필', SIDE_ICON.profile, () => clickFirst([/대화\s*프로필/, /프로필/], '대화 프로필')),
                 noteButton: makeSideButton('noteButton', 'chud-note-btn', '유저 노트', SIDE_ICON.note, () => clickFirst([/유저\s*노트/, /노트/], '유저 노트')),
-                outputButton: makeSideButton('outputButton', 'chud-output-btn', '출력량 조절', SIDE_ICON.output, () => clickFirst([/출력량/, /출력/], '출력량')),
+                outputButton: makeSideButton('outputButton', 'chud-output-btn', '답변 길이 및 생각 조절', SIDE_ICON.output, openOutputSettingsLite),
                 summaryButton: makeSideButton('summaryButton', 'chud-summary-btn', '요약 메모리', SIDE_ICON.summary, openSummaryMemoryLite),
                 imageButton: makeSideButton('imageButton', 'chud-image-btn', '이미지 ON/OFF', SIDE_ICON.image, () => clickFirst([/상황\s*이미지\s*보기/, /상황.*이미지/, /이미지.*보기/], '이미지')),
                 archiveButton: makeSideButton('archiveButton', 'chud-archive-btn', '이미지 보관함', SIDE_ICON.archive, () => clickFirst([/이미지\s*보관함/, /보관함/], '이미지 보관함')),
@@ -17438,6 +17503,7 @@
         DASH_SIDE.availableAt = 0;
         resetAnimatedThumbRouteState();
         scheduleInject('route');
+        scheduleIntegratedSideButtonsRouteRefreshLite();
         scheduleMobileChatListPopoverLayoutSettle();
         scheduleCmuEdgeMenuStateSync();
         if (settings.dashboard) {
