@@ -4,9 +4,9 @@
 // @version      4.3.0.10
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
-// @homepageURL https://github.com/mo1om1994-del/crack-userscripts
-// @downloadURL https://raw.githubusercontent.com/mo1om1994-del/crack-userscripts/main/crack-mobile-utility.user.js
-// @updateURL   https://raw.githubusercontent.com/mo1om1994-del/crack-userscripts/main/crack-mobile-utility.user.js
+// @homepageURL https://github.com/Chapchu1/crack-userscripts
+// @downloadURL https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
+// @updateURL   https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
 // @match        *://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        GM_addStyle

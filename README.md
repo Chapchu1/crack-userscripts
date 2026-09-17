@@ -8,10 +8,10 @@ Tampermonkey에서 바로 설치하고 GitHub를 통해 자동 업데이트할 �
 
 | 스크립트 | 버전 | 설치 |
 |---|---:|---|
-| 📱 Crack Mobile Utility | 4.3.0.10 | [설치하기](https://raw.githubusercontent.com/mo1om1994-del/crack-userscripts/main/crack-mobile-utility.user.js) |
-| Crack TXT → ChatGPT 전송기 (모바일) | 1.3.3 | [설치하기](https://raw.githubusercontent.com/mo1om1994-del/crack-userscripts/main/crack-txt-chatgpt-mobile.user.js) |
-| ✨ Crack Muse Writer (AI 답변 커스텀) | 5.2.18 | [설치하기](https://raw.githubusercontent.com/mo1om1994-del/crack-userscripts/main/crack-muse-writer.user.js) |
-| Crack Profile Box (크랙 프로필 박스) | 1.2.3 | [설치하기](https://raw.githubusercontent.com/mo1om1994-del/crack-userscripts/main/crack-profile-box.user.js) |
+| 📱 Crack Mobile Utility | 4.3.0.10 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js) |
+| Crack TXT → ChatGPT 전송기 (모바일) | 1.3.3 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-txt-chatgpt-mobile.user.js) |
+| ✨ Crack Muse Writer (AI 답변 커스텀) | 5.2.18 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-muse-writer.user.js) |
+| Crack Profile Box (크랙 프로필 박스) | 1.2.3 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-profile-box.user.js) |
 
 ## 자동 업데이트
 

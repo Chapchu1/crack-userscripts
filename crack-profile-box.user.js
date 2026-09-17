@@ -4,9 +4,9 @@
 // @version      1.2.3
 // @description  크랙 프로필 박스
 // @author       chu
-// @updateURL   https://raw.githubusercontent.com/mo1om1994-del/crack-userscripts/main/crack-profile-box.user.js
-// @downloadURL https://raw.githubusercontent.com/mo1om1994-del/crack-userscripts/main/crack-profile-box.user.js
-// @homepageURL https://github.com/mo1om1994-del/crack-userscripts
+// @updateURL   https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-profile-box.user.js
+// @downloadURL https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-profile-box.user.js
+// @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-start
 // @grant        none

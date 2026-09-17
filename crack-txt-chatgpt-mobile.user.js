@@ -5,9 +5,9 @@
 // @description  Crack 채팅 전체/이어서 TXT 저장, 작품×프리셋별 ChatGPT 대화 연결, 다중 TXT 첨부, ChatGPT 앱 열기를 지원합니다.
 // @author       chu
 // @license      MIT
-// @homepageURL https://github.com/mo1om1994-del/crack-userscripts
-// @downloadURL https://raw.githubusercontent.com/mo1om1994-del/crack-userscripts/main/crack-txt-chatgpt-mobile.user.js
-// @updateURL   https://raw.githubusercontent.com/mo1om1994-del/crack-userscripts/main/crack-txt-chatgpt-mobile.user.js
+// @homepageURL https://github.com/Chapchu1/crack-userscripts
+// @downloadURL https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-txt-chatgpt-mobile.user.js
+// @updateURL   https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-txt-chatgpt-mobile.user.js
 // @connect      crack-api.wrtn.ai
 // @match        https://crack.wrtn.ai/*
 // @match        https://chatgpt.com/*
