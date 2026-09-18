@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.3.0.13
+// @version      4.3.0.14
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -12,6 +12,7 @@
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
+// @connect      old.rs.igx.kr
 // @connect      rs.igx.kr
 // @connect      claude-radiosonde.chyoyam.chatgpt.site
 // @connect      crack-api.wrtn.ai
@@ -24,7 +25,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.3.0.13';
+    const VERSION = '4.3.0.14';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -13138,8 +13139,8 @@
         }
     }
     const RS = {
-        apiBase: 'https://rs.igx.kr/api/simple/',
-        statistics: 'https://rs.igx.kr/api/statistics',
+        apiBase: 'https://old.rs.igx.kr/api/simple/',
+        statistics: 'https://old.rs.igx.kr/api/statistics',
         yameStatus: 'https://claude-radiosonde.chyoyam.chatgpt.site/api/v1/status',
         activeWindowMs: 72 * 60 * 60 * 1000,
         validStatuses: new Set(['active', 'degraded', 'impacted']),
