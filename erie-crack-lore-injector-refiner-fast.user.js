@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name        에리의 크랙 로어 인젝터 (Universal · 응답교정 빠른패치)
+// @name        에리의 크랙 로어 인젝터 (Universal)
 // @namespace   에리의 크랙 로어 인젝터
-// @version     1.4.0.260918-universal.33-refiner-fast
+// @version     1.4.0.260918-universal.34-refiner-fast
 // @description 에리를 죽인 크랙을 때린다.
 // @author      로컬AI
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
