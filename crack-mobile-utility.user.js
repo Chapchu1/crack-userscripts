@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.3.0.17
+// @version      4.3.0.18
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -25,7 +25,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.3.0.17';
+    const VERSION = '4.3.0.18';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -10689,27 +10689,87 @@
             findExternalClickable([/AI\s*요약(?:·메모리)?/i, /요약\s*및\s*장기기억\s*도구/i], false);
     }
     function openAiSummaryLite() {
+        // 2.3.8+ 직접 브리지: 사이드바 DOM이 없어도 즉시 연다.
         if (dispatchAiSummaryOpenLite())
             return true;
+
         const btn = findAiSummaryTriggerLite();
         if (btn)
             return fireClickSequence(btn);
 
-        // AI 요약 2.3.x는 우측 채팅방 설정 메뉴가 닫혀 있으면
-        // #crack-ext-ai-sidebar-menu를 아직 만들지 않는 경우가 있다.
-        // 확프 자체는 로드된 상태라면 원본 설정 패널을 잠깐 열어 런처 주입을 유도한 뒤 클릭한다.
         const aiLoaded = isAiSummaryInstalledLite();
-        let openedRoomPanel = false;
-        if (aiLoaded && !isCmuRoomPanelOpen()) {
-            const roomToggle = findCmuRoomMenuToggle();
-            if (roomToggle) {
-                openedRoomPanel = !!fireClickSequence(roomToggle);
-                if (openedRoomPanel) {
-                    scheduleCmuEdgeMenuStateSync();
-                    DASH_SIDE.availableAt = 0;
-                }
-            }
+        if (!aiLoaded) {
+            showToast('AI 요약 확장프로그램을 찾지 못함');
+            return false;
         }
+
+        /*
+         * AI 요약 2.3.7 계열 호환:
+         * 해당 확프는 원본 사이드바의 "키보드 단축키" 항목이 실제 DOM에 보일 때
+         * #crack-ext-ai-sidebar-menu를 생성한다. 그래서 새로고침 직후 CMU 버튼만 누르면
+         * CSS는 감지되지만 런처가 아직 없어 아무 반응이 없는 상태가 생길 수 있다.
+         *
+         * 원본 사이드바를 사용자에게 실제로 열어 보이지 않고, 4px짜리 임시 호환 앵커를
+         * 잠깐 만들어 AI 요약 확프의 기존 MutationObserver가 런처를 스스로 생성하게 한다.
+         * 생성된 런처를 클릭한 뒤 임시 앵커는 즉시 정리한다.
+         */
+        const compatId = 'cmu-ai-summary-compat-host';
+        let compatHost = document.getElementById(compatId);
+
+        const ensureCompatHost = () => {
+            if (compatHost?.isConnected)
+                return compatHost;
+            compatHost = document.createElement('div');
+            compatHost.id = compatId;
+            compatHost.setAttribute('aria-hidden', 'true');
+            compatHost.style.cssText = [
+                'position:fixed',
+                'left:1px',
+                'top:1px',
+                'width:4px',
+                'height:4px',
+                'overflow:hidden',
+                'opacity:.01',
+                'pointer-events:none',
+                'z-index:-1'
+            ].join(';');
+
+            const anchor = document.createElement('div');
+            // AI 요약 2.3.7의 findAiSummarySidebarAnchor()가 찾는 원본 클래스/문구.
+            anchor.className = 'px-2.5';
+            anchor.style.cssText = 'display:block;width:3px;height:3px;overflow:hidden;font-size:1px;line-height:1px';
+            anchor.textContent = '키보드 단축키';
+            compatHost.appendChild(anchor);
+            (document.body || document.documentElement).appendChild(compatHost);
+            return compatHost;
+        };
+
+        const cleanupCompatHost = () => {
+            const host = document.getElementById(compatId);
+            if (host)
+                host.remove();
+            compatHost = null;
+        };
+
+        ensureCompatHost();
+
+        // 아주 구형/변형판에서 MutationObserver 재주입을 놓친 경우를 위한 보조 자극.
+        // 사용자의 실제 사이드바를 화면에 띄우는 방식은 마지막 단계에서만 잠깐 사용한다.
+        let openedRoomPanel = false;
+        const tryWakeNativeSidebar = () => {
+            if (findAiSummaryTriggerLite())
+                return;
+            if (isCmuRoomPanelOpen())
+                return;
+            const toggle = findCmuRoomMenuToggle();
+            if (!toggle)
+                return;
+            openedRoomPanel = !!fireClickSequence(toggle);
+            if (openedRoomPanel) {
+                scheduleCmuEdgeMenuStateSync();
+                DASH_SIDE.availableAt = 0;
+            }
+        };
 
         const restoreRoomPanel = () => {
             if (!openedRoomPanel)
@@ -10721,30 +10781,47 @@
                 if (toggle)
                     fireClickSequence(toggle);
                 scheduleCmuEdgeMenuStateSync();
-            }, 220);
+            }, 180);
         };
 
         let opened = false;
-        [120, 260, 500, 900, 1500, 2400].forEach((ms, index, all) => setTimeout(() => {
+        const waits = [0, 40, 90, 160, 260, 420, 650, 950, 1350, 1900, 2700, 3600];
+        waits.forEach((ms, index) => setTimeout(() => {
             if (opened)
                 return;
+
+            // 2.3.8+가 늦게 준비된 경우 브리지 우선.
             opened = dispatchAiSummaryOpenLite();
+
             if (!opened) {
                 const lateBtn = findAiSummaryTriggerLite();
                 if (lateBtn)
                     opened = fireClickSequence(lateBtn);
             }
+
+            // 임시 앵커 방식이 통하지 않는 변형판만 원본 채팅방 설정 패널을 한 번 깨운다.
+            if (!opened && index === 7)
+                tryWakeNativeSidebar();
+
             if (opened) {
+                setTimeout(cleanupCompatHost, 320);
                 restoreRoomPanel();
                 refreshIntegratedSideButtonsLite();
                 return;
             }
-            if (index === all.length - 1) {
+
+            if (index === waits.length - 1) {
+                cleanupCompatHost();
                 restoreRoomPanel();
-                showToast(aiLoaded ? 'AI 요약 버튼을 불러오지 못함' : 'AI 요약 확장프로그램을 찾지 못함');
+                showToast('AI 요약 버튼을 불러오지 못함');
             }
         }, ms));
-        showToast(aiLoaded ? 'AI 요약 여는 중…' : 'AI 요약 준비 중 · 잠시 후 자동으로 열림');
+
+        // 0~수백 ms 안에 열리는 정상 케이스에서는 불필요한 "여는 중" 토스트를 띄우지 않는다.
+        setTimeout(() => {
+            if (!opened)
+                showToast('AI 요약 준비 중…');
+        }, 700);
         return true;
     }
     function refreshIntegratedSideButtonsLite() {
