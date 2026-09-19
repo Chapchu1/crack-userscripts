@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.3.0.14
+// @version      4.3.0.15
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -25,7 +25,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.3.0.14';
+    const VERSION = '4.3.0.15';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -10268,7 +10268,12 @@
     }
     function isAiSummaryInstalledLite() {
         const root = document.documentElement;
+        // AI 요약 확프는 새로고침 직후 우측 설정 메뉴가 닫혀 있으면
+        // 사이드바 런처 자체를 아직 만들지 않을 수 있다.
+        // 대신 확프가 부팅하면서 항상 넣는 전용 스타일/오버레이도 설치 신호로 인정한다.
         return !!(root?.getAttribute('data-crack-ai-summary-ready') ||
+            document.getElementById('crack-ext-ai-css') ||
+            document.querySelector('.crack-ext-ai-overlay') ||
             document.getElementById('crack-ext-ai-sidebar-menu') ||
             document.querySelector('.crack-ext-header-ai-btn, [data-ce-ai-summary="true"]') ||
             findExternalClickable([/AI\s*요약(?:·메모리)?/], false));
@@ -10690,8 +10695,37 @@
         if (btn)
             return fireClickSequence(btn);
 
+        // AI 요약 2.3.x는 우측 채팅방 설정 메뉴가 닫혀 있으면
+        // #crack-ext-ai-sidebar-menu를 아직 만들지 않는 경우가 있다.
+        // 확프 자체는 로드된 상태라면 원본 설정 패널을 잠깐 열어 런처 주입을 유도한 뒤 클릭한다.
+        const aiLoaded = isAiSummaryInstalledLite();
+        let openedRoomPanel = false;
+        if (aiLoaded && !isCmuRoomPanelOpen()) {
+            const roomToggle = findCmuRoomMenuToggle();
+            if (roomToggle) {
+                openedRoomPanel = !!fireClickSequence(roomToggle);
+                if (openedRoomPanel) {
+                    scheduleCmuEdgeMenuStateSync();
+                    DASH_SIDE.availableAt = 0;
+                }
+            }
+        }
+
+        const restoreRoomPanel = () => {
+            if (!openedRoomPanel)
+                return;
+            setTimeout(() => {
+                if (!isCmuRoomPanelOpen())
+                    return;
+                const toggle = findCmuRoomMenuToggle();
+                if (toggle)
+                    fireClickSequence(toggle);
+                scheduleCmuEdgeMenuStateSync();
+            }, 220);
+        };
+
         let opened = false;
-        [180, 500, 1000, 1800].forEach((ms, index, all) => setTimeout(() => {
+        [120, 260, 500, 900, 1500, 2400].forEach((ms, index, all) => setTimeout(() => {
             if (opened)
                 return;
             opened = dispatchAiSummaryOpenLite();
@@ -10700,10 +10734,17 @@
                 if (lateBtn)
                     opened = fireClickSequence(lateBtn);
             }
-            if (!opened && index === all.length - 1)
-                showToast('AI 요약 확장프로그램을 찾지 못함');
+            if (opened) {
+                restoreRoomPanel();
+                refreshIntegratedSideButtonsLite();
+                return;
+            }
+            if (index === all.length - 1) {
+                restoreRoomPanel();
+                showToast(aiLoaded ? 'AI 요약 버튼을 불러오지 못함' : 'AI 요약 확장프로그램을 찾지 못함');
+            }
         }, ms));
-        showToast('AI 요약 준비 중 · 잠시 후 자동으로 열림');
+        showToast(aiLoaded ? 'AI 요약 여는 중…' : 'AI 요약 준비 중 · 잠시 후 자동으로 열림');
         return true;
     }
     function refreshIntegratedSideButtonsLite() {
@@ -10720,7 +10761,7 @@
     function scheduleIntegratedSideButtonsRouteRefreshLite() {
         // Crack은 SPA라 새 채팅방 진입 시 외부 확장 버튼이 본문보다 늦게 재주입될 수 있다.
         // 새로고침 없이도 늦게 붙은 Wish RP/통합 버튼을 다시 감지해 사이드바에 복원한다.
-        [0, 120, 320, 700, 1300, 2200, 3600].forEach(ms => setTimeout(() => {
+        [0, 120, 320, 700, 1300, 2200, 3600, 6000, 9000].forEach(ms => setTimeout(() => {
             if (!isChatRoomPath())
                 return;
             refreshIntegratedSideButtonsLite();
@@ -17678,6 +17719,9 @@
     ensureSettingsPanelSilent();
     startBootObserver();
     boot('initial');
+    // 최초 새로고침에서도 외부 확장(AI 요약/Wish RP 등)의 늦은 부팅을 다시 감지한다.
+    // 기존에는 SPA 방 이동 때만 재감지해 AI 요약 버튼이 새로고침 후 사라질 수 있었다.
+    scheduleIntegratedSideButtonsRouteRefreshLite();
     setTimeout(() => boot('late-1'), 600);
     setTimeout(() => boot('late-2'), 1800);
     CMU_RUNTIME.dispose = () => {
