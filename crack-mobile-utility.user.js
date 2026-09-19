@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.3.0.15
+// @version      4.3.0.17
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -25,7 +25,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.3.0.15';
+    const VERSION = '4.3.0.17';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -11705,17 +11705,141 @@
         root.addEventListener('click', onActualNativeChoice, { capture: true, once: true });
         return true;
     }
-    async function waitForCompactModelSnapshot(seq) {
-        for (const delay of [0, 45, 80, 130, 190, 280, 420]) {
-            if (delay)
-                await new Promise(resolve => setTimeout(resolve, delay));
-            if (seq !== COMPACT_MODEL.seq)
-                return null;
-            const snapshot = compactModelSnapshot();
-            if (snapshot?.entries?.length)
-                return snapshot;
+    function compactModelSnapshotFromKnownLabels() {
+        /*
+         * 4.3.0.17: 원본 모델 아이콘 이미지가 늦게 붙어도 텍스트 행은 먼저 생기는 경우가 있다.
+         * 기존 스냅샷은 model-icon URL이 생길 때까지 기다렸기 때문에 모바일에서 체감 지연이 컸다.
+         * 이전에 한 번이라도 확인한 모델 라벨을 이용해 텍스트 행만으로도 즉시 스냅샷을 만든다.
+         */
+        const knownMap = new Map();
+        const seen = nmfLoadSeen();
+        const registry = cmiLoadRegistry();
+        const tokens = new Set([...Object.keys(seen || {}), ...Object.keys(registry || {})]);
+        for (const token of tokens) {
+            const label = nmfSeenLabelOf(seen, token) || registry?.[token]?.label || cmiAutoLabel(token) || token;
+            const normalized = compactModelNormalizeLabel(label);
+            if (normalized.length >= 2)
+                knownMap.set(token, { token, label, normalized });
         }
-        return null;
+        if (!knownMap.size)
+            return null;
+
+        const roots = Array.from(document.querySelectorAll('[data-radix-menu-content]')).filter(root => {
+            if (!(root instanceof HTMLElement) || !root.isConnected || root.getAttribute('data-state') === 'closed')
+                return false;
+            const shell = root.closest('[data-radix-popper-content-wrapper]') || root;
+            if (shell?.getAttribute?.('data-state') === 'closed')
+                return false;
+            try {
+                const style = getComputedStyle(shell);
+                return style.display !== 'none' && style.visibility !== 'hidden';
+            }
+            catch (_) {
+                return true;
+            }
+        });
+        let best = null;
+        for (const root of roots) {
+            const shell = root.closest('[data-radix-popper-content-wrapper]') || root;
+            const entries = [];
+            const used = new Set();
+            const rows = Array.from(root.querySelectorAll('[role^="menuitem"], [data-radix-collection-item], [role="option"], button, li, a'));
+            for (const row of rows) {
+                if (!(row instanceof HTMLElement) || !row.isConnected)
+                    continue;
+                let rowText = '';
+                try {
+                    rowText = compactModelNormalizeLabel(getClickableLabelLite(row));
+                }
+                catch (_) { }
+                if (!rowText)
+                    continue;
+                const matches = Array.from(knownMap.values())
+                    .filter(item => !used.has(item.token) && rowText.includes(item.normalized))
+                    .sort((a, b) => b.normalized.length - a.normalized.length);
+                if (!matches.length)
+                    continue;
+                const match = matches[0];
+                const actionItem = compactModelNativeActionTarget(row, match.token) || row;
+                const selected = row.matches('[aria-checked="true"], [aria-selected="true"], [data-state="checked"]') ||
+                    !!row.querySelector('[aria-checked="true"], [aria-selected="true"], [data-state="checked"]');
+                const disabled = row.matches('[aria-disabled="true"], :disabled') || actionItem.matches('[aria-disabled="true"], :disabled') ||
+                    !!row.querySelector('[aria-disabled="true"], :disabled');
+                entries.push({
+                    token: match.token,
+                    label: match.label,
+                    item: actionItem,
+                    iconSrc: compactModelImageSource(row, nmfIconFlatToken(match.token)) || cmiIconUrl(match.token),
+                    selected,
+                    disabled,
+                });
+                used.add(match.token);
+            }
+            if (entries.length && (!best || entries.length > best.entries.length))
+                best = { root, shell, entries };
+        }
+        return best?.entries?.length >= 2 ? best : null;
+    }
+    function compactModelFastSnapshot() {
+        return compactModelSnapshot() || compactModelSnapshotFromKnownLabels();
+    }
+    async function waitForCompactModelSnapshot(seq, nativeButton = null) {
+        /*
+         * 4.3.0.17: 고정 sleep 누적 대신 DOM Mutation + 짧은 rAF 폴링으로
+         * 모델 행이 생기는 바로 그 프레임에 잡는다. 보통 수십 ms 안에 완료된다.
+         * 원본 메뉴를 사용자에게 폴백으로 노출하지 않기 때문에 오래 기다리지 않는다.
+         */
+        const immediate = compactModelFastSnapshot();
+        if (immediate?.entries?.length)
+            return immediate;
+        return await new Promise(resolve => {
+            let finished = false;
+            let observer = null;
+            let raf = 0;
+            let timeout = 0;
+            const startedAt = performance.now();
+            const finish = value => {
+                if (finished)
+                    return;
+                finished = true;
+                try { observer?.disconnect?.(); } catch (_) { }
+                if (raf)
+                    cancelAnimationFrame(raf);
+                if (timeout)
+                    clearTimeout(timeout);
+                resolve(value || null);
+            };
+            const check = () => {
+                if (finished)
+                    return;
+                if (seq !== COMPACT_MODEL.seq) {
+                    finish(null);
+                    return;
+                }
+                const snapshot = compactModelFastSnapshot();
+                if (snapshot?.entries?.length) {
+                    finish(snapshot);
+                    return;
+                }
+                if (performance.now() - startedAt >= 1250) {
+                    finish(null);
+                    return;
+                }
+                raf = requestAnimationFrame(check);
+            };
+            try {
+                observer = new MutationObserver(check);
+                observer.observe(document.body || document.documentElement, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['src', 'srcset', 'style', 'data-state', 'aria-expanded', 'aria-selected', 'aria-checked']
+                });
+            }
+            catch (_) { }
+            raf = requestAnimationFrame(check);
+            timeout = setTimeout(() => finish(null), 1300);
+        });
     }
     async function openCompactModelPicker() {
         const anchor = document.getElementById('chud-model-btn');
@@ -11760,24 +11884,44 @@
                     showToast('모델 메뉴를 열지 못함');
                     return false;
                 }
-                scheduleNmfScan([80, 180, 360, 700]);
-                snapshot = await waitForCompactModelSnapshot(seq);
+                scheduleNmfScan([40, 100, 220, 450, 900]);
+                snapshot = await waitForCompactModelSnapshot(seq, nativeButton);
             }
             if (seq !== COMPACT_MODEL.seq)
                 return true;
             document.documentElement.classList.remove('cmu-compact-model-probing');
             if (!snapshot?.entries?.length) {
+                /* 4.3.0.17: 원본 모델 메뉴는 폴백으로 노출하지 않는다.
+                 * probing 상태를 유지한 채 원본 Radix 메뉴를 닫고 빠른 선택기만 유지한다. */
+                try {
+                    await compactModelDismissNativeMenu(nativeButton, null);
+                }
+                catch (_) { }
+                document.documentElement.classList.remove('cmu-compact-model-probing');
                 COMPACT_MODEL.nativeButton = COMPACT_MODEL.anchor = null;
-                showToast('원본 모델 목록을 찾지 못함');
+                COMPACT_MODEL.toggleLockUntil = Date.now() + 220;
+                showToast('모델 목록 로딩이 늦어짐 · 다시 눌러 주세요');
                 return true;
             }
             nmfScanNativeModelMenu();
             if (!compactModelUseNativeRows(snapshot, anchor, nativeButton)) {
-                COMPACT_MODEL.nativeShell = COMPACT_MODEL.nativeButton = COMPACT_MODEL.anchor = null;
-                showToast('모델 목록을 작게 정리하지 못해 원본 메뉴를 표시함');
+                // 원본 메뉴 노출 대신 기존 커스텀 소형 팝업을 안전 폴백으로 사용한다.
+                try {
+                    snapshot.shell?.setAttribute?.('data-cmu-compact-model-native', '1');
+                    renderCompactModelPicker(snapshot, anchor, nativeButton);
+                    COMPACT_MODEL.nativeShell = snapshot.shell;
+                    COMPACT_MODEL.nativeButton = nativeButton;
+                    COMPACT_MODEL.anchor = anchor;
+                    COMPACT_MODEL.toggleLockUntil = Date.now() + 160;
+                }
+                catch (_) {
+                    try { await compactModelDismissNativeMenu(nativeButton, snapshot.shell); } catch (_) { }
+                    COMPACT_MODEL.nativeShell = COMPACT_MODEL.nativeButton = COMPACT_MODEL.anchor = null;
+                    showToast('모델 목록을 불러오지 못함 · 다시 눌러 주세요');
+                }
             }
             else {
-                COMPACT_MODEL.toggleLockUntil = Date.now() + 180;
+                COMPACT_MODEL.toggleLockUntil = Date.now() + 160;
             }
             return true;
         }
