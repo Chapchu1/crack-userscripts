@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.3.0.18
+// @version      4.5.0.4.1
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -12,7 +12,6 @@
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
-// @connect      old.rs.igx.kr
 // @connect      rs.igx.kr
 // @connect      claude-radiosonde.chyoyam.chatgpt.site
 // @connect      crack-api.wrtn.ai
@@ -20,12 +19,20 @@
 // @connect      cdn.jsdelivr.net
 // @connect      wrtn-image-ai-character.static.wrtn.ai
 // @connect      d394jeh9729epj.cloudfront.net
+// @connect      cdn-image.static.wrtn.ai
+// @connect      cdn-image.wrtn.ai
+// @connect      crack.static.wrtn.ai
+// @connect      wrtn-contents-gen-image.wow.wrtn.ai
+// @connect      wrtn-image-ai-character.s3.ap-northeast-2.amazonaws.com
+// @connect      wrtn-common-image.s3.ap-northeast-2.amazonaws.com
+// @connect      d1k8apdmymvh8f.cloudfront.net
 // @connect      p4m.uk
 // ==/UserScript==
 
 (() => {
     'use strict';
-    const VERSION = '4.3.0.18';
+    const VERSION = '4.5.0.4.1';
+    // Merge base: upstream 4.5.0.4 + retained custom compact model picker / integrations / mobile fixes.
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -160,6 +167,7 @@
         });
     }
     function cmuDisposeResources() {
+        cmuDisposeShared();
         for (const observer of CMU_RESOURCES.observers)
             try { observer.disconnect(); } catch (_) { }
         CMU_RESOURCES.observers.clear();
@@ -199,6 +207,7 @@
         rightMenuHandle: 'cmu-right-menu-handle',
         menuSwipeZone: 'cmu-menu-swipe-zone',
         panel: 'cmu-settings-panel',
+        settingsScrim: 'cmu-settings-scrim',
         toast: 'cmu-toast',
         dashboard: 'chud-infobar',
         dashboardSidebar: 'chud-sidebar',
@@ -213,6 +222,9 @@
         sidebarVisible: 'chud_side_visible_parts',
         nativeModelVis: 'cmu_native_model_vis_v1',
         nativeModelSeen: 'cmu_native_model_seen_v1',
+        outputModelHidden: 'cmu_output_model_hidden_v1',
+        outputModelSeen: 'cmu_output_model_seen_v1',
+        modelMeta: 'cmu_model_meta_v1',
     };
     const DEFAULTS = {
         enabled: true,
@@ -253,6 +265,7 @@
         modelIcon: true,
         answerCost: true,
         nativeModelFilter: false,
+        outputModelFilter: true,
         logCapture: false,
         logCaptureTheme: 'gwedo',
         logCaptureWebpQuality: 90,
@@ -283,10 +296,14 @@
         TAP_MAX_MS: 650,
         TOP_OFFSET: 36,
         FEEDBACK_MS: 200,
+        AXIS_LOCK_PX: 5,
+        AXIS_LOCK_RATIO: 1.25,
     });
     let settings = loadSettings();
     let cmuSettingsTab = 'ui';
     let cmuSettingsQuery = '';
+    let cmuSettingsSearchOpen = false;
+    const CMU_PANEL_ANIM = { closeTimer: 0, pageTimer: 0, indTimer: 0, scrimTimer: 0, snapTimer: 0, onCloseEnd: null, openBound: false };
     let bootObserver = null;
     let observedScope = null;
     let injectTimer = 0;
@@ -752,6 +769,16 @@
         const m = document.cookie.match(new RegExp('(?:^|; )' + escaped + '=([^;]*)'));
         return m ? decodeURIComponent(m[1]) : null;
     }
+    function cmuCostCollectionWanted() {
+        return shouldRun() && isChatRoomPath() && !!(settings.answerCost || settings.dashboard);
+    }
+
+    function cmuHistoryConfidence(record, job) {
+        const room = String(record?.chatId || record?.chat_id || record?.metadata?.chatId || '');
+        const message = String(record?.messageId || record?.message_id || record?.metadata?.messageId || '');
+        if ((room && room !== job.chatId) || (message && message !== job.messageId)) return 'reject';
+        return message && message === job.messageId ? 'confirmed' : 'estimated';
+    }
     function apiHeaders() {
         const headers = {
             accept: 'application/json, text/plain, */*',
@@ -772,7 +799,225 @@
     }
     const CMU_API_TIMEOUT_MS = 18000;
     const CMU_API_INFLIGHT = new Map();
-    async function apiGet(url, { timeoutMs = CMU_API_TIMEOUT_MS, dedupe = true } = {}) {
+    // Shared data and observation services. No page polling or extra sockets.
+    const CMU_SHARED = {
+        rooms: new Map(), roomRequests: new Map(), composers: new Map(),
+        resizeTargets: new Map(), resizeObserver: null,
+    };
+    function cmuRoomData(chatId) {
+        let room = CMU_SHARED.rooms.get(chatId);
+        if (!room) {
+            room = { revision: 0, messages: new Map(), pages: new Map(), firstAt: 0, first: null, inflight: new Map() };
+            CMU_SHARED.rooms.set(chatId, room);
+        }
+        CMU_SHARED.rooms.delete(chatId);
+        CMU_SHARED.rooms.set(chatId, room);
+        while (CMU_SHARED.rooms.size > 3)
+            CMU_SHARED.rooms.delete(CMU_SHARED.rooms.keys().next().value);
+        return room;
+    }
+    function cmuAssertPayload(json) {
+        if (!json || typeof json !== 'object' || json.success === false ||
+            (json.result !== undefined && json.result !== 'SUCCESS'))
+            throw new Error('Unsuccessful API payload');
+        return json;
+    }
+    function cmuRememberMessages(chatId, rows) {
+        const room = cmuRoomData(chatId);
+        for (const msg of rows || []) {
+            const id = messageIdOf(msg);
+            if (!id || (msg.chatId && String(msg.chatId) !== chatId)) continue;
+            const previous = room.messages.get(id);
+            room.messages.delete(id);
+            room.messages.set(id, { ...previous, ...msg });
+        }
+        // Keep raw message text bounded independently of the site's growing DOM.
+        while (room.messages.size > 1200)
+            room.messages.delete(room.messages.keys().next().value);
+        if (getChatId() === chatId) BADGE.apiCache = null;
+        return room;
+    }
+    function cmuMessageChanged(chatId, messageId, message, deleted = false) {
+        const room = cmuRoomData(chatId);
+        room.revision++;
+        room.pages.clear(); room.firstAt = 0; room.first = null;
+        if (deleted) room.messages.delete(messageId);
+        else if (message) cmuRememberMessages(chatId, [{ ...message, _id: messageId, chatId }]);
+        else room.messages.delete(messageId);
+        if (getChatId() !== chatId) return;
+        const affected = new Set([messageId]);
+        for (const [key, resolved] of BADGE.resultCache) {
+            if (key.split(':')[0] === messageId || resolved?.messageId === messageId) {
+                affected.add(key.split(':')[0]);
+                BADGE.resultCache.delete(key);
+            }
+        }
+        BADGE.missCache.delete(messageId);
+        BADGE.apiCache = null;
+        BADGE.apiPromise = null;
+        BADGE.forcePromise = null;
+        BADGE.generation = (BADGE.generation || 0) + 1;
+        for (const id of affected) {
+            if (!isObjectId(id)) continue;
+            const group = document.querySelector(`[data-message-group-id="${id}"]`);
+            if (group) { cmuRouterAddGroup(group); scheduleCmuDomRouterFlush(); }
+        }
+    }
+    function cmuMessageRequest(method, value) {
+        try {
+            const url = new URL(String(value || ''), location.href);
+            if (!['crack-api.wrtn.ai', 'contents-api.wrtn.ai'].includes(url.hostname)) return null;
+            const match = url.pathname.match(/^\/(?:crack-gen|character-chat)\/v3\/chats\/([^/]+)\/messages(?:\/([^/]+))?\/?$/);
+            if (!match) return null;
+            method = String(method || 'GET').toUpperCase();
+            if (!['GET', 'PATCH', 'DELETE'].includes(method)) return null;
+            return { method, chatId: decodeURIComponent(match[1]), messageId: match[2] ? decodeURIComponent(match[2]) : '',
+                cursor: url.searchParams.get('cursor') || '', limit: Number(url.searchParams.get('limit') || 20) };
+        } catch (_) { return null; }
+    }
+    function cmuObserveMessageResponse(meta, json, body, revision) {
+        if (!shouldRun() || !meta) return;
+        cmuAssertPayload(json);
+        if (meta.method === 'GET') {
+            if (!Array.isArray(json.data?.messages) || cmuRoomData(meta.chatId).revision !== revision) return;
+            cmuRememberMessages(meta.chatId, json.data.messages);
+            // Render only newly available visible groups; no full badge pass.
+            if (getChatId() === meta.chatId) {
+                BADGE.apiCache = null;
+                for (const msg of json.data.messages) {
+                    const id = messageIdOf(msg);
+                    if (!isObjectId(id)) continue;
+                    BADGE.missCache.delete(id);
+                    for (const key of BADGE.resultCache.keys())
+                        if (key.split(':')[0] === id) BADGE.resultCache.delete(key);
+                    const group = document.querySelector(`[data-message-group-id="${id}"]`);
+                    if (group) cmuRouterAddGroup(group);
+                }
+                scheduleCmuDomRouterFlush();
+            }
+        } else if (meta.messageId) {
+            if (meta.method === 'DELETE') {
+                cmuMessageChanged(meta.chatId, meta.messageId, null, true);
+                cmiRecordSuccessfulDeletion(meta.chatId, meta.messageId);
+            } else {
+                let request = null;
+                try { request = typeof body === 'string' ? JSON.parse(body) : body; } catch (_) { }
+                const data = json.data?.message || json.data;
+                const msg = data && typeof data === 'object' && typeof data.content === 'string' ? data
+                    : typeof request?.message === 'string' ? { content: request.message } : null;
+                cmuMessageChanged(meta.chatId, meta.messageId, msg);
+            }
+        }
+    }
+    function cmuAbortOtherRooms() {
+        const chatId = getChatId();
+        for (const [controller, owner] of CMU_SHARED.roomRequests)
+            if (owner !== chatId) controller.abort();
+    }
+    async function cmuSharedMessagePage(chatId, cursor = '', force = false) {
+        if (!shouldRun() || getChatId() !== chatId) throw new Error('Room changed');
+        const room = cmuRoomData(chatId);
+        const revision = room.revision;
+        const key = `${revision}:${cursor}`;
+        const cached = room.pages.get(cursor);
+        if (!force && cached && Date.now() - cached.at < (cursor ? 60000 : 1600)) return cached.page;
+        if (room.inflight.has(key)) return room.inflight.get(key);
+        const task = (async () => {
+            const url = `https://crack-api.wrtn.ai/crack-gen/v3/chats/${encodeURIComponent(chatId)}/messages?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+            // This layer deduplicates by revision; URL-only reuse could return a pre-edit response.
+            const json = cmuAssertPayload(await apiGet(url, { roomId: chatId, dedupe: false }));
+            if (!shouldRun() || getChatId() !== chatId) throw new Error('Room changed');
+            if (room.revision !== revision) throw new Error('Message changed during request');
+            if (!Array.isArray(json.data?.messages)) throw new Error('Invalid message page');
+            const page = { arr: json.data.messages, cursor: json.data.nextCursor || '', hasNext: json.data.hasNext === true };
+            cmuRememberMessages(chatId, page.arr);
+            room.pages.set(cursor, { at: Date.now(), page });
+            while (room.pages.size > 4) room.pages.delete(room.pages.keys().next().value);
+            if (!cursor) { room.first = page; room.firstAt = Date.now(); }
+            return page;
+        })();
+        room.inflight.set(key, task);
+        try { return await task; }
+        finally { if (room.inflight.get(key) === task) room.inflight.delete(key); }
+    }
+    function cmuComposerSubscribe(editor, listener) {
+        if (!(editor instanceof HTMLElement)) return { disconnect() {} };
+        let entry = CMU_SHARED.composers.get(editor);
+        if (!entry) {
+            entry = { listeners: new Set(), observer: null, notify: null };
+            entry.notify = () => {
+                for (const fn of [...entry.listeners]) {
+                    try { fn(); } catch (error) { console.debug(LOG, 'composer subscriber', error); }
+                }
+            };
+            entry.observer = new MutationObserver(entry.notify);
+            entry.observer.observe(editor, { childList: true, subtree: true, characterData: true });
+            for (const name of ['input', 'compositionend', 'focusin']) editor.addEventListener(name, entry.notify, true);
+            CMU_SHARED.composers.set(editor, entry);
+        }
+        entry.listeners.add(listener);
+        return { disconnect() {
+            entry.listeners.delete(listener);
+            if (entry.listeners.size) return;
+            entry.observer.disconnect();
+            for (const name of ['input', 'compositionend', 'focusin']) editor.removeEventListener(name, entry.notify, true);
+            CMU_SHARED.composers.delete(editor);
+        } };
+    }
+    async function cmuEnsureMessage(chatId, messageId) {
+        const room = cmuRoomData(chatId);
+        if (room.messages.has(messageId)) return room.messages.get(messageId);
+        const cursors = new Set();
+        let cursor = '';
+        for (let page = 0; page < 120; page++) {
+            if (!shouldRun() || getChatId() !== chatId) throw new Error('Room changed');
+            const result = await cmuSharedMessagePage(chatId, cursor);
+            if (room.messages.has(messageId)) return room.messages.get(messageId);
+            if (!result.cursor || cursors.has(result.cursor)) break;
+            cursors.add(result.cursor); cursor = result.cursor;
+        }
+        return null;
+    }
+    function cmuSharedResizeClient(callback) {
+        if (!CMU_SHARED.resizeObserver) {
+            CMU_SHARED.resizeObserver = new ResizeObserver(entries => {
+                const callbacks = new Set();
+                for (const entry of entries)
+                    CMU_SHARED.resizeTargets.get(entry.target)?.forEach(fn => callbacks.add(fn));
+                callbacks.forEach(fn => fn());
+            });
+        }
+        const owned = new Set();
+        const client = {
+            observe(target) {
+                if (owned.has(target)) return;
+                owned.add(target);
+                let clients = CMU_SHARED.resizeTargets.get(target);
+                if (!clients) { clients = new Set(); CMU_SHARED.resizeTargets.set(target, clients); CMU_SHARED.resizeObserver.observe(target); }
+                clients.add(callback);
+            },
+            unobserve(target) {
+                owned.delete(target);
+                const clients = CMU_SHARED.resizeTargets.get(target);
+                clients?.delete(callback);
+                if (clients && !clients.size) { CMU_SHARED.resizeTargets.delete(target); CMU_SHARED.resizeObserver.unobserve(target); }
+            },
+            disconnect() { for (const target of [...owned]) client.unobserve(target); },
+        };
+        return client;
+    }
+    function cmuDisposeShared() {
+        for (const [editor, entry] of CMU_SHARED.composers) {
+            entry.observer.disconnect();
+            for (const name of ['input', 'compositionend', 'focusin']) editor.removeEventListener(name, entry.notify, true);
+        }
+        CMU_SHARED.composers.clear(); CMU_SHARED.resizeObserver?.disconnect();
+        CMU_SHARED.resizeTargets.clear(); CMU_SHARED.rooms.clear();
+        CMU_SHARED.roomRequests.forEach((_, controller) => controller.abort());
+        CMU_SHARED.roomRequests.clear();
+    }
+
+    async function apiGet(url, { timeoutMs = CMU_API_TIMEOUT_MS, dedupe = true, roomId = null } = {}) {
         if (!shouldRun())
             throw new Error('runtime disposed');
         const requestUrl = String(url || '');
@@ -783,6 +1028,7 @@
             const controller = typeof AbortController === 'function' ? new AbortController() : null;
             if (controller)
                 CMU_RESOURCES.controllers.add(controller);
+            if (controller && roomId) CMU_SHARED.roomRequests.set(controller, roomId);
             const timeoutId = controller && timeoutMs > 0
                 ? setTimeout(() => controller.abort(), timeoutMs)
                 : 0;
@@ -795,15 +1041,16 @@
                 });
                 if (!res.ok)
                     throw new Error(`HTTP ${res.status}`);
-                return await res.json();
+                return cmuAssertPayload(await res.json());
             }
             catch (error) {
                 if (error?.name === 'AbortError')
-                    throw new Error(`timeout after ${timeoutMs}ms`);
+                    throw new Error(roomId && getChatId() !== roomId ? 'Room changed' : `timeout after ${timeoutMs}ms`);
                 throw error;
             }
             finally {
                 CMU_RESOURCES.controllers.delete(controller);
+                CMU_SHARED.roomRequests.delete(controller);
                 if (timeoutId)
                     clearTimeout(timeoutId);
             }
@@ -1739,6 +1986,16 @@
       display: block !important;
       pointer-events: none !important;
     }
+    /*
+     * 좌우 메뉴 스와이프 중 루트 뷰포트가 손가락을 따라 옆으로 밀리는 현상 방지.
+     * 평소에는 건드리지 않고, 실제 스와이프 존에서 손가락이 내려간 동안만 적용한다.
+     * JS의 non-passive touchmove/pointermove 차단과 함께 iOS Safari / Android Firefox·Edge를 보완한다.
+     */
+    html.cmu-menu-swipe-tracking,
+    html.cmu-menu-swipe-tracking body {
+      overflow-x: hidden !important;
+      overscroll-behavior-x: none !important;
+    }
     html.cmu-mobile-chat-list-open #${ID.menuSwipeZone},
     html.cmu-mobile-room-panel-open #${ID.menuSwipeZone},
     html.cmu-panel-open #${ID.menuSwipeZone} {
@@ -1773,344 +2030,587 @@
       display: none !important;
     }
 
-    #${ID.panel} {
+    /* ───────── 설정창 (4.5.0 · A안 + 헤더 검색) ─────────
+       효과는 열기·닫기·탭 이동·토글 순간에만 재생된다. 무한 반복 효과 없음.
+       닫힘이 끝나면 JS가 내용을 비우므로 닫혀 있는 동안 그리거나 계산하는 것이 없다. */
+    #cmu-settings-panel,
+    #cmu-settings-scrim {
+      --bg: rgb(241, 241, 243);
+      --card: rgb(255, 255, 255);
+      --cardh: rgb(246, 246, 248);
+      --tx: rgb(28, 28, 31);
+      --sub: rgb(108, 108, 114);
+      --bd: rgba(0, 0, 0, .09);
+      --icobg: rgba(0, 0, 0, .05);
+      --ac: rgb(22, 163, 74);
+      --acf: rgb(22, 163, 74);
+      --acbg: rgba(22, 163, 74, .12);
+      --chip: rgba(0, 0, 0, .05);
+      --hbtn: rgba(0, 0, 0, .055);
+      --hbtn2: rgba(0, 0, 0, .10);
+      --pbg: rgba(248, 248, 250, .97);
+      --pshadow: 0 18px 46px rgba(24, 24, 28, .20);
+      --scrim: rgba(20, 20, 24, .16);
+      --indbg: rgb(255, 255, 255);
+      --indsh: 0 1px 3px rgba(0, 0, 0, .12);
+      --cmu-spring: cubic-bezier(.3, 1.35, .5, 1);
+      --cmu-sheet: cubic-bezier(.2, 1.08, .32, 1);
+      --cmu-ease: cubic-bezier(.2, .8, .2, 1);
+      --cmu-exit: cubic-bezier(.4, 0, 1, 1);
+    }
+    @media (prefers-color-scheme: dark) {
+      #cmu-settings-panel,
+      #cmu-settings-scrim {
+        --bg: rgb(28, 28, 31); --card: rgb(39, 39, 43); --cardh: rgb(48, 48, 54); --tx: rgb(236, 236, 238); --sub: rgb(150, 150, 156);
+        --bd: rgba(255, 255, 255, .09); --icobg: rgba(255, 255, 255, .06); --ac: rgb(34, 197, 94); --acf: rgb(74, 222, 128); --acbg: rgba(34, 197, 94, .16);
+        --chip: rgba(255, 255, 255, .07); --hbtn: rgba(255, 255, 255, .08); --hbtn2: rgba(255, 255, 255, .15); --pbg: rgba(24, 24, 26, .96);
+        --pshadow: 0 18px 46px rgba(0, 0, 0, .38); --scrim: rgba(0, 0, 0, .34); --indbg: rgba(34, 197, 94, .16); --indsh: none;
+      }
+    }
+    html[data-theme="dark"] #cmu-settings-panel, body[data-theme="dark"] #cmu-settings-panel,
+    html[data-theme="dark"] #cmu-settings-scrim, body[data-theme="dark"] #cmu-settings-scrim,
+    html[data-cmu-theme="dark"] #cmu-settings-panel, html[data-cmu-theme="dark"] #cmu-settings-scrim {
+      --bg: rgb(28, 28, 31); --card: rgb(39, 39, 43); --cardh: rgb(48, 48, 54); --tx: rgb(236, 236, 238); --sub: rgb(150, 150, 156);
+      --bd: rgba(255, 255, 255, .09); --icobg: rgba(255, 255, 255, .06); --ac: rgb(34, 197, 94); --acf: rgb(74, 222, 128); --acbg: rgba(34, 197, 94, .16);
+      --chip: rgba(255, 255, 255, .07); --hbtn: rgba(255, 255, 255, .08); --hbtn2: rgba(255, 255, 255, .15); --pbg: rgba(24, 24, 26, .96);
+      --pshadow: 0 18px 46px rgba(0, 0, 0, .38); --scrim: rgba(0, 0, 0, .34); --indbg: rgba(34, 197, 94, .16); --indsh: none;
+      color-scheme: dark;
+    }
+    html[data-theme="light"] #cmu-settings-panel, body[data-theme="light"] #cmu-settings-panel,
+    html[data-theme="light"] #cmu-settings-scrim, body[data-theme="light"] #cmu-settings-scrim,
+    html[data-cmu-theme="light"] #cmu-settings-panel, html[data-cmu-theme="light"] #cmu-settings-scrim {
+      --bg: rgb(241, 241, 243); --card: rgb(255, 255, 255); --cardh: rgb(246, 246, 248); --tx: rgb(28, 28, 31); --sub: rgb(108, 108, 114);
+      --bd: rgba(0, 0, 0, .09); --icobg: rgba(0, 0, 0, .05); --ac: rgb(22, 163, 74); --acf: rgb(22, 163, 74); --acbg: rgba(22, 163, 74, .12);
+      --chip: rgba(0, 0, 0, .05); --hbtn: rgba(0, 0, 0, .055); --hbtn2: rgba(0, 0, 0, .10); --pbg: rgba(248, 248, 250, .97);
+      --pshadow: 0 18px 46px rgba(24, 24, 28, .20); --scrim: rgba(20, 20, 24, .16); --indbg: rgb(255, 255, 255); --indsh: 0 1px 3px rgba(0, 0, 0, .12);
+      color-scheme: light;
+    }
+    html[data-cmu-theme="dark"] #cmu-settings-panel, html[data-cmu-theme="dark"] #cmu-settings-scrim {
+      --bg: rgb(28, 28, 31); --card: rgb(39, 39, 43); --cardh: rgb(48, 48, 54); --tx: rgb(236, 236, 238); --sub: rgb(150, 150, 156);
+      --bd: rgba(255, 255, 255, .09); --icobg: rgba(255, 255, 255, .06); --ac: rgb(34, 197, 94); --acf: rgb(74, 222, 128); --acbg: rgba(34, 197, 94, .16);
+      --chip: rgba(255, 255, 255, .07); --hbtn: rgba(255, 255, 255, .08); --hbtn2: rgba(255, 255, 255, .15); --pbg: rgba(24, 24, 26, .96);
+      --pshadow: 0 18px 46px rgba(0, 0, 0, .38); --scrim: rgba(0, 0, 0, .34); --indbg: rgba(34, 197, 94, .16); --indsh: none;
+      color-scheme: dark;
+    }
+
+    /* 뒤 배경 어둡게 — 클릭은 통과(pointer-events:none)라서 바깥 터치로 닫기 동작은 기존과 같다 */
+    #cmu-settings-scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483646;
+      background: var(--scrim);
+      pointer-events: none;
+      animation: cmuScrimIn .3s var(--cmu-ease) both;
+    }
+    #cmu-settings-scrim.cmu-out { animation: cmuScrimOut .22s var(--cmu-exit) forwards; }
+    html.cmu-user-note-open #cmu-settings-scrim { display: none !important; }
+    @keyframes cmuScrimIn { from { opacity: 0; } }
+    @keyframes cmuScrimOut { to { opacity: 0; } }
+
+    /* 설정창 본체 — 아래에서 올라오는 시트 */
+    #cmu-settings-panel {
       position: fixed;
       left: max(10px, env(safe-area-inset-left));
       right: max(10px, env(safe-area-inset-right));
       bottom: calc(10px + env(safe-area-inset-bottom));
-      max-height: min(72vh, 620px);
+      max-width: 560px;
+      margin: 0 auto;
+      height: min(86dvh, 760px);
       z-index: 2147483647;
       display: none;
+      flex-direction: column;
       overflow: hidden;
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,.14);
-      background: rgba(24,24,26,.94);
-      color: rgba(255,255,255,.92);
-      box-shadow: 0 18px 50px rgba(0,0,0,.46);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
+      border: 0;
+      border-radius: 18px;
+      background: var(--pbg);
+      color: var(--tx);
+      box-shadow: var(--pshadow);
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif;
     }
-
-    #${ID.panel}.open {
-      display: flex;
-      flex-direction: column;
+    #cmu-settings-panel.open,
+    #cmu-settings-panel.cmu-closing { display: flex; }
+    #cmu-settings-panel.open { animation: cmuSheetIn .5s var(--cmu-sheet) backwards; }
+    #cmu-settings-panel.cmu-closing { animation: cmuSheetOut .24s var(--cmu-exit) forwards; pointer-events: none; }
+    #cmu-settings-panel.cmu-dragging { animation: none; transition: none; }
+    #cmu-settings-panel.cmu-snap { transition: transform .38s var(--cmu-spring); }
+    @keyframes cmuSheetIn { from { transform: translateY(calc(100% + 24px)); } }
+    @keyframes cmuSheetOut { to { transform: translateY(calc(100% + 24px)); } }
+    #cmu-settings-panel,
+    #cmu-settings-panel * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent !important;
     }
-
-    #${ID.panel} * { box-sizing: border-box; }
-    .cmu-panel-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 14px 14px 10px;
-      border-bottom: 1px solid rgba(255,255,255,.10);
-      background: rgba(255,255,255,.04);
+    #cmu-settings-panel [data-action] {
+      touch-action: manipulation !important;
+      pointer-events: auto !important;
     }
-    .cmu-panel-title { font-weight: 800; font-size: 14px; }
-    .cmu-panel-close {
-      border: 0;
-      background: rgba(255,255,255,.08);
-      color: inherit;
-      width: 30px;
-      height: 30px;
-      border-radius: 10px;
-      font-size: 16px;
-    }
-    .cmu-panel-actions {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      flex: 0 0 auto;
-    }
-    .cmu-panel-icon-btn {
-      border: 0;
-      background: rgba(255,255,255,.08);
-      color: inherit;
-      width: 30px;
-      height: 30px;
-      border-radius: 10px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      cursor: pointer;
-      -webkit-tap-highlight-color: transparent;
-      touch-action: manipulation;
-    }
-    .cmu-panel-icon-btn svg {
-      width: 17px;
-      height: 17px;
+    #cmu-settings-panel svg {
       display: block;
       fill: none;
       stroke: currentColor;
-      stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
       pointer-events: none;
     }
-    .cmu-panel-icon-btn.on,
-    .cmu-panel-icon-btn:active,
-    .cmu-panel-close:active {
-      background: rgba(255,255,255,.15);
-    }
-    .cmu-key-popover[hidden] { display: none !important; }
-    .cmu-key-popover {
-      margin: 0 10px 8px;
-      padding: 12px;
-      border-radius: 14px;
-      background: rgba(255,255,255,.065);
-      border: 1px solid rgba(255,255,255,.10);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
-    }
-    .cmu-key-row {
-      display: block;
-      margin-top: 10px;
-    }
-    .cmu-key-row:first-of-type { margin-top: 0; }
-    .cmu-key-line {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .cmu-key-input {
-      min-width: 0;
-      flex: 1 1 auto;
-      height: 36px;
-      padding: 0 10px;
-      border-radius: 10px;
-      border: 1px solid var(--bd, rgba(255,255,255,.12));
-      background: rgba(0,0,0,.14);
-      color: var(--tx, rgba(255,255,255,.92));
-      font-size: 12.5px;
-      outline: 0;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    }
-    .cmu-key-input:focus {
-      border-color: var(--ac, rgb(34 197 94));
-      box-shadow: 0 0 0 2px var(--acbg, rgba(34,197,94,.16));
-    }
-    .cmu-key-copy {
-      all: unset;
-      box-sizing: border-box;
+
+    /* 손잡이 · 머리 */
+    #cmu-settings-panel .cmu-panel-grab {
+      flex: none;
       width: 38px;
-      height: 36px;
-      border-radius: 10px;
-      border: 1px solid var(--bd, rgba(255,255,255,.12));
-      background: rgba(255,255,255,.07);
-      color: var(--tx, rgba(255,255,255,.88));
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      flex: 0 0 38px;
-      -webkit-tap-highlight-color: transparent;
+      height: 5px;
+      margin: 8px auto 0;
+      border-radius: 3px;
+      background: var(--bd);
       touch-action: none;
     }
-    .cmu-key-copy svg {
-      width: 16px;
-      height: 16px;
-      display: block;
-      fill: none;
-      stroke: currentColor;
-      stroke-width: 2;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-      pointer-events: none;
-    }
-    .cmu-key-copy:active { background: rgba(255,255,255,.14); }
-    .cmu-panel-body {
-      padding: 10px 12px 14px;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-    }
-    .cmu-menu-card {
-      border: 1px solid rgba(255,255,255,.10);
-      border-radius: 14px;
-      overflow: hidden;
-      background: rgba(255,255,255,.035);
-    }
-
-    .cmu-menu-card.qputil {
-      background: var(--bg) !important;
-      border-color: var(--bd) !important;
-    }
-    .qputil {
-      --bg: rgba(241, 241, 243, 1);
-      --card: rgba(255, 255, 255, 1);
-      --cardh: rgba(246, 246, 248, 1);
-      --tx: rgba(28, 28, 31, 1);
-      --sub: rgba(108, 108, 114, 1);
-      --bd: rgba(0, 0, 0, .09);
-      --icobg: rgba(0, 0, 0, .05);
-      --ac: rgb(22 163 74);
-      --acbg: rgba(22, 163, 74, .12);
-      --chip: rgba(0, 0, 0, .05);
-      color: var(--tx);
-      background: var(--bg);
-      font-family: inherit;
-    }
-    @media (prefers-color-scheme: dark) {
-      .qputil:not([data-skin="light"]) {
-        --bg: rgba(28, 28, 31, 1);
-        --card: rgba(39, 39, 43, 1);
-        --cardh: rgba(48, 48, 54, 1);
-        --tx: rgba(236, 236, 238, 1);
-        --sub: rgba(150, 150, 156, 1);
-        --bd: rgba(255, 255, 255, .09);
-        --icobg: rgba(255, 255, 255, .06);
-        --ac: rgb(34 197 94);
-        --acbg: rgba(34, 197, 94, .16);
-        --chip: rgba(255, 255, 255, .07);
-      }
-    }
-    html[data-theme="dark"] .qputil:not([data-skin="light"]),
-    body[data-theme="dark"] .qputil:not([data-skin="light"]) {
-      --bg: rgba(28, 28, 31, 1);
-      --card: rgba(39, 39, 43, 1);
-      --cardh: rgba(48, 48, 54, 1);
-      --tx: rgba(236, 236, 238, 1);
-      --sub: rgba(150, 150, 156, 1);
-      --bd: rgba(255, 255, 255, .09);
-      --icobg: rgba(255, 255, 255, .06);
-      --ac: rgb(34 197 94);
-      --acbg: rgba(34, 197, 94, .16);
-      --chip: rgba(255, 255, 255, .07);
-    }
-    html[data-theme="light"] .qputil,
-    body[data-theme="light"] .qputil {
-      --bg: rgba(241, 241, 243, 1);
-      --card: rgba(255, 255, 255, 1);
-      --cardh: rgba(246, 246, 248, 1);
-      --tx: rgba(28, 28, 31, 1);
-      --sub: rgba(108, 108, 114, 1);
-      --bd: rgba(0, 0, 0, .09);
-      --icobg: rgba(0, 0, 0, .05);
-      --ac: rgb(22 163 74);
-      --acbg: rgba(22, 163, 74, .12);
-      --chip: rgba(0, 0, 0, .05);
-    }
-    .qputil .sec {
-      font-size: 11px;
-      font-weight: 500;
-      color: var(--sub);
-      margin: 14px 8px 7px;
-    }
-    .qputil .acc {
-      background: var(--card);
-      border-radius: 12px;
-      margin-bottom: 8px;
-      overflow: hidden;
-      border: 1px solid var(--bd);
-    }
-    .qputil .row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px;
-      border: 0;
-      min-height: 0;
-    }
-    .qputil .ic {
-      width: 34px;
-      height: 34px;
+    #cmu-settings-panel .cmu-panel-head {
+      position: relative;
       flex: none;
-      border-radius: 9px;
-      background: var(--icobg);
       display: flex;
       align-items: center;
-      justify-content: center;
-      font-size: 18px;
+      gap: 6px;
+      padding: 8px 10px 8px 16px;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
-    .qputil .tx { flex: 1; min-width: 0; }
-    .qputil .tx b { font-size: 14px; font-weight: 500; display: block; }
-    .qputil .tx span {
-      font-size: 11.5px;
-      color: var(--sub);
-      display: block;
-      margin-top: 2px;
+    #cmu-settings-panel .cmu-panel-title {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -.2px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      transition: opacity .2s, transform .28s var(--cmu-ease);
     }
-    .qputil .subrow {
+    #cmu-settings-panel .cmu-panel-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+    #cmu-settings-panel .cmu-panel-icon-btn,
+    #cmu-settings-panel .cmu-panel-close {
+      flex: none;
+      width: 38px;
+      height: 38px;
+      min-width: 38px;
+      min-height: 38px;
+      padding: 0;
+      border: 0;
+      border-radius: 11px;
+      background: var(--hbtn);
+      color: inherit;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background-color .15s, color .15s, opacity .18s, transform .2s var(--cmu-spring);
+    }
+    #cmu-settings-panel .cmu-panel-close { font-size: 19px; line-height: 1; }
+    #cmu-settings-panel .cmu-panel-icon-btn svg { width: 17px; height: 17px; stroke-width: 2; }
+    #cmu-settings-panel .cmu-panel-icon-btn:active,
+    #cmu-settings-panel .cmu-panel-close:active { transform: scale(.9); background: var(--hbtn2); }
+    #cmu-settings-panel .cmu-panel-icon-btn.on { background: var(--acbg); color: var(--acf); }
+
+    /* 헤더 검색 — 돋보기를 누르면 제목 자리에서 오른쪽→왼쪽으로 펼쳐짐 */
+    #cmu-settings-panel .cmu-search-box {
+      position: absolute;
+      left: 12px;
+      right: 98px;
+      top: 8px;
+      z-index: 2;
+      clip-path: inset(0 0 0 100% round 11px);
+      visibility: hidden;
+      pointer-events: none;
+      transition: clip-path .32s var(--cmu-ease), visibility 0s linear .32s;
+    }
+    #cmu-settings-panel .cmu-panel-head.cmu-s-open .cmu-search-box {
+      clip-path: inset(0 0 0 0 round 11px);
+      visibility: visible;
+      pointer-events: auto;
+      transition: clip-path .32s var(--cmu-ease), visibility 0s;
+    }
+    #cmu-settings-panel .cmu-panel-head.cmu-s-open .cmu-panel-title { opacity: 0; transform: translateX(-10px); }
+    #cmu-settings-panel .cmu-panel-head.cmu-s-open [data-action="tab-label-toggle"],
+    #cmu-settings-panel .cmu-panel-head.cmu-s-open [data-action="api-open"] { opacity: 0; transform: scale(.8); pointer-events: none !important; }
+    #cmu-settings-panel .cmu-search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 38px;
+      padding: 0 6px 0 11px;
+      border-radius: 11px;
+      background: var(--card);
+      box-shadow: inset 0 0 0 1px var(--bd);
+      transition: box-shadow .2s;
+    }
+    #cmu-settings-panel .cmu-search:focus-within { box-shadow: inset 0 0 0 1px var(--ac), 0 0 0 3px var(--acbg); }
+    #cmu-settings-panel .cmu-search > svg { width: 15px; height: 15px; flex: none; stroke-width: 1.9; color: var(--sub); }
+    #cmu-settings-panel .cmu-search input {
+      flex: 1;
+      min-width: 0;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--tx);
+      font-size: 13px;
+      font-family: inherit;
+      -webkit-appearance: none;
+      appearance: none;
+      touch-action: auto !important;
+    }
+    #cmu-settings-panel .cmu-search input::placeholder { color: var(--sub); }
+    #cmu-settings-panel .cmu-search input::-webkit-search-cancel-button,
+    #cmu-settings-panel .cmu-search input::-webkit-search-decoration { -webkit-appearance: none; display: none; }
+    #cmu-settings-panel .cmu-search-clear {
+      flex: none;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--sub);
+      font-size: 17px;
+      line-height: 1;
+      cursor: pointer;
+      opacity: 0;
+      transform: scale(0);
+      transition: transform .25s var(--cmu-spring), opacity .15s;
+    }
+    #cmu-settings-panel .cmu-search.has .cmu-search-clear { opacity: 1; transform: scale(1); }
+
+    /* API 키 보관함 — 높이가 부드럽게 펼쳐짐 */
+    #cmu-settings-panel .cmu-key-popover {
+      flex: none;
+      display: grid;
+      grid-template-rows: 0fr;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      color: var(--tx);
+      transition: grid-template-rows .32s var(--cmu-ease);
+    }
+    #cmu-settings-panel .cmu-key-popover.cmu-open { grid-template-rows: 1fr; }
+    #cmu-settings-panel .cmu-key-inner { min-height: 0; overflow: hidden; }
+    #cmu-settings-panel .cmu-key-pad {
+      padding: 0 12px 10px;
+      opacity: 0;
+      transform: translateY(-6px);
+      transition: opacity .18s, transform .28s var(--cmu-ease);
+    }
+    #cmu-settings-panel .cmu-key-popover.cmu-open .cmu-key-pad { opacity: 1; transform: none; transition-delay: .06s; }
+    #cmu-settings-panel .cmu-key-popover .sec { margin: 2px 6px 7px; }
+    #cmu-settings-panel .qputil .cmu-key-card {
+      margin: 0;
+      border: 0;
+      border-radius: 13px;
+      overflow: hidden;
+      background: var(--card);
+    }
+    #cmu-settings-panel .qputil .cmu-key-row {
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 10px 2px;
+      margin: 0;
+      padding: 9px 10px;
+      min-height: 54px;
+      border-top: 1px solid var(--bd);
     }
-    .qputil .lbl { flex: 1; font-size: 13px; min-width: 0; }
-    .qputil .note {
-      font-size: 11px;
-      color: var(--sub);
-      margin-top: 1px;
+    #cmu-settings-panel .qputil .cmu-key-row:first-child { border-top: 0; }
+    #cmu-settings-panel .qputil .cmu-key-row .lbl { flex: 0 0 92px; font-size: 13px; font-weight: 650; color: var(--tx); }
+    #cmu-settings-panel .qputil .cmu-key-row .lbl label { display: block; }
+    #cmu-settings-panel .qputil .cmu-key-row .note { font-size: 10.5px; color: var(--sub); margin-top: 2px; white-space: nowrap; }
+    #cmu-settings-panel .qputil .cmu-key-line { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
+    #cmu-settings-panel .qputil .cmu-key-input {
+      flex: 1 1 auto;
+      min-width: 0;
+      height: 34px;
+      padding: 0 10px;
+      border-radius: 8px;
+      border: 1px solid var(--bd);
+      background: var(--chip);
+      color: var(--tx);
+      font-size: 12.5px;
+      font-family: inherit;
+      outline: 0;
+      touch-action: auto !important;
+      transition: border-color .15s, box-shadow .2s;
     }
-    .qputil .sw {
+    #cmu-settings-panel .qputil .cmu-key-input:focus { border-color: var(--ac); box-shadow: 0 0 0 3px var(--acbg); }
+    #cmu-settings-panel .qputil .cmu-key-copy {
       all: unset;
       box-sizing: border-box;
-      width: 42px;
-      height: 25px;
-      border-radius: 13px;
-      background: var(--bd);
-      flex: none;
-      position: relative;
-      transition: background .15s;
+      flex: 0 0 38px;
+      width: 38px;
+      height: 34px;
+      border-radius: 8px;
+      border: 1px solid var(--bd);
+      background: transparent;
+      color: var(--tx);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       cursor: pointer;
-      pointer-events: auto;
+      transition: background-color .15s, transform .15s var(--cmu-spring);
     }
-    .qputil .sw::after {
-      content: "";
+    #cmu-settings-panel .qputil .cmu-key-copy:active { background: var(--cardh); transform: scale(.92); }
+    #cmu-settings-panel .qputil .cmu-key-copy svg { width: 16px; height: 16px; stroke-width: 2; }
+
+    /* 탭 — 선택 표시가 미끄러지듯 따라감, 초록 점 = 그 탭의 기능이 켜져 있음 */
+    #cmu-settings-panel .cmu-panel-nav {
+      flex: 0 0 auto;
+      padding: 2px 12px 10px;
+      border-bottom: 1px solid var(--bd);
+      transition: padding .28s var(--cmu-ease), border-color .2s;
+    }
+    #cmu-settings-panel .cmu-tabs-wrap {
+      display: grid;
+      grid-template-rows: 1fr;
+      transition: grid-template-rows .28s var(--cmu-ease), opacity .2s;
+    }
+    #cmu-settings-panel .cmu-tabs-wrap > div { min-height: 0; overflow: hidden; }
+    #cmu-settings-panel .cmu-tabs {
+      position: relative;
+      display: flex;
+      gap: 2px;
+      padding: 3px;
+      border-radius: 12px;
+      background: var(--chip);
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    #cmu-settings-panel .cmu-tabs::-webkit-scrollbar { display: none; }
+    #cmu-settings-panel .cmu-tab-ind {
       position: absolute;
       top: 3px;
-      left: 3px;
-      width: 19px;
-      height: 19px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 1);
-      transition: left .15s;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+      left: 0;
+      width: 0;
+      height: 34px;
+      border-radius: 9px;
+      background: var(--indbg);
+      box-shadow: var(--indsh);
+      pointer-events: none;
+      transition: transform .4s var(--cmu-spring), width .4s var(--cmu-spring);
     }
-    .qputil .sw.on { background: var(--ac); }
-    .qputil .sw.on::after { left: 20px; }
-    .qputil .sw.disabled {
-      opacity: .45;
-      cursor: not-allowed;
-      filter: grayscale(.35);
+    #cmu-settings-panel .cmu-tab-ind.cmu-snap { transition: none; }
+    #cmu-settings-panel .cmu-tab {
+      position: relative;
+      z-index: 1;
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 34px;
+      padding: 0 11px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--sub);
+      font-size: 12.5px;
+      font-weight: 600;
+      font-family: inherit;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: color .2s, padding .28s var(--cmu-ease), gap .28s var(--cmu-ease);
     }
-    .qputil .chips {
+    #cmu-settings-panel .cmu-tab svg { width: 16px; height: 16px; flex: none; stroke-width: 1.7; }
+    #cmu-settings-panel .cmu-tab span {
+      display: inline-block;
+      max-width: 90px;
+      overflow: hidden;
+      pointer-events: none;
+      transition: max-width .28s var(--cmu-ease), opacity .2s;
+    }
+    #cmu-settings-panel .cmu-tabs.icon-only .cmu-tab { gap: 0; padding: 0 12px; }
+    #cmu-settings-panel .cmu-tabs.icon-only .cmu-tab span { max-width: 0; opacity: 0; }
+    #cmu-settings-panel .cmu-tab.on { color: var(--acf); }
+    #cmu-settings-panel .cmu-tab-dot {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      width: 5px;
+      height: 5px;
+      border-radius: 99px;
+      background: var(--acf);
+      opacity: .6;
+      transform: scale(0);
+      pointer-events: none;
+      transition: transform .3s var(--cmu-spring);
+    }
+    #cmu-settings-panel .cmu-tab.act .cmu-tab-dot { transform: scale(1); }
+
+    /* 본문 */
+    #cmu-settings-panel .cmu-panel-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      padding: 6px 12px max(16px, env(safe-area-inset-bottom));
+      scrollbar-width: none;
+    }
+    #cmu-settings-panel .cmu-panel-body::-webkit-scrollbar { display: none; }
+    #cmu-settings-panel .cmu-menu-card.qputil {
+      border: 0;
+      border-radius: 0;
+      overflow: visible;
+      background: transparent;
+    }
+    #cmu-settings-panel .qputil { color: var(--tx); background: transparent; font-family: inherit; }
+    #cmu-settings-panel .cmu-page { display: none; }
+    #cmu-settings-panel .cmu-page.on { display: block; }
+    #cmu-settings-panel .cmu-page.cmu-in-r > *,
+    #cmu-settings-panel .cmu-page.cmu-in-l > * { animation: cmuPageInR .3s var(--cmu-ease) both; }
+    #cmu-settings-panel .cmu-page.cmu-in-l > * { animation-name: cmuPageInL; }
+    #cmu-settings-panel .cmu-page.cmu-in-r > *:nth-child(2), #cmu-settings-panel .cmu-page.cmu-in-l > *:nth-child(2) { animation-delay: .025s; }
+    #cmu-settings-panel .cmu-page.cmu-in-r > *:nth-child(3), #cmu-settings-panel .cmu-page.cmu-in-l > *:nth-child(3) { animation-delay: .05s; }
+    #cmu-settings-panel .cmu-page.cmu-in-r > *:nth-child(4), #cmu-settings-panel .cmu-page.cmu-in-l > *:nth-child(4) { animation-delay: .075s; }
+    #cmu-settings-panel .cmu-page.cmu-in-r > *:nth-child(n+5), #cmu-settings-panel .cmu-page.cmu-in-l > *:nth-child(n+5) { animation-delay: .1s; }
+    @keyframes cmuPageInR { from { opacity: 0; transform: translateX(16px); } }
+    @keyframes cmuPageInL { from { opacity: 0; transform: translateX(-16px); } }
+    #cmu-settings-panel .qputil .sec {
+      margin: 16px 6px 7px;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--sub);
+    }
+    #cmu-settings-panel .qputil .cmu-page > .sec:first-child,
+    #cmu-settings-panel .qputil .cmu-page > .qcard:first-child { margin-top: 6px; }
+    #cmu-settings-panel .qputil .qcard {
+      margin-bottom: 2px;
+      border-radius: 13px;
+      overflow: hidden;
+      background: var(--card);
+    }
+    #cmu-settings-panel .qputil .subrow {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0;
+      padding: 11px 13px;
+      min-height: 54px;
+      border-top: 1px solid var(--bd);
+      transition: background-color .15s;
+    }
+    #cmu-settings-panel .qputil .subrow:first-child { border-top: 0; }
+    #cmu-settings-panel .qputil .subrow:has(> .sw:not(:disabled)):active { background: var(--cardh); }
+    #cmu-settings-panel .qputil .lbl {
+      flex: 1;
+      min-width: 0;
+      font-size: 13.5px;
+      font-weight: 600;
+      transition: opacity .2s;
+    }
+    #cmu-settings-panel .qputil .note {
+      margin-top: 1px;
+      font-size: 11px;
+      font-weight: 400;
+      line-height: 1.45;
+      color: var(--sub);
+    }
+    #cmu-settings-panel .qputil .subrow.cmu-dep-off > .lbl,
+    #cmu-settings-panel .qputil .subrow.cmu-dep-off .cmu-rs-setting-title { opacity: .45; }
+
+    /* 스위치 — 누르면 손잡이가 늘어났다가 튕기듯 이동 */
+    #cmu-settings-panel .qputil .sw {
+      all: unset;
+      box-sizing: border-box;
+      position: relative;
+      flex: 0 0 48px;
+      width: 48px;
+      height: 30px;
+      border-radius: 999px;
+      background: var(--bd);
+      cursor: pointer;
+      pointer-events: auto;
+      touch-action: manipulation !important;
+      transition: background-color .22s var(--cmu-ease), opacity .2s, filter .2s;
+    }
+    #cmu-settings-panel .qputil .sw::after {
+      content: "";
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: 22px;
+      height: 22px;
+      border-radius: 11px;
+      background: rgb(255, 255, 255);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .22);
+      transition: transform .34s var(--cmu-spring), width .16s var(--cmu-ease);
+    }
+    #cmu-settings-panel .qputil .sw.on { background: var(--ac); }
+    #cmu-settings-panel .qputil .sw.on::after { transform: translateX(18px); }
+    #cmu-settings-panel .qputil .sw:not(:disabled):active::after { width: 27px; }
+    #cmu-settings-panel .qputil .sw.on:not(:disabled):active::after { transform: translateX(13px); }
+    #cmu-settings-panel .qputil .sw.disabled,
+    #cmu-settings-panel .qputil .sw:disabled { opacity: .4; cursor: not-allowed; filter: grayscale(.35); }
+    #cmu-settings-panel .qputil .sw:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+
+    /* 칩 — 체크 표시가 톡 튀어나옴 */
+    #cmu-settings-panel .qputil .chips {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
-      padding: 2px 2px 4px;
-      transition: opacity .15s;
+      padding: 10px 12px 12px;
+      transition: opacity .2s;
     }
-    .qputil .chips.off { opacity: .35; pointer-events: none; }
-    .qputil .chip {
+    #cmu-settings-panel .qputil .chips.off { opacity: .35; pointer-events: none; }
+    #cmu-settings-panel .qputil .chip {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      padding: 6px 10px;
-      border-radius: 8px;
-      font-size: 12.5px;
+      min-height: 34px;
+      padding: 7px 11px;
+      border-radius: 9px;
       border: 1px solid var(--bd);
       background: var(--chip);
       color: var(--sub);
+      font-size: 12.5px;
+      font-family: inherit;
       cursor: pointer;
       user-select: none;
-      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation !important;
+      transition: background-color .18s, border-color .18s, color .18s, opacity .2s, transform .15s var(--cmu-spring);
     }
-    .qputil .chip .ci {
+    #cmu-settings-panel .qputil .chip:not(:disabled):active { transform: scale(.95); }
+    #cmu-settings-panel .qputil .chip .ci {
       width: 14px;
       height: 14px;
-      opacity: .4;
       flex: none;
+      opacity: .35;
+      transform: scale(.6);
+      transition: transform .32s var(--cmu-spring), opacity .2s;
     }
-    .qputil .chip.ck {
-      border-color: var(--ac);
-      background: var(--acbg);
-      color: var(--ac);
+    #cmu-settings-panel .qputil .chip.ck { border-color: var(--ac); background: var(--acbg); color: var(--acf); }
+    #cmu-settings-panel .qputil .chip.ck .ci { opacity: 1; transform: scale(1); }
+    /* 모델 필터 칩은 체크 표시 자리 자체를 모델 아이콘으로 사용한다.
+       선택 여부는 칩의 테두리/배경 + 아이콘 명도로 구분한다. */
+    #cmu-settings-panel .qputil .chip .ci.cmu-model-filter-icon {
+      width: 16px !important;
+      height: 16px !important;
+      flex: 0 0 16px !important;
+      object-fit: contain;
+      border-radius: 4px;
+      opacity: .48;
+      transform: none !important;
+      filter: grayscale(.28);
+      transition: opacity .18s, filter .18s, transform .15s var(--cmu-spring);
     }
-    .qputil .chip.ck .ci { opacity: 1; }
+    #cmu-settings-panel .qputil .chip.ck .ci.cmu-model-filter-icon {
+      opacity: 1;
+      filter: none;
+      transform: none !important;
+    }
+    #cmu-settings-panel .qputil .chip:active .ci.cmu-model-filter-icon { transform: scale(.92) !important; }
     #cmu-settings-panel .qputil .chip .cmu-side-setting-icon {
       width: 15px !important;
       height: 15px !important;
@@ -2118,486 +2618,99 @@
       stroke-linecap: round;
       stroke-linejoin: round;
     }
-    .qputil .chip:disabled,
-    .qputil .chip[aria-disabled="true"] {
-      opacity: .38;
-      cursor: not-allowed;
-      filter: grayscale(.45);
-    }
-    .qputil .step {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      flex: none;
-    }
-    .qputil .step-btn {
+    #cmu-settings-panel .qputil .chip:disabled,
+    #cmu-settings-panel .qputil .chip[aria-disabled="true"] { opacity: .38; cursor: not-allowed; filter: grayscale(.45); }
+
+    /* 스테퍼 — 숫자가 위아래로 굴러가며 바뀜 */
+    #cmu-settings-panel .qputil .step { display: inline-flex; align-items: center; gap: 10px; flex: none; }
+    #cmu-settings-panel .qputil .step-btn {
       all: unset;
       box-sizing: border-box;
-      width: 28px;
-      height: 24px;
-      border-radius: 7px;
+      width: 38px;
+      height: 34px;
+      min-width: 38px;
+      border-radius: 9px;
       border: 1px solid var(--bd);
-      background: transparent;
       color: var(--tx);
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: 14px;
+      font-size: 16px;
       line-height: 1;
       cursor: pointer;
       user-select: none;
-      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation !important;
+      transition: background-color .15s, transform .15s var(--cmu-spring);
     }
-    .qputil .step-btn:active {
-      background: var(--cardh);
-    }
-    .qputil .step-val {
-      min-width: 48px;
+    #cmu-settings-panel .qputil .step-btn:active { background: var(--cardh); transform: scale(.9); }
+    #cmu-settings-panel .qputil .step-val {
+      display: inline-block;
+      min-width: 52px;
+      height: 20px;
+      overflow: hidden;
       text-align: center;
-      font-size: 12.5px;
-      font-weight: 650;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 20px;
       color: var(--tx);
       font-variant-numeric: tabular-nums;
     }
+    #cmu-settings-panel .qputil .step-val > span { display: inline-block; }
+    #cmu-settings-panel .qputil .step-val.cmu-up > span { animation: cmuValUp .24s var(--cmu-ease); }
+    #cmu-settings-panel .qputil .step-val.cmu-dn > span { animation: cmuValDn .24s var(--cmu-ease); }
+    @keyframes cmuValUp { from { transform: translateY(12px); opacity: .2; } }
+    @keyframes cmuValDn { from { transform: translateY(-12px); opacity: .2; } }
 
-    #cmu-settings-panel {
-      border-color: rgba(255,255,255,.08) !important;
-      background: rgba(24,24,26,.96) !important;
+    /* 테마 배너 — 아이콘·기울기 효과 없음, 글자 + 스위치만 */
+    #cmu-settings-panel .qputil .direct { margin: 0; border: 0; background: transparent; }
+    #cmu-settings-panel .qputil .direct .row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 58px;
+      padding: 12px 13px;
     }
-    #cmu-settings-panel .cmu-panel-body {
-      padding: 8px 10px 12px !important;
-    }
-    #cmu-settings-panel .cmu-menu-card.qputil {
-      border: 0 !important;
-      background: transparent !important;
-      border-radius: 0 !important;
-    }
-    #cmu-settings-panel .qputil {
-      background: transparent !important;
-    }
-    #cmu-settings-panel .qputil .sec {
-      margin: 11px 4px 7px !important;
-    }
-    #cmu-settings-panel .qputil .acc,
-    #cmu-settings-panel .qputil .direct {
-      background: var(--card) !important;
-      border: 0 !important;
-      border-radius: 10px !important;
-      margin-bottom: 7px !important;
-      overflow: hidden !important;
-    }
-    #cmu-settings-panel .qputil .acc {
-      box-shadow: none !important;
-    }
-    #cmu-settings-panel .qputil .row {
-      padding: 10px 10px !important;
-      gap: 11px !important;
-    }
-    #cmu-settings-panel .qputil .ic {
-      width: 30px !important;
-      height: 30px !important;
-      border-radius: 8px !important;
-      font-size: 16px !important;
-    }
-    #cmu-settings-panel .qputil .tx b {
-      font-size: 13.5px !important;
-      font-weight: 650 !important;
-    }
-    #cmu-settings-panel .qputil .tx span {
-      font-size: 11px !important;
-      margin-top: 2px !important;
-    }
-    #cmu-settings-panel .qputil .subrow {
-      padding: 9px 0 !important;
+    #cmu-settings-panel .qputil .direct .tx { flex: 1; min-width: 0; }
+    #cmu-settings-panel .qputil .direct .tx b { display: block; font-size: 14px; font-weight: 650; }
+    #cmu-settings-panel .qputil .direct .tx span {
+      display: block;
+      margin-top: 2px;
+      font-size: 11.5px;
+      color: var(--sub);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    #cmu-settings-panel {
-      border: 0 !important;
-      box-shadow: 0 18px 46px rgba(0,0,0,.38) !important;
-      max-height: min(92dvh, 780px) !important;
-    }
-    #cmu-settings-panel .cmu-panel-head {
-      border-bottom: 0 !important;
-      background: transparent !important;
-      padding-bottom: 8px !important;
-    }
-    #cmu-settings-panel .cmu-panel-body {
-      padding-top: 2px !important;
-      flex: 1 1 auto !important;
-      min-height: 0 !important;
-      overflow-y: auto !important;
-      -webkit-overflow-scrolling: touch !important;
-      overscroll-behavior: contain !important;
-      padding-bottom: max(16px, env(safe-area-inset-bottom)) !important;
-    }
-    #cmu-settings-panel .qputil .acc,
-    #cmu-settings-panel .qputil .direct {
-      border: 0 !important;
-    }
-    #cmu-settings-panel .qputil .ic {
-      color: var(--sub) !important;
-    }
-    #cmu-settings-panel .qputil .ic svg {
-      width: 17px !important;
-      height: 17px !important;
-      display: block !important;
-      fill: none !important;
-      stroke: currentColor !important;
-      stroke-width: 2 !important;
-      stroke-linecap: round !important;
-      stroke-linejoin: round !important;
-    }
-
-    #cmu-settings-panel,
-    #cmu-settings-panel * {
-      -webkit-tap-highlight-color: transparent !important;
-    }
-    #cmu-settings-panel [data-action] {
-      touch-action: manipulation !important;
-      pointer-events: auto !important;
-    }
-    #cmu-settings-panel .cmu-panel-close {
-      width: 38px !important;
-      height: 38px !important;
-      min-width: 38px !important;
-      min-height: 38px !important;
-    }
-    #cmu-settings-panel .qputil .acc-h,
-    #cmu-settings-panel .qputil .direct {
-      min-height: 52px !important;
-    }
-    #cmu-settings-panel .qputil .subrow {
-      min-height: 44px !important;
-      gap: 12px !important;
-    }
-    #cmu-settings-panel .qputil .sw {
-      width: 48px !important;
-      height: 30px !important;
-      border-radius: 999px !important;
-      flex: 0 0 48px !important;
-    }
-    #cmu-settings-panel .qputil .sw::after {
-      top: 4px !important;
-      left: 4px !important;
-      width: 22px !important;
-      height: 22px !important;
-    }
-    #cmu-settings-panel .qputil .sw.on::after {
-      left: 22px !important;
-    }
-    #cmu-settings-panel .qputil .chip {
-      min-height: 36px !important;
-      padding: 8px 11px !important;
-      align-items: center !important;
-    }
-    #cmu-settings-panel .qputil .step {
-      gap: 10px !important;
-    }
-    #cmu-settings-panel .qputil .step-btn {
-      width: 38px !important;
-      height: 34px !important;
-      min-width: 38px !important;
-      min-height: 34px !important;
-      font-size: 16px !important;
-    }
-    #cmu-settings-panel .qputil .step-val {
-      min-width: 52px !important;
-    }
-
-    #cmu-settings-panel .qputil .sw,
-    #cmu-settings-panel .qputil .chip,
-    #cmu-settings-panel .qputil .step-btn,
-    #cmu-settings-panel .cmu-panel-close,
-    #cmu-settings-panel .cmu-panel-icon-btn,
-    #cmu-settings-panel .cmu-key-copy {
-      touch-action: manipulation !important;
-    }
-    #cmu-settings-panel .cmu-key-input,
-    #cmu-settings-panel input,
-    #cmu-settings-panel textarea {
-      touch-action: auto !important;
-    }
-
-    #cmu-settings-panel .cmu-panel-actions {
-      display: inline-flex !important;
-      align-items: center !important;
-      gap: 6px !important;
-      flex: 0 0 auto !important;
-    }
-    #cmu-settings-panel .cmu-panel-icon-btn {
-      width: 38px !important;
-      height: 38px !important;
-      min-width: 38px !important;
-      min-height: 38px !important;
-      border-radius: 10px !important;
-      background: rgba(255,255,255,.08) !important;
-      color: inherit !important;
-    }
-    #cmu-settings-panel .cmu-panel-icon-btn svg {
-      width: 17px !important;
-      height: 17px !important;
-    }
-    #cmu-settings-panel .cmu-key-popover {
-      margin: 0 !important;
-      padding: 0 10px 8px !important;
-      border: 0 !important;
-      border-radius: 0 !important;
-      background: transparent !important;
-      box-shadow: none !important;
-    }
-    #cmu-settings-panel .cmu-key-popover.qputil {
-      background: transparent !important;
-      color: var(--tx) !important;
-    }
-    #cmu-settings-panel .cmu-key-popover .sec {
-      margin: 2px 4px 7px !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-card {
-      background: var(--card) !important;
-      border: 0 !important;
-      border-radius: 10px !important;
-      margin-bottom: 0 !important;
-      overflow: hidden !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-row {
-      display: flex !important;
-      align-items: center !important;
-      gap: 10px !important;
-      padding: 9px 10px !important;
-      margin: 0 !important;
-      min-height: 54px !important;
-      border-top: 1px solid var(--bd) !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-row:first-child {
-      border-top: 0 !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-row .lbl {
-      flex: 0 0 92px !important;
-      font-size: 13px !important;
-      font-weight: 650 !important;
-      color: var(--tx) !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-row .lbl label {
-      display: block !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-row .note {
-      font-size: 10.5px !important;
-      color: var(--sub) !important;
-      margin-top: 2px !important;
-      white-space: nowrap !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-line {
-      flex: 1 1 auto !important;
-      min-width: 0 !important;
-      display: flex !important;
-      align-items: center !important;
-      gap: 8px !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-input {
-      flex: 1 1 auto !important;
-      min-width: 0 !important;
-      height: 34px !important;
-      padding: 0 10px !important;
-      border-radius: 7px !important;
-      border: 1px solid var(--bd) !important;
-      background: var(--chip) !important;
-      color: var(--tx) !important;
-      font-size: 12.5px !important;
-      outline: 0 !important;
-      font-family: inherit !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-input:focus {
-      border-color: var(--ac) !important;
-      box-shadow: 0 0 0 2px var(--acbg) !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-copy {
-      width: 38px !important;
-      height: 34px !important;
-      min-width: 38px !important;
-      min-height: 34px !important;
-      flex: 0 0 38px !important;
-      border-radius: 7px !important;
-      border: 1px solid var(--bd) !important;
-      background: transparent !important;
-      color: var(--tx) !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-copy:active {
-      background: var(--cardh) !important;
-    }
-    #cmu-settings-panel .qputil .cmu-key-copy svg {
-      width: 16px !important;
-      height: 16px !important;
-      display: block !important;
-      fill: none !important;
-      stroke: currentColor !important;
-      stroke-width: 2 !important;
-      stroke-linecap: round !important;
-      stroke-linejoin: round !important;
-      pointer-events: none !important;
-    }
-
-    #cmu-settings-panel .cmu-panel-nav {
-      flex: 0 0 auto;
-      padding: 10px 12px 8px;
-      border-bottom: 1px solid rgba(255,255,255,.08);
-      background: rgba(255,255,255,.02);
-    }
-    #cmu-settings-panel .cmu-panel-body { flex: 1 1 auto; min-height: 0; }
-
-    #cmu-settings-panel .cmu-search {
-      display: flex; align-items: center; gap: 8px;
-      height: 38px; padding: 0 11px; margin-bottom: 8px;
-      border-radius: 10px; background: rgba(255,255,255,.06);
-    }
-    #cmu-settings-panel .cmu-search > svg {
-      width: 15px; height: 15px; flex: none; fill: none;
-      stroke: rgba(255,255,255,.45); stroke-width: 1.9; stroke-linecap: round;
-    }
-    #cmu-settings-panel .cmu-search input {
-      flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
-      color: inherit; font-size: 13px; font-family: inherit;
-      -webkit-appearance: none; appearance: none;
-    }
-    #cmu-settings-panel .cmu-search input::-webkit-search-cancel-button { display: none; }
-    #cmu-settings-panel .cmu-search-clear {
-      display: none; border: 0; background: transparent; color: rgba(255,255,255,.5);
-      font-size: 18px; line-height: 1; width: 26px; height: 26px; flex: none; cursor: pointer;
-    }
-    #cmu-settings-panel .cmu-search.has .cmu-search-clear { display: block; }
-
-    #cmu-settings-panel .cmu-tabs {
-      display: flex; gap: 6px; overflow-x: auto;
-      scrollbar-width: none; -webkit-overflow-scrolling: touch;
-    }
-    #cmu-settings-panel .cmu-tabs::-webkit-scrollbar { display: none; }
-    #cmu-settings-panel .cmu-tab {
-      position: relative; flex: 0 0 auto;
-      display: inline-flex; align-items: center; gap: 6px;
-      height: 38px; padding: 0 12px; border: 0; border-radius: 10px;
-      background: rgba(255,255,255,.06); color: rgba(255,255,255,.55);
-      font-size: 12.5px; font-weight: 600; font-family: inherit;
-      cursor: pointer; touch-action: manipulation; white-space: nowrap;
-    }
-    #cmu-settings-panel .cmu-tabs.icon-only .cmu-tab { width: 44px; padding: 0; justify-content: center; }
-    #cmu-settings-panel .cmu-tab svg {
-      width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
-      stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; pointer-events: none;
-    }
-    #cmu-settings-panel .cmu-tab span { pointer-events: none; }
-    #cmu-settings-panel .cmu-tab.on { background: rgba(34,197,94,.16); color: rgb(74,222,128); }
-    #cmu-settings-panel .cmu-tab-dot {
-      position: absolute; top: 7px; right: 7px; width: 5px; height: 5px;
-      border-radius: 99px; background: rgb(74,222,128); opacity: 0; pointer-events: none;
-    }
-    #cmu-settings-panel .cmu-tab.act .cmu-tab-dot { opacity: .5; }
-    #cmu-settings-panel .cmu-tab.on .cmu-tab-dot { opacity: 0; }
-
-    #cmu-settings-panel .cmu-page { display: none; }
-    #cmu-settings-panel .cmu-page.on { display: block; }
-
-    #cmu-settings-panel .qputil .qcard {
-      background: var(--card); border-radius: 12px; overflow: hidden; margin-bottom: 2px;
-    }
-    #cmu-settings-panel .qputil .qcard .subrow {
-      padding: 11px 13px !important; min-height: 54px !important;
-      margin: 0 !important; border-top: 1px solid var(--bd);
-    }
-    #cmu-settings-panel .qputil .qcard .subrow:first-child { border-top: 0; }
-    #cmu-settings-panel .qputil .qcard .chips { padding: 10px 12px 12px !important; }
-    #cmu-settings-panel .qputil .qcard .direct {
-      border: 0 !important; background: transparent !important; margin: 0 !important;
-    }
-    #cmu-settings-panel .qputil .sec { margin: 14px 6px 7px !important; }
-    #cmu-settings-panel .qputil .cmu-page > .sec:first-child { margin-top: 2px !important; }
-
-    #cmu-settings-panel .cmu-search-empty {
-      text-align: center; color: var(--sub); font-size: 13px;
-      padding: 48px 16px; line-height: 1.7;
-    }
-    #cmu-settings-panel.cmu-searching .cmu-tabs { display: none; }
+    /* 검색 중 */
+    #cmu-settings-panel.cmu-searching .cmu-panel-nav { padding-bottom: 0; border-bottom-color: transparent; }
+    #cmu-settings-panel.cmu-searching .cmu-tabs-wrap { grid-template-rows: 0fr; opacity: 0; }
     #cmu-settings-panel.cmu-searching .cmu-page { display: block !important; }
+    #cmu-settings-panel.cmu-searching .cmu-page > * { animation: none !important; }
     #cmu-settings-panel.cmu-searching .sec,
     #cmu-settings-panel.cmu-searching .chips,
     #cmu-settings-panel.cmu-searching .direct { display: none !important; }
     #cmu-settings-panel.cmu-searching .subrow.cmu-hit-off { display: none !important; }
+    #cmu-settings-panel.cmu-searching .qputil .qcard { margin-bottom: 8px; }
     #cmu-settings-panel.cmu-searching .qputil .qcard:not(:has(.subrow:not(.cmu-hit-off))) { display: none !important; }
-
-
-    /* 설정 패널은 OS 색상보다 크랙 현재 테마(data-cmu-theme)를 우선한다. */
-    html[data-cmu-theme="dark"] #cmu-settings-panel .qputil,
-    html[data-cmu-theme="dark"] #cmu-settings-panel .cmu-key-popover.qputil {
-      --bg: rgba(28, 28, 31, 1);
-      --card: rgba(39, 39, 43, 1);
-      --cardh: rgba(48, 48, 54, 1);
-      --tx: rgba(236, 236, 238, 1);
-      --sub: rgba(150, 150, 156, 1);
-      --bd: rgba(255, 255, 255, .09);
-      --icobg: rgba(255, 255, 255, .06);
-      --ac: rgb(34 197 94);
-      --acbg: rgba(34, 197, 94, .16);
-      --chip: rgba(255, 255, 255, .07);
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel .qputil,
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-key-popover.qputil {
-      --bg: rgba(241, 241, 243, 1);
-      --card: rgba(255, 255, 255, 1);
-      --cardh: rgba(246, 246, 248, 1);
-      --tx: rgba(28, 28, 31, 1);
-      --sub: rgba(108, 108, 114, 1);
-      --bd: rgba(0, 0, 0, .09);
-      --icobg: rgba(0, 0, 0, .05);
-      --ac: rgb(22 163 74);
-      --acbg: rgba(22, 163, 74, .12);
-      --chip: rgba(0, 0, 0, .05);
-    }
-    html[data-cmu-theme="dark"] #cmu-settings-panel {
-      background: rgba(24,24,26,.96) !important;
-      color: rgba(255,255,255,.92) !important;
-      border-color: rgba(255,255,255,.08) !important;
-      box-shadow: 0 18px 46px rgba(0,0,0,.38) !important;
-      color-scheme: dark;
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel {
-      background: rgba(248,248,250,.97) !important;
-      color: rgba(28,28,31,.94) !important;
-      border-color: rgba(0,0,0,.08) !important;
-      box-shadow: 0 18px 46px rgba(24,24,28,.20) !important;
-      color-scheme: light;
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-panel-nav {
-      border-bottom-color: rgba(0,0,0,.08) !important;
-      background: rgba(0,0,0,.015) !important;
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-search {
-      background: rgba(0,0,0,.055) !important;
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-search > svg {
-      stroke: rgba(28,28,31,.45) !important;
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-search-clear {
-      color: rgba(28,28,31,.50) !important;
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-tab {
-      background: rgba(0,0,0,.045) !important;
-      color: rgba(28,28,31,.58) !important;
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-tab.on {
-      background: rgba(22,163,74,.12) !important;
-      color: rgb(22 163 74) !important;
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-tab-dot {
-      background: rgb(22 163 74) !important;
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-panel-close,
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-panel-icon-btn {
-      background: rgba(0,0,0,.055) !important;
-    }
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-panel-icon-btn.on,
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-panel-icon-btn:active,
-    html[data-cmu-theme="light"] #cmu-settings-panel .cmu-panel-close:active {
-      background: rgba(0,0,0,.10) !important;
+    #cmu-settings-panel .cmu-search-empty {
+      padding: 48px 16px;
+      text-align: center;
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--sub);
     }
 
+    @media (prefers-reduced-motion: reduce) {
+      #cmu-settings-panel,
+      #cmu-settings-panel *,
+      #cmu-settings-panel *::before,
+      #cmu-settings-panel *::after,
+      #cmu-settings-scrim {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
     #${ID.toast} {
       position: fixed;
       left: 50%;
@@ -3340,6 +3453,15 @@
       opacity: 0 !important;
       pointer-events: none !important;
     }
+    /* 유저노트 편집영역은 브라우저의 네이티브 드래그 선택을 그대로 사용한다. */
+    html.cmu-user-note-open :is([role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-vaul-drawer]) textarea,
+    html.cmu-user-note-open textarea[placeholder*="노트"],
+    html.cmu-user-note-open textarea[aria-label*="노트"] {
+      pointer-events: auto !important;
+      touch-action: auto !important;
+      user-select: text !important;
+      -webkit-user-select: text !important;
+    }
     `);
     function applyState() {
         const html = document.documentElement;
@@ -3892,7 +4014,7 @@
     }
     function findCmuOpenUserNoteDialog() {
         try {
-            return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))
+            return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-vaul-drawer]'))
                 .find(isCmuUserNoteDialog) || null;
         }
         catch (_) {
@@ -3986,19 +4108,27 @@
             if (isCmuUserNoteEditor(event.target) || CMU_USER_NOTE_STATE.open)
                 syncSettled();
         }, true);
+        // 텍스트 선택이 시작되는 첫 이벤트에서 전역 제스처보다 먼저 유저노트 상태를 확정한다.
+        // 이 리스너는 상태만 갱신하며 preventDefault/stopPropagation은 절대 호출하지 않는다.
+        const syncOnNativeSelectionStart = event => {
+            if (isCmuUserNoteEditor(event.target) || findCmuOpenUserNoteDialog() || CMU_USER_NOTE_STATE.open)
+                syncNow();
+        };
+        cmuListen(document, 'pointerdown', syncOnNativeSelectionStart, { capture: true, passive: true });
+        cmuListen(document, 'touchstart', syncOnNativeSelectionStart, { capture: true, passive: true });
         if (document.body) {
             CMU_USER_NOTE_STATE.observer = new MutationObserver(mutations => {
                 const relevant = mutations.some(mutation => {
                     if (mutation.type === 'attributes') {
                         const target = mutation.target;
                         return target instanceof Element &&
-                            (target.matches?.('[role="dialog"], [aria-modal="true"], textarea') ||
-                                !!target.closest?.('[role="dialog"], [aria-modal="true"]'));
+                            (target.matches?.('[role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-vaul-drawer], textarea') ||
+                                !!target.closest?.('[role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-vaul-drawer]'));
                     }
                     return [...mutation.addedNodes, ...mutation.removedNodes].some(node => {
                         return node instanceof Element &&
-                            (node.matches?.('[role="dialog"], [aria-modal="true"], textarea') ||
-                                !!node.querySelector?.('[role="dialog"], [aria-modal="true"], textarea'));
+                            (node.matches?.('[role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-vaul-drawer], textarea') ||
+                                !!node.querySelector?.('[role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-vaul-drawer], textarea'));
                     });
                 });
                 if (relevant)
@@ -4469,7 +4599,7 @@
         if (!(input instanceof HTMLElement) || !(target instanceof HTMLElement))
             return;
         if (typeof ResizeObserver === 'function') {
-            COMPOSER_EXPAND.resizeObserver = new ResizeObserver(() => scheduleComposerExpandSync());
+            COMPOSER_EXPAND.resizeObserver = cmuSharedResizeClient(() => scheduleComposerExpandSync());
             try {
                 COMPOSER_EXPAND.resizeObserver.observe(input);
             }
@@ -4481,17 +4611,14 @@
                 catch (_) { }
             }
         }
-        COMPOSER_EXPAND.contentObserver = new MutationObserver(() => {
+        COMPOSER_EXPAND.contentObserver = cmuComposerSubscribe(input, () => {
             if (COMPOSER_EXPAND.expanded && !hasComposerExpandableContent(input)) {
                 compactComposerAfterSend(target);
                 return;
             }
             scheduleComposerExpandSync();
         });
-        try {
-            COMPOSER_EXPAND.contentObserver.observe(input, { childList: true, subtree: true, characterData: true });
-        }
-        catch (_) { }
+
     }
     function cancelComposerExpandTimers() {
         if (COMPOSER_EXPAND.animationRaf)
@@ -4768,32 +4895,9 @@
         return btn;
     }
     function bindComposerExpandFeature() {
-        if (document.documentElement.dataset.cmuComposerExpandBound === '1')
-            return;
+        // The shared editor subscription handles input, programmatic edits and composition.
+        // Context is attached by syncComposerExpandContext when the editor appears.
         document.documentElement.dataset.cmuComposerExpandBound = '1';
-        const scheduleForChatInput = (e) => {
-            if (!isChatInputElement(e.target))
-                return;
-            if (COMPOSER_EXPAND.expanded && !hasComposerExpandableContent(e.target)) {
-                compactComposerAfterSend(COMPOSER_EXPAND.target);
-                return;
-            }
-            scheduleComposerExpandSync();
-        };
-        cmuListen(document, 'input', scheduleForChatInput, true);
-        cmuListen(document, 'keyup', scheduleForChatInput, true);
-        cmuListen(document, 'compositionend', scheduleForChatInput, true);
-        cmuListen(document, 'focusin', scheduleForChatInput, true);
-        cmuListen(document, 'paste', (e) => {
-            if (!isChatInputElement(e.target))
-                return;
-            setTimeout(scheduleComposerExpandSync, 0);
-        }, true);
-        cmuListen(document, 'cut', (e) => {
-            if (!isChatInputElement(e.target))
-                return;
-            setTimeout(scheduleComposerExpandSync, 0);
-        }, true);
     }
     function cmuInputCounterRestoreHost() {
         const host = CMU_INPUT_COUNTER.host;
@@ -4965,7 +5069,7 @@
         }
         catch (_) { }
         if (typeof ResizeObserver === 'function') {
-            CMU_INPUT_COUNTER.resizeObserver = new ResizeObserver(scheduleCmuInputCounterSync);
+            CMU_INPUT_COUNTER.resizeObserver = cmuSharedResizeClient(scheduleCmuInputCounterSync);
             CMU_INPUT_COUNTER.resizeObserver.observe(host);
             if (CMU_INPUT_COUNTER.editor instanceof HTMLElement)
                 CMU_INPUT_COUNTER.resizeObserver.observe(CMU_INPUT_COUNTER.editor);
@@ -5084,34 +5188,11 @@
         catch (_) { }
     }
     function bindCmuInputCounterEditor(editor) {
-        if (!(editor instanceof HTMLElement) || editor === CMU_INPUT_COUNTER.editor)
-            return;
+        if (!(editor instanceof HTMLElement) || editor === CMU_INPUT_COUNTER.editor) return;
         cmuInputCounterUnbindEditor();
         CMU_INPUT_COUNTER.editor = editor;
         CMU_INPUT_COUNTER.resizeObserver?.observe(editor);
-        const schedule = () => scheduleCmuInputCounterSync();
-        const delayed = () => {
-            clearTimeout(CMU_INPUT_COUNTER.delayedTimer);
-            CMU_INPUT_COUNTER.delayedTimer = setTimeout(() => {
-                CMU_INPUT_COUNTER.delayedTimer = 0;
-                if (CMU_INPUT_COUNTER.editor === editor && editor.isConnected)
-                    scheduleCmuInputCounterSync();
-            }, 0);
-        };
-        CMU_INPUT_COUNTER.editorHandlers = { schedule, delayed };
-        editor.addEventListener('input', schedule, true);
-        editor.addEventListener('keyup', schedule, true);
-        editor.addEventListener('compositionend', schedule, true);
-        editor.addEventListener('cut', delayed, true);
-        editor.addEventListener('paste', delayed, true);
-        if (editor.isContentEditable) {
-            CMU_INPUT_COUNTER.editorObserver = new MutationObserver(schedule);
-            CMU_INPUT_COUNTER.editorObserver.observe(editor, {
-                childList: true,
-                subtree: true,
-                characterData: true,
-            });
-        }
+        CMU_INPUT_COUNTER.editorObserver = cmuComposerSubscribe(editor, scheduleCmuInputCounterSync);
     }
     function renderCmuInputCounter() {
         CMU_INPUT_COUNTER.updateFrame = 0;
@@ -6043,7 +6124,7 @@
         const renderedHeight = Number(rect?.height || img.getAttribute('height') || 0);
         const naturalWidth = Number(img.naturalWidth || 0);
         const naturalHeight = Number(img.naturalHeight || 0);
-        const knownContentHost = /wrtn-image-ai-character\.static\.wrtn\.ai|d394jeh9729epj\.cloudfront\.net/i.test(src);
+        const knownContentHost = /wrtn-image-ai-character\.static\.wrtn\.ai|wrtn-image-ai-character\.s3\.ap-northeast-2\.amazonaws\.com|wrtn-common-image\.s3\.ap-northeast-2\.amazonaws\.com|d394jeh9729epj\.cloudfront\.net|d1k8apdmymvh8f\.cloudfront\.net|cdn-image(?:\.static)?\.wrtn\.ai|crack\.static\.wrtn\.ai|wrtn-contents-gen-image\.wow\.wrtn\.ai/i.test(src);
         const hint = `${img.getAttribute('alt') || ''} ${img.getAttribute('class') || ''} ${img.getAttribute('data-testid') || ''}`;
         if (/avatar|profile|icon|emoji|model/i.test(hint))
             return false;
@@ -6765,34 +6846,56 @@
             reader.readAsDataURL(blob);
         });
     }
-    function lcRequestImageBlob(url) {
+    async function lcRequestImageBlob(url) {
         const source = String(url || '').trim();
-        if (!source || /^(?:data:|blob:)/i.test(source))
-            return Promise.resolve(null);
-        if (typeof GM_xmlhttpRequest === 'function') {
-            return new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: source,
-                    responseType: 'blob',
-                    timeout: 12000,
-                    onload: response => {
-                        const blob = response?.response;
-                        if (response.status >= 200 && response.status < 300 && blob instanceof Blob)
-                            resolve(blob);
-                        else
-                            reject(new Error(`이미지 요청 실패 ${response.status || 0}`));
-                    },
-                    onerror: () => reject(new Error('이미지 요청 실패')),
-                    ontimeout: () => reject(new Error('이미지 요청 시간 초과')),
-                });
-            });
-        }
-        return fetch(source, { credentials: 'omit', cache: 'force-cache' }).then(response => {
+        if (!source || /^data:/i.test(source))
+            return null;
+
+        // blob: URL도 캡처 직전에 data URL로 고정해 Safari/Firefox의 clone 시점 만료를 피한다.
+        if (/^blob:/i.test(source)) {
+            const response = await fetch(source);
             if (!response.ok)
                 throw new Error(`이미지 요청 실패 ${response.status}`);
             return response.blob();
-        });
+        }
+
+        let gmError = null;
+        if (typeof GM_xmlhttpRequest === 'function') {
+            try {
+                return await new Promise((resolve, reject) => {
+                    GM_xmlhttpRequest({
+                        method: 'GET',
+                        url: source,
+                        responseType: 'blob',
+                        timeout: 15000,
+                        onload: response => {
+                            const blob = response?.response;
+                            if (response.status >= 200 && response.status < 300 && blob instanceof Blob)
+                                resolve(blob);
+                            else
+                                reject(new Error(`이미지 요청 실패 ${response.status || 0}`));
+                        },
+                        onerror: () => reject(new Error('이미지 요청 실패')),
+                        ontimeout: () => reject(new Error('이미지 요청 시간 초과')),
+                    });
+                });
+            }
+            catch (error) {
+                gmError = error;
+            }
+        }
+
+        // 일부 모바일 userscript 엔진에서 GM 응답이 막힐 때 사이트 자체 CORS 허용 경로도 한 번 시도한다.
+        for (const credentials of ['include', 'omit']) {
+            try {
+                const response = await fetch(source, { credentials, cache: 'force-cache' });
+                if (!response.ok)
+                    throw new Error(`이미지 요청 실패 ${response.status}`);
+                return await response.blob();
+            }
+            catch (_) { }
+        }
+        throw gmError || new Error('이미지 요청 실패');
     }
     async function lcPrepareCaptureImages(root, isCurrent = () => true) {
         if (!(root instanceof HTMLElement))
@@ -6807,19 +6910,25 @@
             img.removeAttribute('srcset');
             img.removeAttribute('sizes');
             img.removeAttribute('loading');
+            img.removeAttribute('crossorigin');
+            delete img.dataset.cmuCaptureImageReady;
+            delete img.dataset.cmuCaptureImageFailed;
             try {
-                if (!/^(?:data:|blob:)/i.test(source)) {
+                if (!/^data:/i.test(source)) {
                     const blob = await lcRequestImageBlob(source);
                     if (blob instanceof Blob && /^image\//i.test(blob.type || ''))
                         img.src = await lcBlobAsDataUrl(blob);
                 }
                 if (typeof img.decode === 'function')
-                    await Promise.race([img.decode().catch(() => {}), new Promise(resolve => setTimeout(resolve, 2500))]);
+                    await Promise.race([img.decode().catch(() => {}), new Promise(resolve => setTimeout(resolve, 3000))]);
                 else if (!img.complete)
-                    await Promise.race([new Promise(resolve => { img.onload = img.onerror = resolve; }), new Promise(resolve => setTimeout(resolve, 2500))]);
+                    await Promise.race([new Promise(resolve => { img.onload = img.onerror = resolve; }), new Promise(resolve => setTimeout(resolve, 3000))]);
+                img.dataset.cmuCaptureImageReady = '1';
             }
             catch (_) {
+                // 원본 URL은 첫 렌더에서 한 번 더 시도하되, 실패 이미지만 식별해 전체 이미지가 빠지는 것을 막는다.
                 img.src = source;
+                img.dataset.cmuCaptureImageFailed = '1';
             }
         };
         let next = 0;
@@ -6829,13 +6938,11 @@
         }));
     }
     async function lcRenderCaptureCanvas(lib, page, config, theme) {
-        const transparentPixel = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
         const options = {
             pixelRatio: config.pixelRatio,
             backgroundColor: lcGetExportBackground(theme),
             cacheBust: false,
             includeQueryParams: false,
-            imagePlaceholder: transparentPixel,
             skipAutoScale: false,
         };
         // Safari에서는 외부 웹폰트 인라인 과정이 실패 원인이 되기 쉬워 시스템 폰트 폴백을 사용한다.
@@ -6848,19 +6955,36 @@
             const hasMedia = !!page.querySelector?.('img,video,canvas,svg image');
             if (!hasMedia)
                 throw firstError;
-            const fallback = page.cloneNode(true);
-            fallback.querySelectorAll?.('img,video,canvas,svg image').forEach(el => el.remove());
-            page.parentElement?.appendChild(fallback);
+
+            // 한 이미지가 실패해도 성공적으로 data URL화된 나머지 이미지까지 전부 버리지 않는다.
+            const partialFallback = page.cloneNode(true);
+            partialFallback.querySelectorAll?.('img[data-cmu-capture-image-failed="1"],video,canvas,svg image').forEach(el => el.remove());
+            page.parentElement?.appendChild(partialFallback);
             try {
-                const canvas = await lib.toCanvas(fallback, { ...options, fontEmbedCSS: '' });
-                canvas.cmuMediaOmitted = true;
+                const canvas = await lib.toCanvas(partialFallback, { ...options, fontEmbedCSS: '' });
+                if (partialFallback.querySelector?.('[data-cmu-capture-image-failed="1"]') || page.querySelector?.('[data-cmu-capture-image-failed="1"]'))
+                    canvas.cmuMediaOmitted = true;
                 return canvas;
             }
             catch (_) {
-                throw firstError;
+                // 마지막 안전장치: 기존 동작처럼 미디어 전체를 제외하되, 이 단계까지 온 경우에만 사용한다.
+                const fallback = page.cloneNode(true);
+                fallback.querySelectorAll?.('img,video,canvas,svg image').forEach(el => el.remove());
+                page.parentElement?.appendChild(fallback);
+                try {
+                    const canvas = await lib.toCanvas(fallback, { ...options, fontEmbedCSS: '' });
+                    canvas.cmuMediaOmitted = true;
+                    return canvas;
+                }
+                catch (_) {
+                    throw firstError;
+                }
+                finally {
+                    fallback.remove?.();
+                }
             }
             finally {
-                fallback.remove?.();
+                partialFallback.remove?.();
             }
         }
     }
@@ -7083,11 +7207,291 @@
     }
     function toggleSettingsPanel(force) {
         const panel = ensureSettingsPanel();
-        const open = typeof force === 'boolean' ? force : !panel.classList.contains('open');
-        panel.classList.toggle('open', open);
-        document.documentElement.classList.toggle('cmu-panel-open', open);
-        if (open)
+        const wasOpen = panel.classList.contains('open');
+        const open = typeof force === 'boolean' ? force : !wasOpen;
+        if (open) {
+            clearTimeout(CMU_PANEL_ANIM.closeTimer);
+            CMU_PANEL_ANIM.closeTimer = 0;
+            if (CMU_PANEL_ANIM.onCloseEnd) {
+                panel.removeEventListener('animationend', CMU_PANEL_ANIM.onCloseEnd);
+                CMU_PANEL_ANIM.onCloseEnd = null;
+            }
+            panel.classList.remove('cmu-closing', 'cmu-dragging', 'cmu-snap');
+            panel.style.transform = '';
+            panel.classList.add('open');
+            document.documentElement.classList.add('cmu-panel-open');
             renderSettingsPanel();
+            if (!wasOpen) {
+                cmuSettingsScrim(true);
+                cmuPanelBindOpenListeners(true);
+            }
+            return;
+        }
+        if (!wasOpen)
+            return;
+        panel.classList.remove('open', 'cmu-dragging', 'cmu-snap');
+        document.documentElement.classList.remove('cmu-panel-open');
+        cmuPanelBindOpenListeners(false);
+        cmuSettingsScrim(false);
+        panel.classList.add('cmu-closing');
+        const finish = () => {
+            clearTimeout(CMU_PANEL_ANIM.closeTimer);
+            CMU_PANEL_ANIM.closeTimer = 0;
+            if (CMU_PANEL_ANIM.onCloseEnd) {
+                panel.removeEventListener('animationend', CMU_PANEL_ANIM.onCloseEnd);
+                CMU_PANEL_ANIM.onCloseEnd = null;
+            }
+            if (panel.classList.contains('open'))
+                return;
+            panel.classList.remove('cmu-closing');
+            panel.style.transform = '';
+            clearTimeout(CMU_PANEL_ANIM.pageTimer);
+            clearTimeout(CMU_PANEL_ANIM.indTimer);
+            clearTimeout(CMU_PANEL_ANIM.snapTimer);
+            CMU_PANEL_ANIM.pageTimer = CMU_PANEL_ANIM.indTimer = CMU_PANEL_ANIM.snapTimer = 0;
+            panel.innerHTML = '';
+        };
+        CMU_PANEL_ANIM.onCloseEnd = (e) => {
+            if (e.target === panel)
+                finish();
+        };
+        panel.addEventListener('animationend', CMU_PANEL_ANIM.onCloseEnd);
+        CMU_PANEL_ANIM.closeTimer = setTimeout(finish, 340);
+    }
+    function cmuSettingsScrim(show) {
+        let scrim = document.getElementById(ID.settingsScrim);
+        clearTimeout(CMU_PANEL_ANIM.scrimTimer);
+        CMU_PANEL_ANIM.scrimTimer = 0;
+        if (show) {
+            if (!scrim && document.body) {
+                scrim = document.createElement('div');
+                scrim.id = ID.settingsScrim;
+                scrim.setAttribute('aria-hidden', 'true');
+                document.body.appendChild(scrim);
+            }
+            scrim?.classList.remove('cmu-out');
+            return;
+        }
+        if (!scrim)
+            return;
+        scrim.classList.add('cmu-out');
+        CMU_PANEL_ANIM.scrimTimer = setTimeout(() => {
+            CMU_PANEL_ANIM.scrimTimer = 0;
+            if (scrim.classList.contains('cmu-out'))
+                scrim.remove();
+        }, 260);
+    }
+    function cmuPanelOnResize() {
+        const panel = document.getElementById(ID.panel);
+        if (panel?.classList.contains('open'))
+            cmuPanelPlaceTabIndicator(panel, true);
+    }
+    function cmuPanelOnKeydown(e) {
+        if (e.key !== 'Escape')
+            return;
+        const panel = document.getElementById(ID.panel);
+        if (!panel?.classList.contains('open'))
+            return;
+        if (cmuSettingsSearchOpen) {
+            cmuSetSettingsSearchOpen(panel, false);
+            return;
+        }
+        toggleSettingsPanel(false);
+    }
+    function cmuPanelBindOpenListeners(on) {
+        if (on === CMU_PANEL_ANIM.openBound)
+            return;
+        CMU_PANEL_ANIM.openBound = on;
+        if (on) {
+            cmuListen(window, 'resize', cmuPanelOnResize, false);
+            cmuListen(document, 'keydown', cmuPanelOnKeydown, false);
+        }
+        else {
+            cmuUnlisten(window, 'resize', cmuPanelOnResize, false);
+            cmuUnlisten(document, 'keydown', cmuPanelOnKeydown, false);
+        }
+    }
+    function cmuPanelPlaceTabIndicator(panel, instant) {
+        const tabs = panel?.querySelector?.('.cmu-tabs');
+        const ind = tabs?.querySelector?.('.cmu-tab-ind');
+        const on = tabs?.querySelector?.('.cmu-tab.on');
+        if (!tabs || !ind || !on || !on.offsetWidth)
+            return;
+        if (instant)
+            ind.classList.add('cmu-snap');
+        ind.style.width = `${on.offsetWidth}px`;
+        ind.style.transform = `translateX(${on.offsetLeft}px)`;
+        if (instant) {
+            void ind.offsetWidth;
+            ind.classList.remove('cmu-snap');
+        }
+        const left = Math.max(0, on.offsetLeft - (tabs.clientWidth - on.offsetWidth) / 2);
+        try {
+            tabs.scrollTo({ left, behavior: instant ? 'auto' : 'smooth' });
+        }
+        catch (_) {
+            tabs.scrollLeft = left;
+        }
+    }
+    function cmuPanelShowPage(panel, id, dir) {
+        clearTimeout(CMU_PANEL_ANIM.pageTimer);
+        CMU_PANEL_ANIM.pageTimer = 0;
+        panel.querySelectorAll('.cmu-page').forEach(p => {
+            p.classList.toggle('on', p.dataset.page === id);
+            p.classList.remove('cmu-in-r', 'cmu-in-l');
+        });
+        const page = panel.querySelector(`.cmu-page[data-page="${CSS.escape(id)}"]`);
+        if (!page || !dir)
+            return;
+        void page.offsetWidth;
+        page.classList.add(dir > 0 ? 'cmu-in-r' : 'cmu-in-l');
+        CMU_PANEL_ANIM.pageTimer = setTimeout(() => {
+            CMU_PANEL_ANIM.pageTimer = 0;
+            page.classList.remove('cmu-in-r', 'cmu-in-l');
+        }, 460);
+    }
+    function cmuSetSettingsSearchOpen(panel, open, focus = false) {
+        cmuSettingsSearchOpen = !!open;
+        const head = panel?.querySelector?.('.cmu-panel-head');
+        head?.classList.toggle('cmu-s-open', cmuSettingsSearchOpen);
+        const btn = panel?.querySelector?.('[data-action="search-toggle"]');
+        if (btn) {
+            btn.classList.toggle('on', cmuSettingsSearchOpen);
+            btn.setAttribute('aria-expanded', cmuSettingsSearchOpen ? 'true' : 'false');
+        }
+        const input = panel?.querySelector?.('#cmu-settings-search');
+        if (!cmuSettingsSearchOpen) {
+            cmuSettingsQuery = '';
+            if (input) {
+                input.value = '';
+                input.blur();
+            }
+            panel?.querySelector?.('.cmu-search')?.classList.remove('has');
+            if (panel)
+                cmuApplySettingsSearch(panel);
+            return;
+        }
+        if (focus && input) {
+            try {
+                input.focus({ preventScroll: true });
+            }
+            catch (_) {
+                input.focus();
+            }
+        }
+    }
+    function cmuDepOn(dep) {
+        if (dep === 'themeSkin')
+            return !!settings.themeSkin && !isCmuExternalThemeActive();
+        return !!settings[dep];
+    }
+    function cmuSyncPanelDeps(panel) {
+        if (!panel)
+            return;
+        panel.querySelectorAll('.sw[data-cmu-dep]').forEach(sw => {
+            const depOn = cmuDepOn(sw.dataset.cmuDep);
+            const key = sw.dataset.key || '';
+            const locked = isCmuThemeSettingKey(key) && isCmuExternalThemeActive();
+            const off = !depOn || locked;
+            sw.disabled = off;
+            sw.classList.toggle('disabled', off);
+            sw.setAttribute('aria-disabled', off ? 'true' : 'false');
+            sw.closest('.subrow')?.classList.toggle('cmu-dep-off', !depOn);
+        });
+        panel.querySelectorAll('[data-cmu-dep-box]').forEach(box => {
+            const off = !cmuDepOn(box.dataset.cmuDepBox);
+            box.querySelectorAll('.chip').forEach(chip => {
+                chip.disabled = off;
+                chip.setAttribute('aria-disabled', off ? 'true' : 'false');
+            });
+        });
+    }
+    function cmuTabKeyOn(key) {
+        if (isCmuThemeSettingKey(key) && isCmuExternalThemeActive())
+            return false;
+        if (key === 'modelIcon' && cmuThemeUiModeForSettings() !== 'novel')
+            return false;
+        if (key === 'fullscreenButton' && !isCmuFullscreenSupported())
+            return false;
+        return !!settings[key];
+    }
+    function cmuTabActive(tab) {
+        return !!tab?.keys?.some(cmuTabKeyOn);
+    }
+    function cmuSyncTabDots(panel) {
+        if (!panel)
+            return;
+        CMU_TABS.forEach(t => {
+            panel.querySelector(`.cmu-tab[data-tab="${t.id}"]`)?.classList.toggle('act', cmuTabActive(t));
+        });
+    }
+    function cmuThemeBannerText() {
+        const externalProvider = detectCmuExternalThemeProvider();
+        return {
+            title: externalProvider
+                ? `${getCmuExternalThemeLabel(externalProvider)} 사용 중`
+                : (settings.themeSkin ? '테마 켜짐 · 기본' : '순정 상태'),
+            desc: externalProvider
+                ? '합본 테마 자동 대기 · 저장된 설정은 그대로 유지'
+                : (settings.themeSkin ? '기본 테마 사용 · 라이트/다크 자동 대응' : '끄면 크랙 순정 말풍선으로 표시'),
+        };
+    }
+    function cmuSyncThemeBanner(panel) {
+        const box = panel?.querySelector?.('[data-cmu-theme-banner]');
+        if (!box)
+            return;
+        const text = cmuThemeBannerText();
+        const title = box.querySelector('[data-cmu-theme-title]');
+        const desc = box.querySelector('[data-cmu-theme-desc]');
+        if (title)
+            title.textContent = text.title;
+        if (desc)
+            desc.textContent = text.desc;
+    }
+    function cmuPanelDragStart(e, panel) {
+        if (!panel?.classList.contains('open') || panel.classList.contains('cmu-closing'))
+            return;
+        if (e.isPrimary === false || (e.button !== undefined && e.button !== 0))
+            return;
+        const zone = e.target?.closest?.('.cmu-panel-grab, .cmu-panel-head');
+        if (!zone || !panel.contains(zone) || e.target.closest('button, input, textarea, .cmu-search-box'))
+            return;
+        const startY = e.clientY;
+        let dy = 0;
+        let moving = false;
+        const move = (ev) => {
+            const d = ev.clientY - startY;
+            if (!moving) {
+                if (d < 6)
+                    return;
+                moving = true;
+                panel.classList.add('cmu-dragging');
+            }
+            dy = Math.max(0, d);
+            panel.style.transform = `translateY(${dy}px)`;
+        };
+        const end = () => {
+            cmuUnlisten(window, 'pointermove', move, false);
+            cmuUnlisten(window, 'pointerup', end, false);
+            cmuUnlisten(window, 'pointercancel', end, false);
+            if (!moving)
+                return;
+            panel.classList.remove('cmu-dragging');
+            if (dy > 90) {
+                toggleSettingsPanel(false);
+                return;
+            }
+            panel.classList.add('cmu-snap');
+            panel.style.transform = '';
+            clearTimeout(CMU_PANEL_ANIM.snapTimer);
+            CMU_PANEL_ANIM.snapTimer = setTimeout(() => {
+                CMU_PANEL_ANIM.snapTimer = 0;
+                panel.classList.remove('cmu-snap');
+            }, 400);
+        };
+        cmuListen(window, 'pointermove', move, false);
+        cmuListen(window, 'pointerup', end, false);
+        cmuListen(window, 'pointercancel', end, false);
     }
     const Q_CHECK_ICON = `<svg class="ci" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10.5 8.2 14.5 16 5.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     const CMU_KEY_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7.5" cy="12.5" r="3.5"/><path d="M11 12.5h8M16 12.5v2.7M19 12.5v3.7"/></svg>`;
@@ -7112,11 +7516,13 @@
         </div>`;
         }).join('');
         return `
-      <div class="cmu-key-popover qputil" data-cmu-key-popover hidden>
-        <div class="sec">API 키 보관함</div>
-        <div class="acc direct cmu-key-card">
-          ${rows}
-        </div>
+      <div class="cmu-key-popover qputil" data-cmu-key-popover inert>
+        <div class="cmu-key-inner"><div class="cmu-key-pad">
+          <div class="sec">API 키 보관함</div>
+          <div class="acc direct cmu-key-card">
+            ${rows}
+          </div>
+        </div></div>
       </div>`;
     }
     const Q_ICONS = {
@@ -7139,7 +7545,7 @@
         { id: 'radiosonde', icon: Q_ICONS.radio, label: '라존데', keys: ['radiosonde'] },
         { id: 'dashboard', icon: Q_ICONS.dash, label: '대시보드', keys: ['dashboard', 'dashboardSidebar'] },
         { id: 'badge', icon: Q_ICONS.badge, label: '배지', keys: ['badgeChars', 'badgeTime', 'modelIcon', 'answerCost'] },
-        { id: 'nativemodel', icon: Q_ICONS.filter, label: '모델', keys: ['nativeModelFilter'] },
+        { id: 'nativemodel', icon: Q_ICONS.filter, label: '모델', keys: ['nativeModelFilter', 'outputModelFilter'] },
         { id: 'capture', icon: Q_ICONS.capture, label: '로그 캡처', keys: ['logCapture'] }
     ]);
     function normalizeCmuSettingsTab(id) {
@@ -7149,18 +7555,20 @@
         const showLabel = settings.settingsTabLabels !== false;
         const tabs = CMU_TABS.map(t => {
             const on = t.id === cmuSettingsTab;
-            const act = t.keys.some(k => !!settings[k]);
-            return `<button type="button" class="cmu-tab ${on ? 'on' : ''} ${act ? 'act' : ''}" data-action="q-tab" data-tab="${t.id}" title="${t.label}" aria-label="${t.label}">${t.icon}${showLabel ? `<span>${t.label}</span>` : ''}<i class="cmu-tab-dot"></i></button>`;
+            const act = cmuTabActive(t);
+            return `<button type="button" class="cmu-tab ${on ? 'on' : ''} ${act ? 'act' : ''}" data-action="q-tab" data-tab="${t.id}" title="${t.label}" aria-label="${t.label}" aria-selected="${on ? 'true' : 'false'}">${t.icon}<span>${t.label}</span><i class="cmu-tab-dot"></i></button>`;
         }).join('');
-        return `<div class="cmu-tabs${showLabel ? '' : ' icon-only'}">${tabs}</div>`;
+        return `<div class="cmu-tabs-wrap"><div><div class="cmu-tabs${showLabel ? '' : ' icon-only'}"><span class="cmu-tab-ind" aria-hidden="true"></span>${tabs}</div></div></div>`;
     }
     function renderCmuSearchBar() {
         const v = escapeHtml(cmuSettingsQuery || '');
         return `
-      <div class="cmu-search${v.trim() ? ' has' : ''}">
-        ${CMU_SEARCH_ICON}
-        <input id="cmu-settings-search" type="search" placeholder="설정 검색" value="${v}" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <button type="button" class="cmu-search-clear" data-action="search-clear" aria-label="검색 지우기">×</button>
+      <div class="cmu-search-box">
+        <div class="cmu-search${v.trim() ? ' has' : ''}">
+          ${CMU_SEARCH_ICON}
+          <input id="cmu-settings-search" type="search" placeholder="설정 검색" value="${v}" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="설정 검색">
+          <button type="button" class="cmu-search-clear" data-action="search-clear" aria-label="검색 지우기">×</button>
+        </div>
       </div>`;
     }
     function qCard(inner) { return `<div class="qcard">${inner}</div>`; }
@@ -7196,23 +7604,26 @@
     function qSwitch(key, title, note = '', opts = {}) {
         const externalProvider = isCmuThemeSettingKey(key) ? detectCmuExternalThemeProvider() : '';
         const externalLocked = !!externalProvider;
-        const disabled = !!opts.disabled || externalLocked;
+        const dep = opts.dep || '';
+        const depOn = dep ? cmuDepOn(dep) : true;
+        const disabled = !!opts.disabled || externalLocked || !depOn;
         const forceOff = !!opts.forceOffWhenDisabled || key === 'themeSkin';
         const checked = disabled && forceOff ? false : !!settings[key];
         const group = opts.group ? ` data-group="${opts.group}"` : '';
+        const depAttr = dep ? ` data-cmu-dep="${dep}"` : '';
         const noteText = externalLocked
             ? `${getCmuExternalThemeLabel(externalProvider)} 사용 중 · 합본 설정 보존`
             : note;
         const action = key === 'themeSkin' ? 'theme-switch' : 'q-toggle';
         return `
-      <div class="subrow">
+      <div class="subrow${dep && !depOn ? ' cmu-dep-off' : ''}">
         <div class="lbl">${title}${noteText ? `<div class="note">${noteText}</div>` : ''}</div>
         <button
           type="button"
           class="sw ${checked ? 'on' : ''} ${disabled ? 'disabled' : ''}"
           data-action="${action}"
           data-key="${key}"
-          ${group}
+          ${group}${depAttr}
           role="switch"
           aria-checked="${checked ? 'true' : 'false'}"
           aria-disabled="${disabled ? 'true' : 'false'}"
@@ -7222,16 +7633,14 @@
       </div>`;
     }
     function qDirectSwitch(key, icon, title, desc = '') {
+        // icon 인자는 호환용으로만 남김 — 배너에 아이콘을 그리지 않는다.
         const externalProvider = key === 'themeSkin' ? detectCmuExternalThemeProvider() : '';
-        const externalLocked = !!externalProvider;
-        const locked = externalLocked;
+        const locked = !!externalProvider;
         const checked = locked ? false : !!settings[key];
-        const noteText = desc;
         return `
-      <div class="direct">
+      <div class="direct"${key === 'themeSkin' ? ' data-cmu-theme-banner' : ''}>
         <div class="row">
-          <div class="ic">${icon}</div>
-          <div class="tx"><b>${title}</b><span>${noteText || ''}</span></div>
+          <div class="tx"><b data-cmu-theme-title>${title}</b><span data-cmu-theme-desc>${desc || ''}</span></div>
           <button
             type="button"
             class="sw ${checked ? 'on' : ''} ${locked ? 'disabled' : ''}"
@@ -7801,11 +8210,46 @@
         root.dataset.cmuMenuSwipeDocBound = '1';
         cmuRegisterGlobalGesture('menu-swipe-zone', signal => {
             let tracking = null;
+            let touchGuard = null;
             let suppressClickUntil = 0;
             let suppressClickX = 0;
             let suppressClickY = 0;
+
+            const syncGestureLockClass = () => {
+                root.classList.toggle('cmu-menu-swipe-tracking', !!tracking || !!touchGuard);
+            };
+            const clearTracking = () => {
+                tracking = null;
+                syncGestureLockClass();
+            };
+            const clearTouchGuard = () => {
+                touchGuard = null;
+                syncGestureLockClass();
+            };
             const cancel = () => {
                 tracking = null;
+                touchGuard = null;
+                root.classList.remove('cmu-menu-swipe-tracking');
+            };
+            const lockAxis = (current, dx, dy) => {
+                if (current)
+                    return current;
+                const ax = Math.abs(dx);
+                const ay = Math.abs(dy);
+                if (Math.max(ax, ay) < CMU_MENU_SWIPE.AXIS_LOCK_PX)
+                    return '';
+                if (ax > ay * CMU_MENU_SWIPE.AXIS_LOCK_RATIO)
+                    return 'x';
+                if (ay > ax * CMU_MENU_SWIPE.AXIS_LOCK_RATIO)
+                    return 'y';
+                return '';
+            };
+            const keepRootAtStartX = data => {
+                const scroller = document.scrollingElement;
+                if (!scroller || !Number.isFinite(data?.scrollLeft))
+                    return;
+                if (Math.abs(scroller.scrollLeft - data.scrollLeft) > 0.5)
+                    scroller.scrollLeft = data.scrollLeft;
             };
             const maybeSuppressClickAfterSwipe = (event) => {
                 if (isCmuProtectedEditorTarget(event.target))
@@ -7820,75 +8264,49 @@
                 event.stopPropagation?.();
                 event.stopImmediatePropagation?.();
             };
-            cmuGestureListen(signal, document, 'click', maybeSuppressClickAfterSwipe, true);
-            cmuGestureListen(signal, document, 'pointerdown', event => {
+            const beginTracking = (event, x, y, id) => {
                 if (cmuUserNoteGuardActive() || isCmuUserNoteEditor(event.target)) {
-                    cancel();
-                    return;
+                    clearTracking();
+                    return false;
                 }
                 if (!cmuMenuSwipeZoneActive())
-                    return;
-                if (event.pointerType === 'mouse' && event.button !== 0)
-                    return;
-                if (event.isPrimary === false)
-                    return;
-                if (tracking) {
-                    cancel();
-                    return;
-                }
-                if (!cmuPointInMenuSwipeZone(event))
-                    return;
+                    return false;
+                if (!cmuPointInMenuSwipeZone({ clientX: x, clientY: y }))
+                    return false;
                 if (cmuSwipeEventTargetBlocked(event.target))
-                    return;
+                    return false;
                 positionCmuMenuSwipeZone();
                 tracking = {
-                    id: event.pointerId,
-                    x: event.clientX,
-                    y: event.clientY,
-                    lastX: event.clientX,
-                    lastY: event.clientY,
+                    id,
+                    x,
+                    y,
+                    lastX: x,
+                    lastY: y,
                     at: Date.now(),
+                    axis: '',
+                    scrollLeft: Number(document.scrollingElement?.scrollLeft || 0),
                 };
-            }, { capture: true, passive: true });
-            cmuGestureListen(signal, document, 'pointermove', event => {
-                if (!tracking || event.pointerId !== tracking.id)
+                syncGestureLockClass();
+                return true;
+            };
+            const finishSwipe = (data, endX, endY, event = null) => {
+                if (!data || !cmuMenuSwipeZoneActive())
                     return;
-                if (cmuUserNoteGuardActive()) {
-                    cancel();
-                    return;
-                }
-                tracking.lastX = event.clientX;
-                tracking.lastY = event.clientY;
-            }, { capture: true, passive: true });
-            cmuGestureListen(signal, document, 'pointercancel', event => {
-                if (!tracking || event.pointerId !== tracking.id)
-                    return;
-                cancel();
-            }, { capture: true, passive: true });
-            cmuGestureListen(signal, document, 'pointerup', event => {
-                if (!tracking || event.pointerId !== tracking.id)
-                    return;
-                if (cmuUserNoteGuardActive()) {
-                    cancel();
-                    return;
-                }
-                const data = tracking;
-                cancel();
-                if (!cmuMenuSwipeZoneActive())
-                    return;
-                const dx = event.clientX - data.x;
-                const dy = event.clientY - data.y;
+                const dx = endX - data.x;
+                const dy = endY - data.y;
                 const ax = Math.abs(dx);
                 const ay = Math.abs(dy);
                 const elapsed = Date.now() - data.at;
                 const isSwipe = !(elapsed > CMU_MENU_SWIPE.MAX_MS || ax < CMU_MENU_SWIPE.MIN_DX || ay > CMU_MENU_SWIPE.MAX_DY || ax <= ay * CMU_MENU_SWIPE.RATIO);
                 if (!isSwipe)
                     return;
+                if (event?.cancelable)
+                    event.preventDefault();
                 if (Date.now() - lastCmuMenuSwipeAt < CMU_MENU_SWIPE.COOLDOWN_MS)
                     return;
                 suppressClickUntil = Date.now() + 450;
-                suppressClickX = event.clientX;
-                suppressClickY = event.clientY;
+                suppressClickX = endX;
+                suppressClickY = endY;
                 if (dx > 0) {
                     if (syncCmuMobileChatListOpenState())
                         return;
@@ -7903,7 +8321,141 @@
                     flashCmuMenuSwipeZone();
                     clickCmuRightRoomMenuButton();
                 }
+            };
+            const findTouch = (list, id) => {
+                if (!list)
+                    return null;
+                for (let i = 0; i < list.length; i++) {
+                    const touch = list[i];
+                    if (id == null || touch.identifier === id)
+                        return touch;
+                }
+                return null;
+            };
+
+            try {
+                signal?.addEventListener?.('abort', cancel, { once: true });
+            }
+            catch (_) { }
+
+            cmuGestureListen(signal, document, 'click', maybeSuppressClickAfterSwipe, true);
+
+            /* Pointer Events 경로: Edge/Firefox/Safari의 주 제스처 판정. */
+            cmuGestureListen(signal, document, 'pointerdown', event => {
+                if (cmuUserNoteGuardActive() || isCmuUserNoteEditor(event.target)) {
+                    clearTracking();
+                    return;
+                }
+                if (!cmuMenuSwipeZoneActive())
+                    return;
+                if (event.pointerType === 'mouse' && event.button !== 0)
+                    return;
+                if (event.isPrimary === false)
+                    return;
+                if (tracking) {
+                    clearTracking();
+                    return;
+                }
+                beginTracking(event, event.clientX, event.clientY, event.pointerId);
             }, { capture: true, passive: true });
+
+            cmuGestureListen(signal, document, 'pointermove', event => {
+                if (!tracking || event.pointerId !== tracking.id)
+                    return;
+                if (cmuUserNoteGuardActive()) {
+                    clearTracking();
+                    return;
+                }
+                tracking.lastX = event.clientX;
+                tracking.lastY = event.clientY;
+                const dx = event.clientX - tracking.x;
+                const dy = event.clientY - tracking.y;
+                tracking.axis = lockAxis(tracking.axis, dx, dy);
+                if (tracking.axis === 'x') {
+                    if (event.cancelable)
+                        event.preventDefault();
+                    keepRootAtStartX(tracking);
+                }
+            }, { capture: true, passive: false });
+
+            cmuGestureListen(signal, document, 'pointercancel', event => {
+                if (!tracking || event.pointerId !== tracking.id)
+                    return;
+                clearTracking();
+            }, { capture: true, passive: true });
+
+            cmuGestureListen(signal, document, 'pointerup', event => {
+                if (!tracking || event.pointerId !== tracking.id)
+                    return;
+                if (cmuUserNoteGuardActive()) {
+                    clearTracking();
+                    return;
+                }
+                const data = tracking;
+                if (data.axis === 'x' && event.cancelable)
+                    event.preventDefault();
+                clearTracking();
+                finishSwipe(data, event.clientX, event.clientY, event);
+            }, { capture: true, passive: false });
+
+            /*
+             * iOS Safari는 PointerEvent가 있어도 실제 스크롤/러버밴딩 차단은
+             * non-passive touchmove preventDefault가 더 확실하다.
+             * Android Firefox/Edge에서도 같은 보호막으로 동작한다.
+             * 메뉴 판정은 PointerEvent가 담당하고, 여기서는 화면의 가로 이동만 막는다.
+             */
+            cmuGestureListen(signal, document, 'touchstart', event => {
+                if (cmuUserNoteGuardActive() || isCmuUserNoteEditor(event.target)) {
+                    clearTouchGuard();
+                    return;
+                }
+                if (!cmuMenuSwipeZoneActive() || event.touches?.length !== 1)
+                    return;
+                const touch = event.touches[0];
+                if (!cmuPointInMenuSwipeZone(touch) || cmuSwipeEventTargetBlocked(event.target))
+                    return;
+                touchGuard = {
+                    id: touch.identifier,
+                    x: touch.clientX,
+                    y: touch.clientY,
+                    axis: '',
+                    scrollLeft: Number(document.scrollingElement?.scrollLeft || 0),
+                };
+                syncGestureLockClass();
+            }, { capture: true, passive: true });
+
+            cmuGestureListen(signal, document, 'touchmove', event => {
+                if (!touchGuard)
+                    return;
+                if (cmuUserNoteGuardActive()) {
+                    clearTouchGuard();
+                    return;
+                }
+                const touch = findTouch(event.touches, touchGuard.id);
+                if (!touch) {
+                    clearTouchGuard();
+                    return;
+                }
+                const dx = touch.clientX - touchGuard.x;
+                const dy = touch.clientY - touchGuard.y;
+                touchGuard.axis = lockAxis(touchGuard.axis, dx, dy);
+                if (touchGuard.axis === 'x') {
+                    if (event.cancelable)
+                        event.preventDefault();
+                    keepRootAtStartX(touchGuard);
+                }
+            }, { capture: true, passive: false });
+
+            const finishTouchGuard = event => {
+                if (!touchGuard)
+                    return;
+                const touch = findTouch(event.changedTouches, touchGuard.id);
+                if (!touch && event.type === 'touchend')
+                    return;
+                clearTouchGuard();
+            };
+            cmuGestureListen(signal, document, 'touchend', finishTouchGuard, { capture: true, passive: true });
+            cmuGestureListen(signal, document, 'touchcancel', clearTouchGuard, { capture: true, passive: true });
         });
     }
     function ensureCmuMenuSwipeZone(input = findChatInput()) {
@@ -8290,6 +8842,9 @@
             else
                 nmfResetMenuVisibilityRuntime();
         }
+        if (key === 'outputModelFilter') {
+            omfScanOpenDialogs();
+        }
     }
     function syncQToggleElement(el, value) {
         if (!el)
@@ -8409,9 +8964,9 @@
                 return '';
             const count = members.filter(m => visibility[m.slug] !== false).length;
             const allOn = count === members.length;
-            const groupSwitch = `<button type="button" class="sw ${allOn ? 'on' : ''} ${disabled ? 'disabled' : ''}" data-action="q-rs-group" data-key="${id}" role="switch" aria-checked="${allOn ? 'true' : 'false'}" aria-disabled="${disabled ? 'true' : 'false'}" ${disabled ? 'disabled' : ''} title="${allOn ? '이 그룹 전체 끄기' : '이 그룹 전체 켜기'}"></button>`;
+            const groupSwitch = `<button type="button" class="sw ${allOn ? 'on' : ''} ${disabled ? 'disabled' : ''}" data-action="q-rs-group" data-key="${id}" data-cmu-dep="radiosonde" role="switch" aria-checked="${allOn ? 'true' : 'false'}" aria-disabled="${disabled ? 'true' : 'false'}" ${disabled ? 'disabled' : ''} title="${allOn ? '이 그룹 전체 끄기' : '이 그룹 전체 켜기'}"></button>`;
             const chips = members.map(m => qChip('q-rs-chip', escapeHtml(m.slug), escapeHtml(m.label || m.short || m.slug), visibility[m.slug] !== false, disabled)).join('');
-            return `<div class="subrow cmu-rs-setting-group" data-rs-group="${id}"><div class="cmu-rs-setting-head"><div class="lbl cmu-rs-setting-title"><strong>${label}</strong><small>${count}/${members.length}개 표시</small></div>${groupSwitch}</div><div class="cmu-rs-setting-models">${chips}</div></div>`;
+            return `<div class="subrow cmu-rs-setting-group" data-rs-group="${id}"><div class="cmu-rs-setting-head"><div class="lbl cmu-rs-setting-title"><strong>${label}</strong><small>${count}/${members.length}개 표시</small></div>${groupSwitch}</div><div class="cmu-rs-setting-models" data-cmu-dep-box="radiosonde">${chips}</div></div>`;
         }).join('');
     }
     function syncRsModelSettings() {
@@ -8507,33 +9062,27 @@
 
       <div class="sec">메뉴 항목</div>
       ${qCard(`
-        ${qSwitch('messageLongPressEdit', '수정', '순정 수정 메뉴 표시', { disabled: !settings.messageLongPressMenu })}
-        ${qSwitch('messageLongPressDelete', '삭제', '순정 삭제 메뉴 표시', { disabled: !settings.messageLongPressMenu })}
-        ${qSwitch('messageLongPressBranch', '분기', '순정 분기 메뉴 표시', { disabled: !settings.messageLongPressMenu })}
-        ${qSwitch('messageLongPressCopy', '복사', '메시지 원문 전체 복사', { disabled: !settings.messageLongPressMenu })}
-        ${qSwitch('messageLongPressSelectCopy', '선택 복사', '원문을 큰 창으로 열어 범위 선택', { disabled: !settings.messageLongPressMenu })}
+        ${qSwitch('messageLongPressEdit', '수정', '순정 수정 메뉴 표시', { dep: 'messageLongPressMenu' })}
+        ${qSwitch('messageLongPressDelete', '삭제', '순정 삭제 메뉴 표시', { dep: 'messageLongPressMenu' })}
+        ${qSwitch('messageLongPressBranch', '분기', '순정 분기 메뉴 표시', { dep: 'messageLongPressMenu' })}
+        ${qSwitch('messageLongPressCopy', '복사', '메시지 원문 전체 복사', { dep: 'messageLongPressMenu' })}
+        ${qSwitch('messageLongPressSelectCopy', '선택 복사', '원문을 큰 창으로 열어 범위 선택', { dep: 'messageLongPressMenu' })}
       `)}
     `);
     }
     function renderSettingsThemePage() {
-        const externalProvider = detectCmuExternalThemeProvider();
-        const themeBannerTitle = externalProvider
-            ? `${getCmuExternalThemeLabel(externalProvider)} 사용 중`
-            : (settings.themeSkin ? '테마 켜짐 · 기본' : '순정 상태');
-        const themeBannerDesc = externalProvider
-            ? '합본 테마 자동 대기 · 저장된 설정은 그대로 유지'
-            : (settings.themeSkin ? '기본 테마 사용 · 라이트/다크 자동 대응' : '끄면 크랙 순정 말풍선으로 표시');
+        const banner = cmuThemeBannerText();
         return qPage('theme', `
-      ${qCard(qDirectSwitch('themeSkin', Q_ICONS.theme, themeBannerTitle, themeBannerDesc))}
+      ${qCard(qDirectSwitch('themeSkin', Q_ICONS.theme, banner.title, banner.desc))}
 
       <div class="sec">본문 강조 효과</div>
       ${qCard(`
-        ${qSwitch('themeDialogue', '대사 강조', '큰따옴표/「」/❝❞', { group: 'g-theme-fx' })}
-        ${qSwitch('themeThought', '생각 강조', '작은따옴표', { group: 'g-theme-fx' })}
-        ${qSwitch('themeItalic', '이탤릭 강조', '*기울임*', { group: 'g-theme-fx' })}
-        ${qSwitch('themeStrong', '굵게 강조', '**굵게**', { group: 'g-theme-fx' })}
-        ${qSwitch('themeCode', '코드블록 꾸미기', '코드 박스 배경/테두리', { group: 'g-theme-fx' })}
-        ${qSwitch('themeMarkdown', '마크다운 꾸미기', '인용문/링크 등 가벼운 장식', { group: 'g-theme-fx' })}
+        ${qSwitch('themeDialogue', '대사 강조', '큰따옴표/「」/❝❞', { group: 'g-theme-fx', dep: 'themeSkin' })}
+        ${qSwitch('themeThought', '생각 강조', '작은따옴표', { group: 'g-theme-fx', dep: 'themeSkin' })}
+        ${qSwitch('themeItalic', '이탤릭 강조', '*기울임*', { group: 'g-theme-fx', dep: 'themeSkin' })}
+        ${qSwitch('themeStrong', '굵게 강조', '**굵게**', { group: 'g-theme-fx', dep: 'themeSkin' })}
+        ${qSwitch('themeCode', '코드블록 꾸미기', '코드 박스 배경/테두리', { group: 'g-theme-fx', dep: 'themeSkin' })}
+        ${qSwitch('themeMarkdown', '마크다운 꾸미기', '인용문/링크 등 가벼운 장식', { group: 'g-theme-fx', dep: 'themeSkin' })}
       `)}
     `);
     }
@@ -8542,7 +9091,7 @@
       <div class="sec">표시</div>
       ${qCard(`
         ${qSwitch('radiosonde', '라존데 표시', '채팅창 삽입형 · 내부 자동 갱신')}
-        ${qSwitch('radiosondeLatency', '응답속도 표시', '모델 뒤의 2.11s 같은 응답 시간', { disabled: !settings.radiosonde })}
+        ${qSwitch('radiosondeLatency', '응답속도 표시', '모델 뒤의 2.11s 같은 응답 시간', { dep: 'radiosonde' })}
       `)}
 
       <div class="sec">표시할 모델</div>
@@ -8585,17 +9134,26 @@
     `);
     }
     function renderSettingsNativeModelPage() {
+        const outputRows = renderOutputModelRows();
+        const outputModelList = outputRows
+            ? qChipWrap('g-omf', outputRows, !!settings.outputModelFilter)
+            : `<div class="subrow"><div class="lbl">아직 감지된 모델 없음<div class="note">답변 길이 · 생각 조절 창을 한 번 열면 자동으로 등록돼요.</div></div></div>`;
         return qPage('nativemodel', `
       <div class="sec">순정 모델 메뉴</div>
       ${qCard(qSwitch('nativeModelFilter', '안 쓰는 모델 숨기기', '체크 해제한 모델은 순정 메뉴에서 숨김', { group: 'g-nmf' }))}
 
       <div class="sec">사용할 모델</div>
       ${qCard(qChipWrap('g-nmf', renderNativeModelRows(), !!settings.nativeModelFilter))}
+
+      <div class="sec">답변 길이 · 생각 조절</div>
+      ${qCard(`
+        ${qSwitch('outputModelFilter', '표시할 모델 필터', '체크 해제한 모델만 숨김 · 새 모델은 자동 표시', { group: 'g-omf' })}
+        ${outputModelList}
+      `)}
     `);
     }
 
     function renderSettingsCapturePage() {
-        const enabled = !!settings.logCapture;
         return qPage('capture', `
       <div class="sec">기본</div>
       ${qCard(`
@@ -8604,8 +9162,8 @@
 
       <div class="sec">출력</div>
       ${qCard(`
-        ${qSwitch('logCaptureIncludeImages', '메시지 이미지 포함', '채팅에 포함된 이미지를 캡처 결과에도 포함', { disabled: !enabled })}
-        ${qSwitch('logCaptureIncludeCodeBlocks', '코드블록 포함', '끄면 코드블록은 선택·미리보기·캡처 결과에서 제외', { disabled: !enabled })}
+        ${qSwitch('logCaptureIncludeImages', '메시지 이미지 포함', '채팅에 포함된 이미지를 캡처 결과에도 포함', { dep: 'logCapture' })}
+        ${qSwitch('logCaptureIncludeCodeBlocks', '코드블록 포함', '끄면 코드블록은 선택·미리보기·캡처 결과에서 제외', { dep: 'logCapture' })}
         ${qChoice('q-lc-webp', 'logCaptureWebpQuality', 'WebP 품질', [
             { value: '82', label: '보통' },
             { value: '90', label: '높음' },
@@ -8640,20 +9198,23 @@
         const previousScrollTop = previousBody ? previousBody.scrollTop : 0;
         cmuSettingsTab = normalizeCmuSettingsTab(cmuSettingsTab);
         const showLabel = settings.settingsTabLabels !== false;
+        if (String(cmuSettingsQuery || '').trim())
+            cmuSettingsSearchOpen = true;
+        const searchOpen = !!cmuSettingsSearchOpen;
         panel.innerHTML = `
-      <div class="cmu-panel-head">
-        <div>
-          <div class="cmu-panel-title">모바일 유틸 설정</div>
-        </div>
+      <div class="cmu-panel-grab" aria-hidden="true"></div>
+      <div class="cmu-panel-head${searchOpen ? ' cmu-s-open' : ''}">
+        <div class="cmu-panel-title">모바일 유틸 설정</div>
+        ${renderCmuSearchBar()}
         <div class="cmu-panel-actions">
           <button class="cmu-panel-icon-btn" data-action="tab-label-toggle" type="button" title="${showLabel ? '탭 이름 숨기기' : '탭 이름 보이기'}" aria-label="탭 표시 전환">${showLabel ? CMU_TAB_LABEL_ICON : CMU_TAB_ICONONLY_ICON}</button>
           <button class="cmu-panel-icon-btn" data-action="api-open" type="button" title="API 키 보관함" aria-label="API 키 보관함">${CMU_KEY_ICON}</button>
-          <button class="cmu-panel-close" data-action="close" type="button">×</button>
+          <button class="cmu-panel-icon-btn${searchOpen ? ' on' : ''}" data-action="search-toggle" type="button" title="설정 검색" aria-label="설정 검색" aria-expanded="${searchOpen ? 'true' : 'false'}">${CMU_SEARCH_ICON}</button>
+          <button class="cmu-panel-close" data-action="close" type="button" aria-label="닫기">×</button>
         </div>
       </div>
       ${renderApiKeyPopover()}
       <div class="cmu-panel-nav">
-        ${renderCmuSearchBar()}
         ${renderCmuTabBar()}
       </div>
       <div class="cmu-panel-body">
@@ -8663,10 +9224,12 @@
       </div>`;
         cmuIndexSettingsSearch(panel);
         cmuApplySettingsSearch(panel);
+        cmuPanelPlaceTabIndicator(panel, true);
         requestAnimationFrame(() => {
             const body = panel.querySelector('.cmu-panel-body');
             if (body)
                 body.scrollTop = previousScrollTop;
+            cmuPanelPlaceTabIndicator(panel, true);
         });
         const runPanelAction = (e, source = 'click', forcedTarget = null) => {
             let target = forcedTarget || e.target?.closest?.('[data-action]');
@@ -8695,9 +9258,11 @@
             }
             if (action === 'api-open') {
                 const pop = panel.querySelector('[data-cmu-key-popover]');
-                const nextOpen = !!pop?.hidden;
-                if (pop)
-                    pop.hidden = !nextOpen;
+                const nextOpen = !pop?.classList.contains('cmu-open');
+                if (pop) {
+                    pop.classList.toggle('cmu-open', nextOpen);
+                    pop.inert = !nextOpen;
+                }
                 target.classList.toggle('on', nextOpen);
                 return true;
             }
@@ -8714,9 +9279,16 @@
                 return true;
             }
             if (action === 'q-tab') {
+                const prevIndex = CMU_TABS.findIndex(t => t.id === cmuSettingsTab);
                 cmuSettingsTab = normalizeCmuSettingsTab(target.dataset.tab);
-                panel.querySelectorAll('.cmu-tab').forEach(b => b.classList.toggle('on', b.dataset.tab === cmuSettingsTab));
-                panel.querySelectorAll('.cmu-page').forEach(p => p.classList.toggle('on', p.dataset.page === cmuSettingsTab));
+                const nextIndex = CMU_TABS.findIndex(t => t.id === cmuSettingsTab);
+                panel.querySelectorAll('.cmu-tab').forEach(b => {
+                    const on = b.dataset.tab === cmuSettingsTab;
+                    b.classList.toggle('on', on);
+                    b.setAttribute('aria-selected', on ? 'true' : 'false');
+                });
+                cmuPanelShowPage(panel, cmuSettingsTab, Math.sign(nextIndex - prevIndex));
+                cmuPanelPlaceTabIndicator(panel, false);
                 const body = panel.querySelector('.cmu-panel-body');
                 if (body)
                     body.scrollTop = 0;
@@ -8725,7 +9297,19 @@
             if (action === 'tab-label-toggle') {
                 settings.settingsTabLabels = settings.settingsTabLabels === false;
                 saveSettings();
-                renderSettingsPanel();
+                const showLabelNow = settings.settingsTabLabels !== false;
+                panel.querySelector('.cmu-tabs')?.classList.toggle('icon-only', !showLabelNow);
+                target.innerHTML = showLabelNow ? CMU_TAB_LABEL_ICON : CMU_TAB_ICONONLY_ICON;
+                target.title = showLabelNow ? '탭 이름 숨기기' : '탭 이름 보이기';
+                clearTimeout(CMU_PANEL_ANIM.indTimer);
+                CMU_PANEL_ANIM.indTimer = setTimeout(() => {
+                    CMU_PANEL_ANIM.indTimer = 0;
+                    cmuPanelPlaceTabIndicator(panel, false);
+                }, 300);
+                return true;
+            }
+            if (action === 'search-toggle') {
+                cmuSetSettingsSearchOpen(panel, !cmuSettingsSearchOpen, true);
                 return true;
             }
             if (action === 'search-clear') {
@@ -8750,8 +9334,8 @@
                 const next = !target.classList.contains('on');
                 setSettingFromQ(key, next);
                 syncQToggleElement(target, next);
-                if (key === 'messageLongPressMenu' || key === 'radiosonde' || key === 'logCapture')
-                    renderSettingsPanel();
+                cmuSyncPanelDeps(panel);
+                cmuSyncTabDots(panel);
                 return true;
             }
             if (action === 'theme-switch' && key) {
@@ -8763,6 +9347,9 @@
                 const next = !target.classList.contains('on');
                 setSettingFromQ(key, next);
                 syncQToggleElement(target, next);
+                cmuSyncThemeBanner(panel);
+                cmuSyncPanelDeps(panel);
+                cmuSyncTabDots(panel);
                 return true;
             }
             if (action === 'q-dash-chip' && key) {
@@ -8805,6 +9392,19 @@
                 nmfSaveVis(vis);
                 applyNativeModelFilterCss();
                 nmfScanNativeModelMenu();
+                return true;
+            }
+            if (action === 'q-omf-chip' && key) {
+                let name = '';
+                try { name = decodeURIComponent(key); } catch (_) { name = key; }
+                if (!name) return true;
+                const hidden = new Set(omfLoadHidden());
+                const next = !target.classList.contains('ck');
+                if (next) hidden.delete(name);
+                else hidden.add(name);
+                target.classList.toggle('ck', next);
+                omfSaveHidden(Array.from(hidden));
+                omfScanOpenDialogs();
                 return true;
             }
 
@@ -8852,8 +9452,13 @@
                 saveSettings();
                 applyState();
                 const val = wrap?.querySelector(`[data-step-value="${CSS.escape(key)}"]`);
-                if (val)
-                    val.textContent = `${next}${suffix}`;
+                if (val) {
+                    val.classList.remove('cmu-up', 'cmu-dn');
+                    val.innerHTML = `<span>${next}${escapeHtml(suffix)}</span>`;
+                    void val.offsetWidth;
+                    if (next !== base)
+                        val.classList.add(delta > 0 ? 'cmu-up' : 'cmu-dn');
+                }
                 return true;
             }
             return false;
@@ -8872,6 +9477,7 @@
             return `${node.dataset.action || ''}|${node.dataset.key || ''}|${node.dataset.index || ''}|${node.dataset.tab || ''}`;
         };
         panel.onpointerdown = (e) => {
+            cmuPanelDragStart(e, panel);
             if (e.isPrimary === false || (e.button !== undefined && e.button !== 0)) {
                 CMU_PANEL_INPUT.press = null;
                 return;
@@ -10077,8 +10683,7 @@
         available: null,
         btns: {},
     };
-    // SPA 채팅방 이동 순간 외부 확장 DOM이 잠깐 사라져도, 이미 감지한 연동 버튼은 숨기지 않는다.
-    // Wish RP Manager는 새 방 진입 뒤 자체 DOM을 다시 붙이는 동안 짧은 공백이 생길 수 있다.
+    // 외부 바로가기 3종 중 SPA 이동 중 DOM이 잠깐 사라질 수 있는 연동은 한 번 감지하면 유지한다.
     const CMU_INTEGRATION_SEEN = {
         wishManager: false,
         profileBox: false,
@@ -10243,23 +10848,11 @@
     }
     function findExternalClickable(patterns, visibleOnly = false) {
         const regs = patterns.map(p => p instanceof RegExp ? p : new RegExp(String(p).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
-        const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'));
-        for (const el of candidates) {
-            if (!el)
-                continue;
-            const tag = el.tagName;
-            if ((tag === 'DIV' || tag === 'SPAN') && el.childElementCount > 0 && el.getAttribute('role') !== 'button')
-                continue;
-            if (isOwnElement(el))
-                continue;
-            if (el.closest?.('#chud-sidebar, #chud-side-menu, #chud-side-dropdown, #chud-infobar, #cmu-settings-panel'))
-                continue;
-            const text = [el.textContent, el.getAttribute?.('aria-label'), el.getAttribute?.('title'), el.getAttribute?.('data-tooltip'), el.getAttribute?.('data-label')].join(' ').replace(/\s+/g, ' ').trim();
-            if (!text || text.length > 120 || !regs.some(re => re.test(text)))
-                continue;
-            const clickable = el.closest?.('button, [role="button"], a') || el;
-            if (!visibleOnly || visibleClickable(clickable))
-                return clickable;
+        for (const el of document.querySelectorAll('button, [role="button"], a')) {
+            if (isOwnElement(el) || el.closest('[data-message-group-id], [contenteditable="true"]')) continue;
+            const text = getClickableLabelLite(el);
+            if (!text || text.length > 120 || !regs.some(re => re.test(text))) continue;
+            if (!visibleOnly || visibleClickable(el)) return el;
         }
         return null;
     }
@@ -10268,9 +10861,8 @@
     }
     function isAiSummaryInstalledLite() {
         const root = document.documentElement;
-        // AI 요약 확프는 새로고침 직후 우측 설정 메뉴가 닫혀 있으면
-        // 사이드바 런처 자체를 아직 만들지 않을 수 있다.
-        // 대신 확프가 부팅하면서 항상 넣는 전용 스타일/오버레이도 설치 신호로 인정한다.
+        // AI 요약 확프는 새로고침 직후 우측 설정 메뉴가 닫혀 있으면 사이드바 런처를 아직 만들지 않을 수 있다.
+        // 전용 준비 속성뿐 아니라 부팅 시 생성되는 스타일/오버레이도 설치 신호로 인정한다.
         return !!(root?.getAttribute('data-crack-ai-summary-ready') ||
             document.getElementById('crack-ext-ai-css') ||
             document.querySelector('.crack-ext-ai-overlay') ||
@@ -10320,20 +10912,80 @@
         return !!(switchButton || row.querySelector('button[role="switch"], [role="switch"]'));
     }
     function handleNativeSituationImageToggleLite(target) {
-        if (!isNativeSituationImageToggleLite(target))
-            return false;
-        if (isCmuExternalThemeActive())
-            return false;
+        if (!isNativeSituationImageToggleLite(target) || isCmuExternalThemeActive()) return false;
         const now = Date.now();
-        if (now - Number(CMU_THEME_STATE.nativeHealAt || 0) < 90)
-            return true;
+        if (now - Number(CMU_THEME_STATE.nativeHealAt || 0) < 90) return true;
         CMU_THEME_STATE.nativeHealAt = now;
-        CMU_THEME_STATE.quoteHealUntil = Date.now() + 2400;
+        CMU_THEME_STATE.quoteHealUntil = now + 2400;
         restoreThemeQuotesForReact();
         scheduleThemeQuoteReapplyAfterReact(2400);
-        [80, 260, 700, 1400, 1800, 2400].forEach(ms => setTimeout(() => {
-            scheduleThemeDecorate(true);
-            scheduleBadgeScan();
+        clearTimeout(handleNativeSituationImageToggleLite._timer);
+        handleNativeSituationImageToggleLite._timer = setTimeout(() => {
+            if (shouldRun() && isChatRoomPath()) { scheduleThemeDecorate(true); scheduleBadgeScan(); }
+        }, 2400);
+        return true;
+    }
+    function getNativeSituationImageToggleLite(visibleOnly = true) {
+        const roots = [];
+        const roomPanel = findCmuRoomPanel();
+        if (roomPanel instanceof HTMLElement)
+            roots.push(roomPanel);
+        const main = document.querySelector('main');
+        if (main instanceof HTMLElement && main !== roomPanel)
+            roots.push(main);
+        if (!roots.length)
+            roots.push(document.body || document.documentElement);
+        const seen = new Set();
+        for (const root of roots) {
+            if (!(root instanceof Element))
+                continue;
+            const rows = [];
+            if (root.matches?.('[role="button"]'))
+                rows.push(root);
+            root.querySelectorAll?.('[role="button"]').forEach(row => rows.push(row));
+            for (const row of rows) {
+                if (!(row instanceof HTMLElement) || seen.has(row))
+                    continue;
+                seen.add(row);
+                if (!isNativeSituationImageToggleLite(row))
+                    continue;
+                const toggle = row.querySelector('button[role="switch"], [role="switch"]');
+                const target = toggle instanceof HTMLElement ? toggle : row;
+                if (!visibleOnly || visibleClickable(target) || visibleClickable(row))
+                    return target;
+            }
+        }
+        return null;
+    }
+    function openNativeSituationImageToggleLite() {
+        const tryToggle = () => {
+            const target = getNativeSituationImageToggleLite(true) || getNativeSituationImageToggleLite(false);
+            return target ? fireClickSequence(target) : false;
+        };
+        if (tryToggle())
+            return true;
+        const openRoomMenu = () => {
+            if (isCmuRoomPanelOpen())
+                return true;
+            const toggle = findCmuRoomMenuToggle();
+            if (!toggle)
+                return false;
+            const ok = fireClickSequence(toggle);
+            if (ok)
+                scheduleCmuEdgeMenuStateSync();
+            return ok;
+        };
+        openRoomMenu();
+        let opened = false;
+        const waits = [80, 180, 340, 600, 950, 1450];
+        waits.forEach((ms, index) => setTimeout(() => {
+            if (opened)
+                return;
+            if (index === 2 && !isCmuRoomPanelOpen())
+                openRoomMenu();
+            opened = tryToggle();
+            if (!opened && index === waits.length - 1)
+                showToast('상황 이미지 보기 버튼을 찾지 못함');
         }, ms));
         return true;
     }
@@ -10592,7 +11244,7 @@
             wishManagerButton: isWishRpManagerInstalledLite(),
             roomBackgroundButton: isCustomRoomBackgroundInstalledLite(),
             sceneBlurButton: isScenePainterBackgroundInstalledLite(),
-            imageButton: !!findClickableByTextOrLabel([/상황\s*이미지\s*보기/, /상황.*이미지/, /이미지.*보기/]),
+            imageButton: true,
             archiveButton: !!getNativeImageArchiveTriggerLite(),
             externalArchiveButton: false,
         };
@@ -10631,6 +11283,38 @@
         if (failLabel)
             showToast(`${failLabel} 버튼 못 찾음`);
         return false;
+    }
+    function openTranslatorLite() {
+        // 번역확프 v4.1.5+는 메뉴명이 바뀌어도 #trans-menu-btn / #trans-setting-panel ID를 유지한다.
+        // 텍스트 검색보다 안정적인 ID 직접 호출을 우선하고, 구버전용 텍스트 검색은 마지막 fallback으로 둔다.
+        const panel = document.getElementById('trans-setting-panel');
+        const menu = document.getElementById('trans-menu-btn');
+        if (menu) {
+            try {
+                // 실제 번역확프의 열기 핸들러가 #trans-menu-btn에 붙어 있으므로
+                // 사이드바가 화면 밖/숨김 상태여도 네이티브 click으로 직접 호출한다.
+                menu.click();
+                if (panel && panel.style.display !== 'none')
+                    return true;
+            }
+            catch (_) { }
+            const trigger = menu.matches?.('button, [role="button"], a')
+                ? menu
+                : menu.querySelector?.('button, [role="button"], a');
+            if (trigger && fireClickSequence(trigger))
+                return true;
+        }
+        if (panel) {
+            panel.style.display = 'block';
+            return true;
+        }
+        return clickFirst([
+            /초월\s*번역\s*설정/i,
+            /초월\s*번역기/i,
+            /번역\s*설정/i,
+            /번역기/i,
+            /translator/i,
+        ], '번역기');
     }
     function getClickableLabelLite(el) {
         return [el?.textContent, el?.getAttribute?.('aria-label'), el?.getAttribute?.('title'),
@@ -10833,8 +11517,8 @@
         }
         catch (_) { }
     }
-    document.addEventListener('crack-ai-summary:ready', refreshIntegratedSideButtonsLite);
-    document.addEventListener('wish-rp-manager:ready', refreshIntegratedSideButtonsLite);
+    cmuListen(document, 'crack-ai-summary:ready', refreshIntegratedSideButtonsLite);
+    cmuListen(document, 'wish-rp-manager:ready', refreshIntegratedSideButtonsLite);
     function scheduleIntegratedSideButtonsRouteRefreshLite() {
         // Crack은 SPA라 새 채팅방 진입 시 외부 확장 버튼이 본문보다 늦게 재주입될 수 있다.
         // 새로고침 없이도 늦게 붙은 Wish RP/통합 버튼을 다시 감지해 사이드바에 복원한다.
@@ -10859,6 +11543,10 @@
         return trigger ? fireClickSequence(trigger) : false;
     }
     function openOutputSettingsLite() {
+        // 4.5.0.4 원작의 전용 네이티브 트리거를 먼저 사용한다.
+        // 실패할 때만 기존 범용 탐색/우측 메뉴 폴백으로 내려간다.
+        if (openNativeOutputSettings({ silent: true }))
+            return true;
         if (tryOpenOutputSettingsLite())
             return true;
 
@@ -12006,6 +12694,32 @@
             COMPACT_MODEL.opening = false;
         }
     }
+    function openNativeOutputSettings({ silent = false } = {}) {
+        if (!shouldRun() || !isChatRoomPath())
+            return false;
+        // The native room panel remains mounted while hidden on mobile.
+        // Its dedicated trigger opens the same modal without expanding the panel.
+        const direct = document.getElementById('max-output-modal-menu-button');
+        const usable = el => el instanceof HTMLElement && el.isConnected &&
+            !el.matches(':disabled, [aria-disabled="true"]') && !isOwnElement(el) &&
+            !el.closest('[data-message-group-id]');
+        let trigger = usable(direct) ? direct : null;
+        if (!trigger) {
+            const labels = /^(?:답변\s*길이\s*및\s*생각\s*조절|출력량(?:\s*조절)?)$/;
+            trigger = Array.from(document.querySelectorAll('main button, main [role="button"]')).find(el =>
+                usable(el) && visibleClickable(el) &&
+                [el.textContent, el.getAttribute('aria-label'), el.getAttribute('title')]
+                    .some(value => labels.test(String(value || '').replace(/\s+/g, ' ').trim()))
+            ) || null;
+        }
+        if (!trigger) {
+            if (!silent)
+                showToast('답변 길이 및 생각 조절 버튼을 찾지 못했어요');
+            return false;
+        }
+        trigger.click();
+        return true;
+    }
     function openNativeModelMenu() {
         const btn = getNativeModelMenuButton();
         if (btn) {
@@ -12133,15 +12847,15 @@
                 noteButton: makeSideButton('noteButton', 'chud-note-btn', '유저 노트', SIDE_ICON.note, () => clickFirst([/유저\s*노트/, /노트/], '유저 노트')),
                 outputButton: makeSideButton('outputButton', 'chud-output-btn', '답변 길이 및 생각 조절', SIDE_ICON.output, openOutputSettingsLite),
                 summaryButton: makeSideButton('summaryButton', 'chud-summary-btn', '요약 메모리', SIDE_ICON.summary, openSummaryMemoryLite),
-                imageButton: makeSideButton('imageButton', 'chud-image-btn', '이미지 ON/OFF', SIDE_ICON.image, () => clickFirst([/상황\s*이미지\s*보기/, /상황.*이미지/, /이미지.*보기/], '이미지')),
-                archiveButton: makeSideButton('archiveButton', 'chud-archive-btn', '이미지 보관함', SIDE_ICON.archive, () => clickFirst([/이미지\s*보관함/, /보관함/], '이미지 보관함')),
+                imageButton: makeSideButton('imageButton', 'chud-image-btn', '이미지 ON/OFF', SIDE_ICON.image, openNativeSituationImageToggleLite),
+                archiveButton: makeSideButton('archiveButton', 'chud-archive-btn', '이미지 보관함', SIDE_ICON.archive, () => clickFirst([/이미지\s*보관함/], '이미지 보관함')),
                 roomBackgroundButton: makeSideButton('roomBackgroundButton', 'chud-room-bg-btn', '일반 이미지 테마 설정', SIDE_ICON.roomBackground, () => openExternalThemeSettingsLite('custom-room')),
                 scenePainterButton: makeSideButton('scenePainterButton', 'chud-scene-painter-btn', 'AI 삽화 생성 · 모바일 Scene Painter', SIDE_ICON.scenePainter, openMobileScenePainterLite),
                 wishManagerButton: makeSideButton('wishManagerButton', 'chud-wish-manager-btn', 'Wish RP Manager', SIDE_ICON.wishManager, openWishRpManagerLite),
                 sceneBlurButton: makeSideButton('sceneBlurButton', 'chud-scene-blur-btn', 'CSP 테마 설정', SIDE_ICON.sceneBlur, () => openExternalThemeSettingsLite('csp')),
                 startButton: makeSideButton('startButton', 'chud-start-btn', '시작 설정', SIDE_ICON.start, openStartSettingLite),
                 loreButton: makeSideButton('loreButton', 'chud-lore-btn', '에리 로어', SIDE_ICON.lore, openLoreToolsLite),
-                translatorButton: makeSideButton('translatorButton', 'chud-translator-btn', '초월 번역기', SIDE_ICON.translator, () => clickFirst([/초월\s*번역기/, /번역기/, /translator/i], '번역기')),
+                translatorButton: makeSideButton('translatorButton', 'chud-translator-btn', '초월 번역기', SIDE_ICON.translator, openTranslatorLite),
                 aiSummaryButton: makeSideButton('aiSummaryButton', 'chud-ai-summary-btn', 'AI 요약', SIDE_ICON.aiSummary, openAiSummaryLite),
                 gameHudButton: makeSideButton('gameHudButton', 'chud-game-hud-btn', '게임 HUD', SIDE_ICON.gameHud, openGameHudLite),
             };
@@ -12457,12 +13171,7 @@
             || '';
     }
     async function fetchRawMessagePage(chatId, cursor = '') {
-        const url = `https://contents-api.wrtn.ai/character-chat/v3/chats/${encodeURIComponent(chatId)}/messages?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
-        const json = await apiGet(url);
-        return {
-            arr: pickRawMessageArray(json),
-            cursor: pickRawMessageCursor(json),
-        };
+        return cmuSharedMessagePage(chatId, cursor);
     }
     function newestRawMessageId(rows) {
         const ids = (rows || []).map(rawMessageIdOf).filter(Boolean);
@@ -12485,7 +13194,9 @@
         let foundAnchor = false;
         let complete = false;
         while (page < RAW_DASH_MAX_PAGES) {
+            if (!shouldRun() || getChatId() !== chatId || !settings.dashboard) throw new Error('Room scan cancelled');
             const pageData = prefetched || await fetchRawMessagePage(chatId, cursor);
+            if (!shouldRun() || getChatId() !== chatId) throw new Error('Room scan cancelled');
             prefetched = null;
             const arr = Array.isArray(pageData?.arr) ? pageData.arr : [];
             const anchorIndex = anchorId ? arr.findIndex(msg => rawMessageIdOf(msg) === anchorId) : -1;
@@ -12918,7 +13629,7 @@
         parts.push({ key: 'turn', summaryHtml: turnSummary, detailHtml: turnDetail });
         const cum = DASH.state.cumulative;
         const cumSummary = `${DASH_ICON.bittenCracker}<span style="font-weight:700;">${dashFmt(cum)}</span>개`;
-        const cumDetail = `${DASH_ICON.bittenCracker}<span style="opacity:.75;margin-right:2px;">누적 사용 크래커</span><span style="font-weight:700;">${dashFmt(cum)}</span>개`;
+        const cumDetail = `${DASH_ICON.bittenCracker}<span style="opacity:.75;margin-right:2px;">누적 사용 크래커 · 추정 포함</span><span style="font-weight:700;">${dashFmt(cum)}</span>개`;
         parts.push({ key: 'cumulative', summaryHtml: cumSummary, detailHtml: cumDetail });
         const bal = DASH.state.balance;
         if (bal !== null && bal !== undefined) {
@@ -13077,23 +13788,7 @@
             }
         }
     }
-    function findHistoryCandidates(items, session) {
-        const startedAt = Number(session?.startedAt || 0);
-        const doneAt = Number(session?.doneAt || Date.now());
-        const minT = Math.max(0, startedAt - 30000);
-        const maxT = doneAt + 45000;
-        return (items || [])
-            .map(rec => ({ rec, t: getHistoryRecordTime(rec), amount: getConsumedCrackerAmount(rec) }))
-            .filter(x => x.t > 0 && x.t >= minT && x.t <= maxT && x.amount > 0)
-            .filter(x => {
-            const product = String(x.rec?.product || '').toLowerCase();
-            const text = [x.rec?.type, x.rec?.title, x.rec?.consumedType, x.rec?.description].join(' ');
-            const consumed = x.rec?.isConsumed === true || String(x.rec?.isConsumed) === 'true' || /consume|used|차감|사용|cracker/i.test(text);
-            return consumed && (!product || product.includes('cracker') || product.includes('crack'));
-        })
-            .sort((a, b) => Math.abs(a.t - doneAt) - Math.abs(b.t - doneAt) || b.t - a.t)
-            .map(x => x.rec);
-    }
+
     async function claimConsumption(rec, chatId) {
         const amount = getConsumedCrackerAmount(rec);
         if (!shouldRun() || !chatId || amount <= 0)
@@ -13117,23 +13812,7 @@
         }
         return amount;
     }
-    async function pollAndClaimConsumption(session) {
-        if (!session?.chatId)
-            return;
-        for (const delay of [800, 1600, 2600, 4200]) {
-            await sleep(delay);
-            if (!shouldRun())
-                return;
-            const candidates = findHistoryCandidates(await fetchRecentHistoryItems(20), session);
-            if (!shouldRun())
-                return;
-            for (const rec of candidates) {
-                const added = await claimConsumption(rec, session.chatId);
-                if (added > 0)
-                    return;
-            }
-        }
-    }
+
     function finishDashboardGenerationSession({ chatId = '', forceFull = false } = {}) {
         if (!shouldRun())
             return;
@@ -13154,8 +13833,7 @@
         }
         if (getChatId() === chatId)
             scheduleDashboardUpdate(true);
-        if (session)
-            pollAndClaimConsumption(session).catch(err => console.debug(LOG, 'cracker claim failed', err));
+
     }
     let composerEnterSendProbeId = 0;
     let composerSendWatchCleanup = null;
@@ -13209,59 +13887,28 @@
             setTimeout(compactOnce, delay);
     }
     function watchComposerSendCompletion(sourceInput = findChatInput()) {
-        if (!(sourceInput instanceof HTMLElement) || !getInputText(sourceInput))
-            return;
+        if (!(sourceInput instanceof HTMLElement) || !getInputText(sourceInput)) return;
         stopComposerSendWatch();
-        const chatId = getChatId();
-        const previousTarget = COMPOSER_EXPAND.target;
+        const chatId = getChatId(), previousTarget = COMPOSER_EXPAND.target;
         const probeId = ++composerEnterSendProbeId;
-        const timers = [];
-        let observer = null;
-        let done = false;
+        let subscription = null, expiry = 0, done = false;
         const cleanup = () => {
-            if (done)
-                return;
-            done = true;
-            try {
-                observer?.disconnect?.();
-            }
-            catch (_) { }
-            observer = null;
-            for (const timer of timers)
-                clearTimeout(timer);
-            cmuUnlisten(document, 'input', check, true);
-            cmuUnlisten(document, 'compositionend', check, true);
-            if (composerSendWatchCleanup === cleanup)
-                composerSendWatchCleanup = null;
+            if (done) return;
+            done = true; subscription?.disconnect(); clearTimeout(expiry);
+            if (composerSendWatchCleanup === cleanup) composerSendWatchCleanup = null;
         };
-        const confirmAndCompact = () => {
-            cleanup();
-            compactComposerAfterSend(previousTarget);
-            startDashboardGenerationSession();
-        };
-        function check() {
-            if (done || !shouldRun() || getChatId() !== chatId || probeId !== composerEnterSendProbeId) {
-                cleanup();
-                return;
+        const check = () => {
+            if (done) return;
+            if (!shouldRun() || getChatId() !== chatId || probeId !== composerEnterSendProbeId) { cleanup(); return; }
+            const input = findChatInput();
+            if (input instanceof HTMLElement && !getInputText(input)) {
+                cleanup(); compactComposerAfterSend(previousTarget); startDashboardGenerationSession();
             }
-            const currentInput = findChatInput();
-            const composerWasCleared = currentInput instanceof HTMLElement && !getInputText(currentInput);
-            if (composerWasCleared)
-                confirmAndCompact();
-        }
-        cmuListen(document, 'input', check, true);
-        cmuListen(document, 'compositionend', check, true);
-        const watchHost = findComposerShell(sourceInput) || sourceInput.parentElement || sourceInput;
-        try {
-            observer = new MutationObserver(check);
-            observer.observe(watchHost, { childList: true, subtree: true, characterData: true });
-        }
-        catch (_) { }
-        for (const delay of [0, 40, 100, 220, 450, 800, 1300, 2100, 3200, 4800, 7000, 9500, 12000]) {
-            timers.push(setTimeout(check, delay));
-        }
-        timers.push(setTimeout(cleanup, 12500));
+        };
+        subscription = cmuComposerSubscribe(sourceInput, check);
+        expiry = setTimeout(() => { check(); cleanup(); }, 12500);
         composerSendWatchCleanup = cleanup;
+        check();
     }
     cmuListen(document, 'click', (e) => {
         if (isCmuProtectedEditorTarget(e.target))
@@ -13401,27 +14048,123 @@
         }
     }
     const RS = {
-        apiBase: 'https://old.rs.igx.kr/api/simple/',
-        statistics: 'https://old.rs.igx.kr/api/statistics',
+        apiBase: 'https://rs.igx.kr/api/v2/simple/',
+        modelsUrl: 'https://rs.igx.kr/api/v2/models',
+        statistics: 'https://rs.igx.kr/api/v2/statistics',
         yameStatus: 'https://claude-radiosonde.chyoyam.chatgpt.site/api/v1/status',
         activeWindowMs: 72 * 60 * 60 * 1000,
         validStatuses: new Set(['active', 'degraded', 'impacted']),
         models: [],
         last: new Map(),
         busy: false,
+        pendingRefresh: false,
         discovered: false,
         discoveryAt: 0,
+        discoveryPromise: null,
     };
     const YAME_MODELS = [
         { slug: 'yame-fable5', apiId: 'fable5', source: 'yame', label: 'Fable 5.0', short: 'F5' },
     ];
     const FALLBACK_MODELS = [
-        { slug: 'claude-opus-4.7', apiId: 'claude-opus-4.7', source: 'igx', label: 'Claude 4.7 Opus', short: 'O4.7' },
-        { slug: 'claude-opus-4.6', apiId: 'claude-opus-4.6', source: 'igx', label: 'Claude 4.6 Opus', short: 'O4.6' },
-        { slug: 'claude-sonnet-4.6', apiId: 'claude-sonnet-4.6', source: 'igx', label: 'Claude 4.6 Sonnet', short: 'S4.6' },
-        { slug: 'gemini-3-1-pro', apiId: 'gemini-3-1-pro', source: 'igx', label: 'Gemini 3.1 Pro', short: 'G3.1' },
-        { slug: 'gemini-2.5-pro', apiId: 'gemini-2.5-pro', source: 'igx', label: 'Gemini 2.5 Pro', short: 'G2.5' },
-    ];
+        {
+                "slug": "claude-fable-5.1",
+                "apiId": "claude-fable-5.1",
+                "source": "igx",
+                "label": "Claude Fable 5.1",
+                "short": "F5.1"
+        },
+        {
+                "slug": "claude-opus-5",
+                "apiId": "claude-opus-5",
+                "source": "igx",
+                "label": "Claude Opus 5",
+                "short": "O5"
+        },
+        {
+                "slug": "claude-opus-4.8",
+                "apiId": "claude-opus-4.8",
+                "source": "igx",
+                "label": "Claude Opus 4.8",
+                "short": "O4.8"
+        },
+        {
+                "slug": "claude-opus-4.7",
+                "apiId": "claude-opus-4.7",
+                "source": "igx",
+                "label": "Claude Opus 4.7",
+                "short": "O4.7"
+        },
+        {
+                "slug": "claude-opus-4.6",
+                "apiId": "claude-opus-4.6",
+                "source": "igx",
+                "label": "Claude Opus 4.6",
+                "short": "O4.6"
+        },
+        {
+                "slug": "claude-sonnet-5",
+                "apiId": "claude-sonnet-5",
+                "source": "igx",
+                "label": "Claude Sonnet 5",
+                "short": "S5"
+        },
+        {
+                "slug": "gemini-3.1-pro-preview",
+                "apiId": "gemini-3.1-pro-preview",
+                "source": "igx",
+                "label": "Gemini 3.1 Pro (Preview)",
+                "short": "G3.1P"
+        },
+        {
+                "slug": "gemini-2.5-pro",
+                "apiId": "gemini-2.5-pro",
+                "source": "igx",
+                "label": "Gemini 2.5 Pro",
+                "short": "G2.5P"
+        },
+        {
+                "slug": "gemini-3.6-flash",
+                "apiId": "gemini-3.6-flash",
+                "source": "igx",
+                "label": "Gemini 3.6 Flash",
+                "short": "G3.6F"
+        },
+        {
+                "slug": "gemini-3.5-flash",
+                "apiId": "gemini-3.5-flash",
+                "source": "igx",
+                "label": "Gemini 3.5 Flash",
+                "short": "G3.5F"
+        },
+        {
+                "slug": "gemini-3.5-flash-lite",
+                "apiId": "gemini-3.5-flash-lite",
+                "source": "igx",
+                "label": "Gemini 3.5 Flash Lite",
+                "short": "G3.5FL"
+        },
+        {
+                "slug": "gpt-5.6-sol",
+                "apiId": "gpt-5.6-sol",
+                "source": "igx",
+                "label": "ChatGPT 5.6 Sol",
+                "short": "G5.6S"
+        },
+        {
+                "slug": "gpt-5.6-terra",
+                "apiId": "gpt-5.6-terra",
+                "source": "igx",
+                "label": "ChatGPT 5.6 Terra",
+                "short": "G5.6T"
+        },
+        {
+                "slug": "gpt-5.6-luna",
+                "apiId": "gpt-5.6-luna",
+                "source": "igx",
+                "label": "ChatGPT 5.6 Luna",
+                "short": "G5.6L"
+        }
+];
     const DEFAULT_RS_MODELS = [...YAME_MODELS, ...FALLBACK_MODELS];
     const EXCLUDED_MODELS = new Set(['gemini-3-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']);
     const MODEL_OVERRIDES = new Map(FALLBACK_MODELS.map(m => [m.slug, m]));
@@ -13472,34 +14215,33 @@
             return `G${version || ''}`.slice(0, 8);
         return `${brand.charAt(0).toUpperCase()}${version || ''}`.slice(0, 8) || 'M';
     }
+    function isRsModelSlug(slug) {
+        return typeof slug === 'string' && /^[a-z0-9][a-z0-9.-]*$/i.test(slug) &&
+            slug.includes('-') && /\d/.test(slug) && !EXCLUDED_MODELS.has(slug) && !slug.startsWith('yame-');
+    }
+    function rsModelMeta(slug) {
+        return { slug, apiId: slug, source: 'igx', label: autoLabel(slug), short: autoShort(slug) };
+    }
+    function modelsFromList(payload) {
+        if (payload?.success !== true || !Array.isArray(payload.data)) return [];
+        return ensureUniqueShorts([...new Set(payload.data.filter(isRsModelSlug))].map(rsModelMeta));
+    }
     function latestRecordMs(records) {
-        if (!Array.isArray(records))
-            return null;
-        for (let i = records.length - 1; i >= 0; i--) {
-            const ms = Date.parse(records[i]?.time);
-            if (Number.isFinite(ms))
-                return ms;
-        }
-        return null;
+        const times = Array.isArray(records) ? records.map(r => Date.parse(r?.time)).filter(Number.isFinite) : [];
+        return times.length ? Math.max(...times) : null;
     }
     function modelsFromStatistics(payload) {
-        if (!payload || typeof payload !== 'object' || Array.isArray(payload))
-            return [];
-        const now = Date.now();
-        const models = [];
-        for (const [slug, records] of Object.entries(payload)) {
-            if (!/^[a-z0-9][a-z0-9._-]*$/i.test(slug))
-                continue;
-            if (EXCLUDED_MODELS.has(slug))
-                continue;
-            if (!Array.isArray(records) || !records.length)
-                continue;
-            const latest = latestRecordMs(records);
-            if (latest == null || now - latest > RS.activeWindowMs)
-                continue;
-            models.push({ slug, apiId: slug, source: 'igx', label: autoLabel(slug), short: autoShort(slug) });
+        if (payload?.success !== true || !Array.isArray(payload.data)) return [];
+        const models = new Map();
+        for (const provider of payload.data) {
+            for (const model of Array.isArray(provider?.models) ? provider.models : []) {
+                if (!isRsModelSlug(model?.model)) continue;
+                const latest = latestRecordMs(model.statistics);
+                if (latest === null || Date.now() - latest > RS.activeWindowMs) continue;
+                models.set(model.model, rsModelMeta(model.model));
+            }
         }
-        return ensureUniqueShorts(models);
+        return ensureUniqueShorts([...models.values()]);
     }
     function ensureUniqueShorts(models) {
         const used = new Set();
@@ -13522,7 +14264,7 @@
             if (!Array.isArray(arr))
                 return null;
             const models = arr
-                .filter(m => m && typeof m.slug === 'string' && typeof m.short === 'string' && typeof m.label === 'string' && /^[a-z0-9][a-z0-9._-]*$/i.test(m.slug) && !EXCLUDED_MODELS.has(m.slug) && !m.slug.startsWith('yame-'))
+                .filter(m => m && typeof m.slug === 'string' && typeof m.short === 'string' && typeof m.label === 'string' && isRsModelSlug(m.slug))
                 .map(m => ({ ...m, apiId: m.slug, source: 'igx' }));
             return models.length ? models : null;
         }
@@ -13537,45 +14279,49 @@
         catch (_) { }
     }
     async function discoverRsModels() {
-        const cache = loadRsModelCache();
-        const previous = JSON.stringify(RS.models);
-        try {
-            const payload = await gmGetJson(RS.statistics, 30000);
-            const models = modelsFromStatistics(payload);
-            if (!models.length)
-                throw new Error('empty model list');
-            RS.models = [...YAME_MODELS, ...models];
-            saveRsModelCache(models);
-        }
-        catch (_) {
-            if (!RS.models.length) RS.models = [...YAME_MODELS, ...(cache?.length ? cache : FALLBACK_MODELS)];
-        }
-        RS.discoveryAt = Date.now();
-        if (previous !== JSON.stringify(RS.models)) {
-            const active = new Set(RS.models.map(m => m.slug));
-            for (const slug of RS.last.keys()) if (!active.has(slug)) RS.last.delete(slug);
-            syncRsModelSettings();
-        }
-    }
-    async function fetchRsModelsLimited(models) {
-        const results = new Array(models.length);
-        let cursor = 0;
-        async function worker() {
-            while (cursor < models.length) {
-                if (!shouldRun() || !settings.radiosonde || !isChatRoomPath()) return;
-                const index = cursor++;
+        if (RS.discoveryPromise)
+            return RS.discoveryPromise;
+        RS.discoveryPromise = (async () => {
+            const cache = loadRsModelCache();
+            const previous = JSON.stringify(RS.models);
+            try {
+                let models;
                 try {
-                    results[index] = { status: 'fulfilled', value: await fetchRsModel(models[index].apiId || models[index].slug) };
-                } catch (reason) {
-                    results[index] = { status: 'rejected', reason };
+                    models = modelsFromList(await gmGetJson(RS.modelsUrl, 15000));
+                    if (!models.length) throw new Error('empty v2 model list');
+                } catch (_) {
+                    models = modelsFromStatistics(await gmGetJson(RS.statistics, 30000));
                 }
+                if (!models.length)
+                    throw new Error('empty model list');
+                RS.models = [...YAME_MODELS, ...models];
+                saveRsModelCache(models);
             }
+            catch (_) {
+                if (!RS.models.length) RS.models = [...YAME_MODELS, ...(cache?.length ? cache : FALLBACK_MODELS)];
+            }
+            RS.discoveryAt = Date.now();
+            if (previous !== JSON.stringify(RS.models)) {
+                const active = new Set(RS.models.map(m => m.slug));
+                for (const slug of RS.last.keys()) if (!active.has(slug)) RS.last.delete(slug);
+                syncRsModelSettings();
+                if (RS.busy) RS.pendingRefresh = true;
+                else scheduleRadiosondeRefresh(true);
+            }
+            return RS.models;
+        })();
+        try {
+            return await RS.discoveryPromise;
         }
-        await Promise.all(Array.from({ length: Math.min(4, models.length) }, () => worker()));
-        return results;
+        finally {
+            RS.discoveryPromise = null;
+        }
     }
     function normalizeStatus(status) {
         const v = String(status || 'unknown').toLowerCase();
+        if (v === 'operational') return 'active';
+        if (v === 'unstable') return 'degraded';
+        if (v === 'critical' || v === 'inactive') return 'impacted';
         return RS.validStatuses.has(v) ? v : 'unknown';
     }
     function fmt2(v) {
@@ -13596,16 +14342,16 @@
         const n = Number(latencyInt);
         if (!Number.isFinite(n))
             return null;
-        return (n >= 50 ? n / 1000 : n).toFixed(2);
+        return n >= 0 ? (n / 1000).toFixed(2) : null;
     }
     async function fetchRsModel(slug) {
-        const url = RS.apiBase + encodeURIComponent(slug);
+        const makeUrl = () => `${RS.apiBase}${encodeURIComponent(slug)}`;
         try {
-            return await gmGetJson(url, 15000);
+            return await gmGetJson(makeUrl(), 15000);
         }
         catch (_) {
             await sleep(1200);
-            return await gmGetJson(url, 15000);
+            return await gmGetJson(makeUrl(), 15000);
         }
     }
     async function fetchYameStatus() {
@@ -13658,18 +14404,53 @@
     }
     function scheduleRadiosondeRefresh(force = false) {
         clearTimeout(scheduleRadiosondeRefresh._timer);
-        scheduleRadiosondeRefresh._timer = setTimeout(() => refreshRadiosonde(), force ? 0 : 400);
+        scheduleRadiosondeRefresh._timer = setTimeout(() => {
+            scheduleRadiosondeRefresh._timer = 0;
+            void refreshRadiosonde();
+        }, force ? 0 : 400);
     }
-    async function refreshRadiosonde() {
+    function requestRadiosondeManualRefresh() {
         if (!shouldRun() || !settings.radiosonde || !isChatRoomPath())
             return;
-        if (RS.busy)
+        // 수동 갱신은 클릭 즉시 피드백을 준다. 기존 점수가 있어도 '갱신중…'을 강제로 표시한다.
+        renderRsLine('갱신중…', true);
+        const button = document.querySelector('#igx-live-popup .btn-refresh');
+        if (button) {
+            button.disabled = false;
+            button.setAttribute('aria-label', '라디오존데 갱신중');
+        }
+        if (RS.busy) {
+            // 진행 중 요청에 수동 클릭이 묻히지 않도록, 종료 직후 딱 한 번 다시 갱신한다.
+            RS.pendingRefresh = true;
             return;
+        }
+        void refreshRadiosonde({ manual: true });
+    }
+    async function refreshRadiosonde({ manual = false } = {}) {
+        if (!shouldRun() || !settings.radiosonde || !isChatRoomPath())
+            return;
+        const modelKey = getRsVisibleModels().map(model => model.slug).sort().join('|');
+        if (!manual && RS.lastModelKey === modelKey && Date.now() - Number(RS.lastAttemptAt || 0) < 30000) { renderRsLine(); return; }
+        if (RS.busy) {
+            if (manual) {
+                RS.pendingRefresh = true;
+                renderRsLine('갱신중…', true);
+            }
+            return;
+        }
         RS.busy = true;
-        renderRsLine('갱신중…');
+        RS.lastAttemptAt = Date.now();
+        RS.lastModelKey = modelKey;
+        renderRsLine('갱신중…', manual);
         try {
-            if (!RS.models.length || Date.now() - RS.discoveryAt >= 5 * 60 * 1000)
-                await discoverRsModels();
+            // 모델 목록 탐색은 점수 조회를 막지 않는다. 캐시/기본 목록으로 즉시 조회하고
+            // v2 모델 목록은 뒤에서 조회하고 변경되면 즉시 한 번 더 갱신한다.
+            if (!RS.models.length) {
+                const cache = loadRsModelCache();
+                RS.models = [...YAME_MODELS, ...(cache?.length ? cache : FALLBACK_MODELS)];
+            }
+            if (Date.now() - RS.discoveryAt >= 5 * 60 * 1000 && !RS.discoveryPromise)
+                void discoverRsModels().catch(() => {});
             if (!shouldRun() || !settings.radiosonde || !isChatRoomPath()) return;
             const models = getRsVisibleModels();
             const yameModels = models.filter(model => model.source === 'yame');
@@ -13677,30 +14458,18 @@
             const yameTask = yameModels.length
                 ? fetchYameStatus().then(value => ({ status: 'fulfilled', value }), reason => ({ status: 'rejected', reason }))
                 : Promise.resolve(null);
-            const igxTask = fetchRsModelsLimited(igxModels);
-            const [yameResult, igxResults] = await Promise.all([yameTask, igxTask]);
+            // 화면에서 켜 둔 IGX 모델만 예전 방식처럼 전부 병렬 조회한다.
+            const igxTask = Promise.allSettled(
+                igxModels.map(model => fetchRsModel(model.apiId || model.slug))
+            );
+            // IGX 결과는 YAME(Fable) 응답을 기다리지 않고 먼저 반영한다.
+            // Fable 쪽이 느리거나 죽어 있어도 나머지 점수 갱신이 같이 막히지 않는다.
+            const igxResults = await igxTask;
             if (!shouldRun())
                 return;
-            const resultsBySlug = new Map();
-            if (yameResult?.status === 'fulfilled') {
-                const normalizedYame = normalizeYamePayload(yameResult.value);
-                for (const model of yameModels) {
-                    const value = normalizedYame.get(model.apiId);
-                    resultsBySlug.set(model.slug, value
-                        ? { status: 'fulfilled', value }
-                        : { status: 'rejected', reason: new Error(`missing YAME model: ${model.apiId}`) });
-                }
-            }
-            else {
-                for (const model of yameModels) {
-                    resultsBySlug.set(model.slug, yameResult || { status: 'rejected' });
-                }
-            }
             for (let i = 0; i < igxModels.length; i++) {
-                resultsBySlug.set(igxModels[i].slug, igxResults[i]);
-            }
-            for (const model of models) {
-                const result = resultsBySlug.get(model.slug);
+                const model = igxModels[i];
+                const result = igxResults[i];
                 if (!result || result.status !== 'fulfilled' || result.value?.success !== true || !result.value?.data) {
                     const prev = RS.last.get(model.slug);
                     RS.last.set(model.slug, { ...(prev || { status: 'unknown', score: '—', lat: '—', tps: '—' }), stale: true });
@@ -13717,16 +14486,54 @@
                 });
             }
             renderRsLine();
+
+            const yameResult = await yameTask;
+            if (!shouldRun())
+                return;
+            if (yameResult?.status === 'fulfilled') {
+                const normalizedYame = normalizeYamePayload(yameResult.value);
+                for (const model of yameModels) {
+                    const value = normalizedYame.get(model.apiId);
+                    if (!value?.data) {
+                        const prev = RS.last.get(model.slug);
+                        RS.last.set(model.slug, { ...(prev || { status: 'unknown', score: '—', lat: '—', tps: '—' }), stale: true });
+                        continue;
+                    }
+                    const d = value.data;
+                    RS.last.set(model.slug, {
+                        stale: false,
+                        fetchedAt: Date.now(),
+                        status: normalizeStatus(d.status),
+                        score: fmt0(d.score) ?? '—',
+                        lat: latencySeconds(d.latency) ?? '—',
+                        tps: fmt2(d.tps) ?? '—',
+                    });
+                }
+            }
+            else {
+                for (const model of yameModels) {
+                    const prev = RS.last.get(model.slug);
+                    RS.last.set(model.slug, { ...(prev || { status: 'unknown', score: '—', lat: '—', tps: '—' }), stale: true });
+                }
+            }
+            renderRsLine();
         }
         catch (err) {
             console.warn(LOG, 'radiosonde failed', err);
-            renderRsLine('라존데 갱신 실패');
+            renderRsLine('라존데 갱신 실패', true);
         }
         finally {
             RS.busy = false;
+            const rerun = RS.pendingRefresh && shouldRun() && settings.radiosonde && isChatRoomPath();
+            RS.pendingRefresh = false;
             const button = document.querySelector('#igx-live-popup .btn-refresh');
-            if (button) { button.disabled = false; button.setAttribute('aria-label', '라디오존데 갱신'); }
+            if (button && !rerun) {
+                button.disabled = false;
+                button.setAttribute('aria-label', '라디오존데 갱신');
+            }
             restartRsAutoTimer();
+            if (rerun)
+                setTimeout(() => void refreshRadiosonde({ manual: true }), 0);
         }
     }
     function restartRsAutoTimer() {
@@ -13793,7 +14600,7 @@
         return Number.isNaN(date.getTime()) ? null : date;
     }
     function countChars(text = '') {
-        return [...String(text || '')].length;
+        return cmuInputCounterLength(text);
     }
     function formatNumber(value) {
         return Number(value).toLocaleString('ko-KR');
@@ -13817,42 +14624,28 @@
         return '';
     }
     async function fetchBadgeMessagesOnce(force = false) {
-        if (!shouldRun())
-            throw new Error('runtime disposed');
+        if (!shouldRun()) throw new Error('runtime disposed');
         resetBadgeCacheIfNeeded();
-        const generation = BADGE.generation;
-        if (!force && BADGE.apiCache)
-            return BADGE.apiCache;
-        if (BADGE.apiPromise)
-            return BADGE.apiPromise;
         const chatId = getChatId();
-        if (!chatId)
-            throw new Error('chatId not found');
-        const url = `${BADGE.apiBase}/chats/${encodeURIComponent(chatId)}/messages?limit=${BADGE.messageLimit}`;
-        const task = apiGet(url).then(json => {
-            const messages = json?.data?.messages || json?.messages || [];
-            const list = Array.isArray(messages) ? messages : [];
-            const idMap = new Map();
-            list.forEach((msg, index) => {
-                const id = messageIdOf(msg);
-                if (id)
-                    idMap.set(id, { msg, index });
-            });
-            const objectIds = [...idMap.keys()].filter(isObjectId).sort();
-            const cache = {
-                messages: list,
-                idMap,
-                oldestObjectId: objectIds[0] || '',
-                newestObjectId: objectIds[objectIds.length - 1] || '',
-                windowFull: list.length >= BADGE.messageLimit,
-            };
-            if (shouldRun() && generation === BADGE.generation && getChatId() === chatId && BADGE.apiPromise === task)
+        if (!chatId) throw new Error('chatId not found');
+        const generation = BADGE.generation;
+        const room = cmuRoomData(chatId);
+        if (!force && BADGE.apiCache && BADGE.apiCache.revision === room.revision) return BADGE.apiCache;
+        if (BADGE.apiPromise) return BADGE.apiPromise;
+        const task = Promise.resolve().then(async () => {
+            // The same first page serves statistics, badges, draft confirmation and copy.
+            if (force || !room.first || Date.now() - room.firstAt > 1600)
+                await cmuSharedMessagePage(chatId, '', force);
+            const messages = [...room.messages.values()].sort((a, b) => messageIdOf(b).localeCompare(messageIdOf(a)));
+            const idMap = new Map(messages.map((msg, index) => [messageIdOf(msg), { msg, index }]));
+            const ids = [...idMap.keys()].filter(isObjectId).sort();
+            const cache = { messages, idMap, revision: room.revision,
+                oldestObjectId: ids[0] || '', newestObjectId: ids[ids.length - 1] || '',
+                windowFull: room.first?.hasNext === true || !!room.first?.cursor };
+            if (shouldRun() && getChatId() === chatId && generation === BADGE.generation && BADGE.apiPromise === task)
                 BADGE.apiCache = cache;
             return cache;
-        }).finally(() => {
-            if (BADGE.apiPromise === task)
-                BADGE.apiPromise = null;
-        });
+        }).finally(() => { if (BADGE.apiPromise === task) BADGE.apiPromise = null; });
         BADGE.apiPromise = task;
         return task;
     }
@@ -14318,13 +15111,13 @@
             catch (_) { }
             await sleep(60 + Math.floor(Math.random() * 80));
         }
-        return callback();
+        throw new Error('Cost claim lock unavailable');
     }
     async function cacWithClaimLock(callback) {
         const guardedCallback = () => shouldRun() ? callback() : undefined;
         try {
             if (navigator?.locks?.request) {
-                return await navigator.locks.request('cac-answer-cost-claim', { mode: 'exclusive' }, guardedCallback);
+                return navigator.locks.request('cac-answer-cost-claim', { mode: 'exclusive' }, guardedCallback);
             }
         }
         catch (_) { }
@@ -14368,81 +15161,56 @@
     function cacFindHistoryCandidates(items, job) {
         const minTime = Math.max(0, Number(job?.startedAt || 0) - 30000);
         const maxTime = Number(job?.doneAt || Date.now()) + 45000;
-        return (items || [])
-            .map(record => ({
-            record,
-            time: cacGetHistoryTime(record),
-            amount: cacGetConsumedAmount(record),
-        }))
-            .filter(item => item.time > 0 && item.time >= minTime && item.time <= maxTime)
-            .filter(item => {
-            const product = String(item.record?.product || '').toLowerCase();
-            return String(item.record?.isConsumed) === 'true'
-                && (!product || product.includes('cracker'))
-                && item.amount > 0;
-        })
-            .sort((a, b) => Math.abs(a.time - job.doneAt) - Math.abs(b.time - job.doneAt) || b.time - a.time)
-            .map(item => item.record);
+        const candidates = (items || []).filter(record => {
+            const product = String(record?.product || '').toLowerCase();
+            const time = cacGetHistoryTime(record);
+            return time >= minTime && time <= maxTime && time > 0 &&
+                String(record?.isConsumed) === 'true' && (!product || product.includes('cracker')) &&
+                cacGetConsumedAmount(record) > 0 && cmuHistoryConfidence(record, job) !== 'reject';
+        });
+        const exact = candidates.filter(record => cmuHistoryConfidence(record, job) === 'confirmed');
+        // No nearest-time guess when multiple account-wide transactions overlap.
+        if (exact.length === 1) return exact;
+        return !exact.length && candidates.length === 1 ? candidates : [];
     }
     async function cacClaimMeasuredCost(record, job) {
         const amount = cacGetConsumedAmount(record);
-        if (!job?.chatId || !job?.messageId || amount <= 0)
-            return null;
+        const confidence = cmuHistoryConfidence(record, job);
+        if (!job?.chatId || !job?.messageId || amount <= 0 || confidence === 'reject') return null;
         const historyKey = cacMakeHistoryKey(record);
         let measured = null;
         await cacWithClaimLock(async () => {
-            if (cacIsDeleted(job.chatId, job.messageId))
-                return;
+            if (!cmuCostCollectionWanted() || cacIsDeleted(job.chatId, job.messageId)) return;
             const costs = cacLoadCosts(job.chatId);
             const existing = costs[job.messageId];
-            if (existing && Number(existing.amount) > 0) {
-                measured = existing;
-                return;
-            }
+            if (existing && Number(existing.amount) > 0) { measured = existing; return; }
             const claimed = cacLoadClaimedHistory();
-            if (claimed[historyKey])
-                return;
-            const value = {
-                amount,
-                historyKey,
-                measuredAt: Date.now(),
-                isReroll: !!job.isReroll,
-            };
-            claimed[historyKey] = {
-                claimedAt: Date.now(),
-                chatId: job.chatId,
-                messageId: job.messageId,
-                amount,
-            };
-            costs[job.messageId] = value;
+            if (claimed[historyKey]) return;
+            measured = { amount, confidence, historyKey, measuredAt: Date.now(), isReroll: !!job.isReroll };
+            claimed[historyKey] = { claimedAt: Date.now(), chatId: job.chatId, messageId: job.messageId, amount, confidence };
+            costs[job.messageId] = measured;
             cacSaveClaimedHistory(claimed);
             cacSaveCosts(job.chatId, costs);
-            measured = value;
+            // One successful match supplies both displays; no second history polling loop.
+            if (settings.dashboard) await claimConsumption(record, job.chatId);
         });
-        if (measured)
-            cacRefreshCurrentRoom(job.chatId);
+        if (measured && getChatId() === job.chatId) {
+            const group = isObjectId(job.messageId) && document.querySelector(`[data-message-group-id="${job.messageId}"]`);
+            if (group) { cmuRouterAddGroup(group); scheduleCmuDomRouterFlush(); }
+        }
         return measured;
     }
     async function cacPollAndMeasure(job) {
         for (const delay of [0, 700, 1200, 2000, 3500, 5500]) {
-            if (delay)
-                await sleep(delay);
-            if (!cacWanted() || cacIsDeleted(job.chatId, job.messageId))
-                return;
+            if (delay) await sleep(delay);
+            if (!cmuCostCollectionWanted() || cacIsDeleted(job.chatId, job.messageId)) return;
             try {
                 const candidates = cacFindHistoryCandidates(await fetchRecentHistoryItems(20), job);
+                if (!cmuCostCollectionWanted()) return;
                 for (const record of candidates) {
-                    const measured = await cacClaimMeasuredCost(record, job);
-                    if (measured)
-                        return;
+                    if (await cacClaimMeasuredCost(record, job)) return;
                 }
-            }
-            catch (err) {
-                try {
-                    console.debug(`${LOG} answer cost retry`, err);
-                }
-                catch (_) { }
-            }
+            } catch (error) { console.debug(LOG, 'answer cost retry', error); }
         }
     }
     function cacEventParts(entry) {
@@ -14477,7 +15245,7 @@
         return 0;
     }
     function cacRememberGenerationStart(meta = {}) {
-        if (!cacWanted() || cacExternalCollectorActive())
+        if (!cmuCostCollectionWanted() || (cacExternalCollectorActive() && !settings.dashboard))
             return;
         const chatId = cacNormalizeId(meta?.chat_id || meta?.chatId || meta?.episode_id || getChatId());
         if (!chatId)
@@ -14488,7 +15256,7 @@
         });
     }
     function cacHandleGenerateDone(meta = {}) {
-        if (!cacWanted() || cacExternalCollectorActive())
+        if (!cmuCostCollectionWanted() || (cacExternalCollectorActive() && !settings.dashboard))
             return;
         const chatId = cacNormalizeId(meta?.chat_id || meta?.chatId || meta?.episode_id || getChatId());
         const messageId = cacFirstMessageId(meta);
@@ -14498,6 +15266,7 @@
         if (CAC.seenDoneEvents.has(eventKey) || CAC.pendingJobs.has(eventKey))
             return;
         CAC.seenDoneEvents.add(eventKey);
+        if (CAC.seenDoneEvents.size > 1000) CAC.seenDoneEvents.delete(CAC.seenDoneEvents.values().next().value);
         if (cacIsDeleted(chatId, messageId))
             return;
         const existing = cacLoadCosts(chatId)[messageId];
@@ -14586,7 +15355,9 @@
             slot.appendChild(badge);
         badge.dataset.messageId = messageId;
         badge.dataset.amount = String(amount);
-        badge.title = `이 답변에서 실제 측정된 크래커 소모량: ${formatNumber(amount)}개`;
+        const estimated = record.confidence !== 'confirmed';
+        badge.title = `${estimated ? '사용 내역 시각을 기준으로 추정한' : '메시지 ID로 확인한'} 크래커 소모량: ${formatNumber(amount)}개`;
+        badge.dataset.confidence = estimated ? 'estimated' : 'confirmed';
         const amountEl = badge.querySelector('.cac-answer-cost-amount');
         if (amountEl)
             amountEl.textContent = `${formatNumber(amount)}개`;
@@ -14652,6 +15423,346 @@
             }
         });
     }
+    // 모델 메타데이터는 사이트가 원래 요청한 v3 모델 API 응답을 수동 관찰해 저장한다.
+    // 별도 모델 API 요청/폴링은 만들지 않는다. 새 모델/삭제 모델/아이콘 URL을 같은 응답에서 동기화한다.
+    function cmuNormalizeModelToken(value) {
+        const token = String(value || '').trim().toLowerCase().replace(/[\s.\-]+/g, '_');
+        return /^[a-z][a-z0-9]*(?:_\d+)*$/.test(token) ? token : '';
+    }
+    function cmuLoadModelMeta() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(LS.modelMeta) || '{}');
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        }
+        catch (_) {
+            return {};
+        }
+    }
+    function cmuSaveModelMeta(meta) {
+        try {
+            localStorage.setItem(LS.modelMeta, JSON.stringify(meta && typeof meta === 'object' ? meta : {}));
+        }
+        catch (_) { }
+    }
+    function cmuCleanModelIconUrl(value) {
+        const raw = String(value || '').trim();
+        if (!raw)
+            return '';
+        try {
+            const url = new URL(raw, location.href);
+            return /^https?:$/.test(url.protocol) ? url.href : '';
+        }
+        catch (_) {
+            return '';
+        }
+    }
+    function cmuModelMetaByLabel(label) {
+        const wanted = omfNormalizeText(label).toLocaleLowerCase();
+        if (!wanted)
+            return null;
+        for (const [token, meta] of Object.entries(cmuLoadModelMeta())) {
+            if (omfNormalizeText(meta?.label).toLocaleLowerCase() === wanted)
+                return { token, ...(meta || {}) };
+        }
+        return null;
+    }
+    function cmuModelMetaByToken(token) {
+        token = cmuNormalizeModelToken(token);
+        if (!token)
+            return null;
+        const meta = cmuLoadModelMeta()[token];
+        return meta && typeof meta === 'object' ? { token, ...meta } : null;
+    }
+    function cmuModelIconHtml(token = '', label = '') {
+        token = cmuNormalizeModelToken(token);
+        const meta = token ? cmuModelMetaByToken(token) : cmuModelMetaByLabel(label);
+        const resolvedToken = cmuNormalizeModelToken(meta?.token || token);
+        const apiIcon = cmuCleanModelIconUrl(meta?.icon);
+        const fallbackIcon = resolvedToken ? cmiIconUrl(resolvedToken) : '';
+        const src = apiIcon || fallbackIcon;
+        if (!src)
+            return Q_CHECK_ICON;
+        return `<img class="ci cmu-model-filter-icon" src="${escapeHtml(src)}" alt="" aria-hidden="true" loading="lazy" decoding="async">`;
+    }
+    function cmuRememberModelMetaFromUi(label, iconUrl, tokenHint = '') {
+        const cleanLabel = omfNormalizeText(label);
+        const icon = cmuCleanModelIconUrl(iconUrl);
+        let token = cmuNormalizeModelToken(tokenHint);
+        if (!token && icon) {
+            const flat = nmfIconFlatTokensFromText(icon)[0] || '';
+            token = cmuNormalizeModelToken(nmfTokenFromFlatIconToken(flat));
+        }
+        if (!token && cleanLabel) {
+            const byLabel = cmuModelMetaByLabel(cleanLabel);
+            token = cmuNormalizeModelToken(byLabel?.token);
+        }
+        if (!token)
+            return false;
+        const all = cmuLoadModelMeta();
+        const prev = all[token] && typeof all[token] === 'object' ? all[token] : {};
+        const next = {
+            ...prev,
+            label: cleanLabel || prev.label || cmiAutoLabel(token) || token,
+            icon: icon || prev.icon || '',
+        };
+        if (JSON.stringify(prev) === JSON.stringify(next))
+            return false;
+        all[token] = next;
+        cmuSaveModelMeta(all);
+        return true;
+    }
+    function cmuModelCatalogRequest(method, value) {
+        if (String(method || 'GET').toUpperCase() !== 'GET')
+            return null;
+        try {
+            const url = new URL(String(value || ''), location.href);
+            if (url.hostname !== 'crack-api.wrtn.ai' || url.pathname !== '/crack-gen/v3/chat-models')
+                return null;
+            const serviceType = String(url.searchParams.get('serviceType') || '').toLowerCase();
+            const storyId = url.searchParams.get('storyId') || '';
+            // 다른 제품의 모델 목록으로 스토리 필터를 덮어쓰지 않는다.
+            if (!isChatRoomPath() && !storyId && serviceType !== 'story')
+                return null;
+            if (serviceType && serviceType !== 'story')
+                return null;
+            return { url: url.href, storyId, serviceType };
+        }
+        catch (_) {
+            return null;
+        }
+    }
+    function cmuObserveModelCatalogResponse(meta, json) {
+        if (!meta || !shouldRun())
+            return false;
+        const rows = json?.data?.models;
+        if (!Array.isArray(rows) || !rows.length)
+            return false;
+        const nextMeta = {};
+        const nextSeen = {};
+        const nextNames = [];
+        for (const model of rows) {
+            const token = cmuNormalizeModelToken(model?.crackerModel);
+            if (!token)
+                continue;
+            // API 응답에는 삭제된 과거 모델도 섞일 수 있으므로 현재 사용 가능 항목만 반영한다.
+            if (model?.deletedAt || model?.isBlock === true)
+                continue;
+            const label = omfNormalizeText(model?.name) || cmiAutoLabel(token) || token;
+            const icon = cmuCleanModelIconUrl(model?.assets?.icon?.default);
+            nextMeta[token] = {
+                label,
+                icon,
+                id: String(model?._id || ''),
+                serviceType: String(model?.serviceType || ''),
+            };
+            nextSeen[token] = label;
+            if (!nextNames.includes(label))
+                nextNames.push(label);
+        }
+        if (!Object.keys(nextMeta).length)
+            return false;
+
+        const beforeMeta = cmuLoadModelMeta();
+        const metaChanged = JSON.stringify(beforeMeta) !== JSON.stringify(nextMeta);
+        if (metaChanged)
+            cmuSaveModelMeta(nextMeta);
+
+        const beforeSeen = nmfLoadSeen();
+        const seenChanged = JSON.stringify(beforeSeen) !== JSON.stringify(nextSeen);
+        if (seenChanged)
+            nmfSaveSeen(nextSeen);
+        const storesChanged = nmfSyncModelStoresToSeen(nextSeen, { prune: true });
+
+        const beforeOutputSeen = omfLoadSeen();
+        const outputChanged = JSON.stringify(beforeOutputSeen) !== JSON.stringify(nextNames);
+        if (outputChanged)
+            omfSaveSeen(nextNames);
+        const hidden = new Set(omfLoadHidden());
+        const nextNameSet = new Set(nextNames);
+        const nextHidden = Array.from(hidden).filter(name => nextNameSet.has(name));
+        if (nextHidden.length !== hidden.size)
+            omfSaveHidden(nextHidden);
+
+        if (metaChanged || seenChanged || storesChanged || outputChanged) {
+            const panel = document.getElementById(ID.panel);
+            if (panel?.classList.contains('open'))
+                renderSettingsPanel();
+            applyNativeModelFilterCss();
+            omfScanOpenDialogs();
+        }
+        return true;
+    }
+    // 답변 길이 · 생각 조절 창 모델 필터
+    // 별도 톱니/팝업/Observer를 만들지 않고 합본 설정창과 기존 DOM 라우터를 재사용한다.
+    const OMF_HIDDEN_CLASS = 'cmu-output-model-hidden';
+    addStyle(`.${OMF_HIDDEN_CLASS}{display:none!important;}`);
+    function omfNormalizeText(value) {
+        return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+    function omfLoadHidden() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(LS.outputModelHidden) || '[]');
+            return Array.isArray(parsed) ? parsed.filter(v => typeof v === 'string' && v.trim()) : [];
+        }
+        catch (_) {
+            return [];
+        }
+    }
+    function omfSaveHidden(values) {
+        try {
+            localStorage.setItem(LS.outputModelHidden, JSON.stringify(Array.from(new Set(values || [])).filter(Boolean)));
+        }
+        catch (_) { }
+    }
+    function omfLoadSeen() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(LS.outputModelSeen) || '[]');
+            return Array.isArray(parsed) ? parsed.filter(v => typeof v === 'string' && v.trim()) : [];
+        }
+        catch (_) {
+            return [];
+        }
+    }
+    function omfSaveSeen(values) {
+        try {
+            localStorage.setItem(LS.outputModelSeen, JSON.stringify(Array.from(new Set(values || [])).filter(Boolean)));
+        }
+        catch (_) { }
+    }
+    function omfDirectChildByTag(parent, tagName) {
+        if (!(parent instanceof Element))
+            return null;
+        return Array.from(parent.children).find(el => el.tagName === tagName) || null;
+    }
+    function omfGetEntryTrigger(item) {
+        if (!(item instanceof HTMLElement))
+            return null;
+        const heading = omfDirectChildByTag(item, 'H3');
+        if (!heading)
+            return null;
+        return Array.from(heading.children).find(el =>
+            el.tagName === 'BUTTON' &&
+            el.hasAttribute('aria-expanded') &&
+            el.getAttribute('data-orientation') === 'vertical'
+        ) || null;
+    }
+    function omfReadModelName(trigger) {
+        if (!(trigger instanceof HTMLElement))
+            return '';
+        const directSpans = Array.from(trigger.children).filter(el => el.tagName === 'SPAN');
+        const preferred = directSpans.find(el => el.classList.contains('flex-1'));
+        return omfNormalizeText((preferred || directSpans[0])?.textContent);
+    }
+    function omfAccordionCandidate(dialog) {
+        if (!(dialog instanceof HTMLElement))
+            return null;
+        let best = null;
+        for (const root of dialog.querySelectorAll('div[data-orientation="vertical"]')) {
+            const children = Array.from(root.children).filter(el => el instanceof HTMLElement);
+            if (children.length < 3)
+                continue;
+            const entries = [];
+            let iconCount = 0;
+            let collectionTriggerCount = 0;
+            for (const item of children) {
+                const trigger = omfGetEntryTrigger(item);
+                if (!trigger)
+                    continue;
+                const name = omfReadModelName(trigger);
+                if (!name)
+                    continue;
+                if (Array.from(trigger.children).some(el => el.tagName === 'IMG'))
+                    iconCount += 1;
+                if (trigger.hasAttribute('data-radix-collection-item'))
+                    collectionTriggerCount += 1;
+                entries.push({ item, trigger, name });
+            }
+            if (entries.length < 3)
+                continue;
+            if (iconCount / entries.length < 0.6 || collectionTriggerCount / entries.length < 0.6)
+                continue;
+            if (!best || entries.length > best.entries.length)
+                best = { root, entries };
+        }
+        return best;
+    }
+    function omfFindHelpButton(header) {
+        if (!(header instanceof HTMLElement))
+            return null;
+        const buttons = Array.from(header.querySelectorAll('button'));
+        return buttons.find(button =>
+            button.getAttribute('aria-label') === '도움말' &&
+            button.getAttribute('aria-haspopup') === 'dialog'
+        ) || buttons.find(button =>
+            button.getAttribute('aria-haspopup') === 'dialog' &&
+            button.getAttribute('type') === 'button'
+        ) || null;
+    }
+    function omfContextFromDialog(dialog) {
+        if (!(dialog instanceof HTMLElement) || dialog.getAttribute('role') !== 'dialog' || dialog.getAttribute('data-state') === 'closed' || !dialog.isConnected)
+            return null;
+        const accordion = omfAccordionCandidate(dialog);
+        if (!accordion)
+            return null;
+        const header = Array.from(dialog.children).find(child =>
+            child instanceof HTMLElement && child.querySelector('h2') && omfFindHelpButton(child)
+        );
+        if (!(header instanceof HTMLElement))
+            return null;
+        return { dialog, header, ...accordion };
+    }
+    function omfApplyContext(context) {
+        if (!context?.entries?.length)
+            return false;
+        const names = context.entries.map(entry => entry.name);
+        for (const entry of context.entries) {
+            const img = entry.trigger?.querySelector?.('img');
+            const iconUrl = img?.currentSrc || img?.getAttribute?.('src') || '';
+            if (iconUrl)
+                cmuRememberModelMetaFromUi(entry.name, iconUrl);
+        }
+        const previousSeen = omfLoadSeen();
+        if (names.length !== previousSeen.length || names.some((name, index) => name !== previousSeen[index]))
+            omfSaveSeen(names);
+        const hidden = new Set(omfLoadHidden());
+        for (const entry of context.entries) {
+            entry.item.classList.toggle(OMF_HIDDEN_CLASS, !!settings.outputModelFilter && hidden.has(entry.name));
+        }
+        return true;
+    }
+    function omfScanOpenDialogs(root = document) {
+        const dialogs = new Set();
+        if (root instanceof Element) {
+            if (root.matches?.('[role="dialog"]')) dialogs.add(root);
+            root.closest?.('[role="dialog"]') && dialogs.add(root.closest('[role="dialog"]'));
+        }
+        root?.querySelectorAll?.('[role="dialog"]').forEach(dialog => dialogs.add(dialog));
+        let found = false;
+        for (const dialog of dialogs) {
+            const context = omfContextFromDialog(dialog);
+            if (context && omfApplyContext(context))
+                found = true;
+        }
+        if (!settings.outputModelFilter) {
+            document.querySelectorAll(`.${OMF_HIDDEN_CLASS}`).forEach(el => el.classList.remove(OMF_HIDDEN_CLASS));
+        }
+        return found;
+    }
+    function renderOutputModelRows() {
+        const hidden = new Set(omfLoadHidden());
+        return omfLoadSeen().map(name => {
+            const meta = cmuModelMetaByLabel(name);
+            return qChip(
+                'q-omf-chip',
+                encodeURIComponent(name),
+                escapeHtml(name),
+                !hidden.has(name),
+                false,
+                cmuModelIconHtml(meta?.token || '', name)
+            );
+        }).join('');
+    }
+
     function nmfLoadVis() {
         try {
             const parsed = JSON.parse(localStorage.getItem(LS.nativeModelVis) || '{}');
@@ -14930,7 +16041,12 @@
                 if (!token)
                     return;
                 const label = nmfNativeModelLabelFromItem(item, flat, token);
-                nextSeen[token] = label || cmiAutoLabel(token) || token;
+                const finalLabel = label || cmiAutoLabel(token) || token;
+                nextSeen[token] = finalLabel;
+                const iconEl = nmfNativeModelIconElements(item).find(el => nmfFlatTokensFromElement(el).includes(flat)) || nmfNativeModelIconElements(item)[0];
+                const iconUrl = iconEl?.currentSrc || iconEl?.getAttribute?.('src') || iconEl?.getAttribute?.('srcset')?.split?.(',')?.[0]?.trim?.()?.split?.(/\s+/)?.[0] || '';
+                if (iconUrl)
+                    cmuRememberModelMetaFromUi(finalLabel, iconUrl, token);
             });
         });
         const mergedSeen = { ...prevSeen, ...nextSeen };
@@ -15010,7 +16126,9 @@
         nmfResetMenuVisibilityRuntime();
     }
     function renderNativeModelRows() {
-        return nmfModelEntries().map(m => qChip('q-nmf-chip', m.token, m.label, nmfIsVisible(m.token))).join('');
+        return nmfModelEntries().map(m =>
+            qChip('q-nmf-chip', m.token, m.label, nmfIsVisible(m.token), false, cmuModelIconHtml(m.token, m.label))
+        ).join('');
     }
     const CMI = {
         registryKey: 'cmu_model_registry_v1',
@@ -15410,58 +16528,71 @@
     }
     function cmiInstallDeleteHooks() {
         const w = getPublicWindow();
-        if (w.__CMU_MODEL_DELETE_HOOKED__)
-            return;
+        if (w.__CMU_MODEL_DELETE_HOOKED__) return;
         w.__CMU_MODEL_DELETE_HOOKED__ = true;
         CMU_RESOURCES.cleanups.push(() => { delete w.__CMU_MODEL_DELETE_HOOKED__; });
+        const consume = (messageMeta, modelMeta, response, body, revision) => {
+            if ((!messageMeta && !modelMeta) || !response?.ok || !shouldRun()) return;
+            const parsed = response.status === 204 ? Promise.resolve({ result: 'SUCCESS' }) : response.clone().json();
+            Promise.all([parsed, body]).then(([json, payload]) => {
+                if (messageMeta)
+                    cmuObserveMessageResponse(messageMeta, json, payload, revision);
+                if (modelMeta)
+                    cmuObserveModelCatalogResponse(modelMeta, json);
+            }).catch(() => {});
+        };
         try {
-            const originalFetch = w.fetch;
-            if (typeof originalFetch === 'function') {
-                w.fetch = function (input, init) {
-                    if (!shouldRun())
-                        return originalFetch.apply(this, arguments);
+            const original = w.fetch;
+            if (typeof original === 'function') {
+                w.fetch = function(input, init) {
                     const method = init?.method || input?.method || 'GET';
                     const url = typeof input === 'string' ? input : (input?.url || input?.href || String(input || ''));
-                    const deletion = cmiParseDeleteRequest(method, url);
-                    const result = originalFetch.apply(this, arguments);
-                    if (!deletion)
-                        return result;
-                    return Promise.resolve(result).then(response => {
-                        if (shouldRun() && response?.ok)
-                            cmiRecordSuccessfulDeletion(deletion.chatId, deletion.messageId);
-                        return response;
-                    });
+                    const messageMeta = shouldRun() ? cmuMessageRequest(method, url) : null;
+                    const modelMeta = shouldRun() ? cmuModelCatalogRequest(method, url) : null;
+                    const revision = messageMeta ? cmuRoomData(messageMeta.chatId).revision : 0;
+                    let body = init?.body;
+                    if (messageMeta?.method === 'PATCH' && body === undefined && typeof input?.clone === 'function') {
+                        try { body = input.clone().text().catch(() => null); } catch (_) { }
+                    }
+                    const result = original.apply(this, arguments);
+                    if (messageMeta || modelMeta)
+                        Promise.resolve(result).then(response => consume(messageMeta, modelMeta, response, body, revision)).catch(() => {});
+                    return result;
                 };
-                cmuOwnMethod(w, 'fetch', originalFetch);
+                cmuOwnMethod(w, 'fetch', original);
             }
-        }
-        catch (_) { }
-        try {
             const XHR = w.XMLHttpRequest;
-            const originalOpen = XHR?.prototype?.open;
-            const originalSend = XHR?.prototype?.send;
+            const originalOpen = XHR?.prototype?.open, originalSend = XHR?.prototype?.send;
             if (typeof originalOpen === 'function' && typeof originalSend === 'function') {
-                XHR.prototype.open = function (method, url) {
-                    if (shouldRun())
-                        this[CMI_DELETE_META] = cmiParseDeleteRequest(method, url);
+                XHR.prototype.open = function(method, url) {
+                    this[CMI_DELETE_META] = shouldRun() ? {
+                        messageMeta: cmuMessageRequest(method, url),
+                        modelMeta: cmuModelCatalogRequest(method, url),
+                    } : null;
                     return originalOpen.apply(this, arguments);
                 };
-                XHR.prototype.send = function () {
-                    const deletion = this[CMI_DELETE_META];
-                    if (shouldRun() && deletion) {
-                        this.addEventListener('loadend', () => {
-                            if (shouldRun() && this.status >= 200 && this.status < 300) {
-                                cmiRecordSuccessfulDeletion(deletion.chatId, deletion.messageId);
-                            }
-                        }, { once: true });
-                    }
+                XHR.prototype.send = function(body) {
+                    const hookMeta = this[CMI_DELETE_META];
+                    const messageMeta = hookMeta?.messageMeta || null;
+                    const modelMeta = hookMeta?.modelMeta || null;
+                    const revision = messageMeta ? cmuRoomData(messageMeta.chatId).revision : 0;
+                    if (messageMeta || modelMeta) this.addEventListener('loadend', () => {
+                        if (!shouldRun() || this.status < 200 || this.status >= 300) return;
+                        try {
+                            const json = this.status === 204 ? { result: 'SUCCESS' }
+                                : this.responseType === 'json' ? this.response : JSON.parse(this.responseText);
+                            if (messageMeta)
+                                cmuObserveMessageResponse(messageMeta, json, body, revision);
+                            if (modelMeta)
+                                cmuObserveModelCatalogResponse(modelMeta, json);
+                        } catch (_) { }
+                    }, { once: true });
                     return originalSend.apply(this, arguments);
                 };
                 cmuOwnMethod(XHR.prototype, 'open', originalOpen);
                 cmuOwnMethod(XHR.prototype, 'send', originalSend);
             }
-        }
-        catch (_) { }
+        } catch (error) { console.debug(LOG, 'message response adapter unavailable', error); }
     }
     const cmuPreviousModelProbe = getPublicWindow().__cmuModelProbe;
     getPublicWindow().__cmuModelProbe = async () => {
@@ -15963,7 +17094,8 @@
         if (!domId)
             return null;
         try {
-            const { messages, idMap } = await fetchBadgeMessagesOnce(true);
+            await cmuEnsureMessage(getChatId(), domId);
+            const { messages, idMap } = await fetchBadgeMessagesOnce(false);
             const anchor = idMap.get(domId)?.msg || null;
             const compare = parseCompare(root);
             if (compare && compare.total > 1 && anchor && isAssistantMessage(anchor) && anchor.parentTurnId) {
@@ -15988,6 +17120,7 @@
         const fallback = body?.innerText || body?.textContent || '';
         if (!String(fallback).trim())
             throw new Error('메시지 원문을 찾지 못함');
+        showToast('원문을 확인하지 못해 화면에 보이는 글을 복사합니다');
         return String(fallback).trim();
     }
     function cmuCloseMessageSelectSheet() {
@@ -16425,11 +17558,12 @@
         scheduleCmuStatBarMark(0);
         applyRadiosondeTheme();
         applyNativeModelFilterCss();
+        omfScanOpenDialogs();
         if (settings.nativeModelFilter && cmuHasNativeModelMenu(document))
             nmfScanNativeModelMenu();
         if (settings.wideView)
             document.querySelectorAll('main [data-message-group-id]').forEach(markCmuWideContainer);
-        scheduleThemeDecorate(true);
+        if (!late) scheduleThemeDecorate(true);
         if (reason === 'initial' || reason === 'route' || reason === 'visible-resume' || reason === 'setting-enabled')
             scheduleThemeDecorateBurst(reason);
         if (!shouldRun())
@@ -16617,6 +17751,7 @@
         if (sideDirty)
             refreshSideAvailability(true);
         if (composerDirty) {
+            for (const entry of CMU_SHARED.composers.values()) entry.notify();
             const cachedOk = cmuCachedChatInput instanceof Element && cmuCachedChatInput.isConnected && !isInsideKnownPopup(cmuCachedChatInput);
             const now = Date.now();
             if (!cachedOk || now - Number(flushCmuDomRouter._composerHealAt || 0) >= 900) {
@@ -16641,6 +17776,7 @@
         }
         if (popupDirty) {
             const userNoteOpen = syncCmuUserNoteDialogState();
+            omfScanOpenDialogs();
             if (!userNoteOpen) {
                 scheduleMobileChatListPopoverLayoutSettle();
                 scheduleCmuEdgeMenuStateSync();
@@ -16661,7 +17797,8 @@
         return shouldRun() && isChatRoomPath() && !!(settings.wideView || settings.themeSkin || settings.badgeChars || settings.badgeTime || settings.modelIcon || settings.answerCost);
     }
     function cmuMessageTextWorkWanted() {
-        return shouldRun() && isChatRoomPath() && !!(settings.themeSkin || settings.badgeChars || settings.badgeTime || settings.modelIcon || settings.answerCost);
+        // Time, model and API-based character/cost badges do not consume streaming text.
+        return themeSkinEnabled();
     }
     function cmuExpectChildChange(target, added, removed) {
         if (!bootObserver || !target?.isConnected)
@@ -16781,7 +17918,7 @@
     function syncCmuDomWatchOptions() {
         if (!bootObserver || !shouldRun() || !document.body)
             return;
-        const attributeFilter = ['aria-checked', 'data-state'];
+        const attributeFilter = ['aria-checked', 'data-state', 'aria-hidden', 'hidden', 'placeholder', 'aria-label'];
         if (settings.pauseAnimatedThumbs || settings.nativeModelFilter)
             attributeFilter.push('src', 'srcset');
         const key = attributeFilter.join(',') + ':' + String(cmuMessageTextWorkWanted());
@@ -16825,6 +17962,9 @@
                     continue;
                 const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
                 if (mutation.type === 'attributes') {
+                    if (target?.matches('[role="dialog"], [aria-modal="true"], textarea') || target?.closest('[role="dialog"], [aria-modal="true"]')) {
+                        CMU_DOM_ROUTER.popupDirty = true; dirty = true;
+                    }
                     if ((mutation.attributeName === 'src' || mutation.attributeName === 'srcset')) {
                         if (target instanceof HTMLImageElement)
                             scheduleAnimatedThumbState(target);
@@ -16933,6 +18073,7 @@
             document.documentElement.className,
             document.body?.className,
             document.documentElement.style.colorScheme,
+            document.body?.style?.colorScheme,
         ].join(' ').toLowerCase();
         if (/\bdark\b|theme-dark|dark-mode|color-scheme-dark/.test(hints))
             return 'dark';
@@ -16941,21 +18082,7 @@
         return 'dark';
     }
     function isCmuLightTheme() {
-        const html = document.documentElement;
-        const body = document.body;
-        const tokens = [
-            html.getAttribute('data-theme'),
-            body?.getAttribute('data-theme'),
-            html.className,
-            body?.className,
-            html.style.colorScheme,
-            body?.style?.colorScheme,
-        ].join(' ').toLowerCase();
-        if (/\bdark\b|theme-dark|dark-mode|color-scheme-dark/.test(tokens))
-            return false;
-        if (/\blight\b|theme-light|light-mode|color-scheme-light/.test(tokens))
-            return true;
-        return false;
+        return detectCmuTheme() === 'light';
     }
     function themeSkinEnabled() {
         return shouldRun() && !!settings.themeSkin && isChatRoomPath() && !isCmuExternalThemeActive();
@@ -17013,78 +18140,7 @@
             (cls.includes('px-0') && cls.includes('py-0')) || style.includes('background-color:transparent') || style.includes('border-radius:0');
     }
     function decorateThemeBubbles() {
-        const groups = Array.from(document.querySelectorAll('main [data-message-group-id]'));
-        groups.forEach(group => {
-            if (!(group instanceof HTMLElement))
-                return;
-            setAttrIfMissing(group, 'data-cmu-theme-message-group');
-            setAttrIfMissing(group, 'data-sgb-message-group');
-        });
-        const markdownSelector = [
-            'main [data-message-group-id] .wrtn-markdown',
-            'main [data-message-group-id] [class*="wrtn-markdown"]',
-            'main [data-message-group-id] .markdown-body',
-            'main [data-message-group-id] .prose',
-            'main [data-message-group-id] [class*="prose"]'
-        ].join(',');
-        document.querySelectorAll(markdownSelector).forEach(markdown => {
-            if (!(markdown instanceof HTMLElement))
-                return;
-            if (markdown.closest('.not-wrtn-markdown, #chud-sidebar, #chud-infobar, #igx-live-popup'))
-                return;
-            const group = markdown.closest('[data-message-group-id]');
-            if (!(group instanceof HTMLElement))
-                return;
-            const bubble = markdown.closest('div[class*="break-all"]')
-                || markdown.closest('div[class*="rounded"][class*="px"]')
-                || markdown.closest('div[class*="rounded"]')
-                || markdown.closest('div[class*="bg-surface_chat"]')
-                || markdown.closest('div[class*="bg-card"]');
-            const target = bubble instanceof HTMLElement && bubble.closest('[data-message-group-id]') ? bubble : markdown;
-            const type = isProbablyThemeNovelBubble(target) ? 'novel' : 'chat';
-            target.setAttribute('data-cmu-theme-bubble', type);
-            target.setAttribute('data-sgb-bubble', type);
-            if (target === markdown) {
-                setAttrIfMissing(target, 'data-cmu-theme-bubble-fallback', 'markdown');
-                setAttrIfMissing(target, 'data-sgb-bubble-fallback', 'markdown');
-            }
-            const parent = target.parentElement;
-            if (parent instanceof HTMLElement)
-                setAttrIfMissing(parent, 'data-sgb-bubble-parent');
-        });
-        groups.forEach(group => {
-            if (group.querySelector('[data-cmu-theme-bubble], [data-sgb-bubble]'))
-                return;
-            const candidates = Array.from(group.querySelectorAll('div')).filter(el => {
-                if (!(el instanceof HTMLElement))
-                    return false;
-                if (el.closest('#chud-sidebar, #chud-infobar, #igx-live-popup'))
-                    return false;
-                const txt = (el.textContent || '').trim();
-                const r = el.getBoundingClientRect();
-                return txt.length >= 2 && r.width > 80 && r.height > 20 && r.height < 1200;
-            });
-            const target = candidates.find(el => String(el.className || '').includes('break-all')) || candidates[candidates.length - 1];
-            if (target instanceof HTMLElement) {
-                target.setAttribute('data-cmu-theme-bubble', 'chat');
-                target.setAttribute('data-sgb-bubble', 'chat');
-                if (target.parentElement instanceof HTMLElement)
-                    setAttrIfMissing(target.parentElement, 'data-sgb-bubble-parent');
-            }
-        });
-        groups.forEach(group => {
-            if (!(group instanceof HTMLElement))
-                return;
-            const hasNovel = !!group.querySelector('[data-cmu-theme-bubble="novel"], [data-sgb-bubble="novel"]');
-            if (hasNovel) {
-                setAttrIfMissing(group, 'data-cmu-theme-novel-group', '1');
-                setAttrIfMissing(group, 'data-sgb-novel-group', '1');
-            }
-            else {
-                group.removeAttribute('data-cmu-theme-novel-group');
-                group.removeAttribute('data-sgb-novel-group');
-            }
-        });
+        decorateThemeSubset(document.querySelectorAll('main [data-message-group-id]'));
     }
     function decorateThemeInputAndRadiosondeBorderless() {
         document.querySelectorAll('main .__chat_input_textarea, main .tiptap.ProseMirror[contenteditable="true"], main .ProseMirror[contenteditable="true"], main [contenteditable="true"][translate="no"], main textarea').forEach(input => {
@@ -17391,47 +18447,9 @@
         }, Math.max(0, Number(delay) || 0));
     }
     function decorateThemeQuotes() {
-        if (!themeSkinEnabled())
-            return;
-        if (Date.now() < Number(CMU_THEME_STATE.quoteHealUntil || 0))
-            return;
-        cmuPruneStaleQuoteWraps();
+        if (!themeSkinEnabled() || Date.now() < Number(CMU_THEME_STATE.quoteHealUntil || 0)) return;
         unwrapThemeQuotesInsideCodeblocks();
-        document.querySelectorAll('main [data-message-group-id] .wrtn-markdown, main [data-message-group-id] [class*="wrtn-markdown"], main [data-message-group-id] .markdown-body, main [data-message-group-id] .prose').forEach(md => {
-            if (!(md instanceof HTMLElement))
-                return;
-            if (md.closest('.not-wrtn-markdown, #igx-live-popup, #chud-sidebar, #chud-infobar'))
-                return;
-            const len = md.textContent?.length || 0;
-            const prevLen = Number(md.dataset.cmuThemeLen || -1);
-            const quotedLen = Number(md.dataset.cmuThemeQuotedLen || -2);
-            const now = Date.now();
-            if (len !== prevLen) {
-                md.dataset.cmuThemeLen = String(len);
-                md.dataset.cmuThemeLenAt = String(now);
-                return;
-            }
-            if (quotedLen === len)
-                return;
-            if (now - Number(md.dataset.cmuThemeLenAt || now) < 450)
-                return;
-            const walker = document.createTreeWalker(md, NodeFilter.SHOW_TEXT, {
-                acceptNode(node) {
-                    if (!node.nodeValue || !CMU_QUOTE_CHAR_RE.test(node.nodeValue))
-                        return NodeFilter.FILTER_REJECT;
-                    const parent = node.parentElement;
-                    if (!parent || parent.closest('[data-cmu-theme-quote], [data-sgb-quote], [data-cmu-theme-codeblock], [data-sgb-codeblock], [data-cmu-theme-codeblock-body], [data-sgb-codeblock-body], .wrtn-codeblock, [class*="codeblock"], code, pre, .not-wrtn-markdown'))
-                        return NodeFilter.FILTER_REJECT;
-                    return NodeFilter.FILTER_ACCEPT;
-                }
-            });
-            const targets = [];
-            let node;
-            while ((node = walker.nextNode()))
-                targets.push(node);
-            targets.forEach(wrapCmuQuoteTextNode);
-            md.dataset.cmuThemeQuotedLen = String(len);
-        });
+        decorateThemeQuotesSubset(document.querySelectorAll('main [data-message-group-id] .wrtn-markdown, main [data-message-group-id] .markdown-body, main [data-message-group-id] .prose'));
     }
     function decorateThemeCodeblock(cb) {
         if (!(cb instanceof HTMLElement))
@@ -17474,7 +18492,6 @@
         }
         decorateThemeBubbles();
         decorateThemeInputAndRadiosondeBorderless();
-        decorateThemeCodeblocks();
         decorateThemeQuotes();
     }
     function decorateThemeSubset(groups) {
@@ -17565,20 +18582,11 @@
         themeDecorateTimer = setTimeout(decorateThemeSkin, force ? 0 : 160);
     }
     function scheduleThemeDecorateBurst(reason = 'theme-burst') {
-        if (scheduleThemeDecorateBurst._busy)
-            return;
-        scheduleThemeDecorateBurst._busy = true;
-        const steps = [0, 450];
-        steps.forEach((ms, index) => setTimeout(() => {
-            try {
-                decorateThemeSkin();
-            }
-            catch (err) {
-                console.warn(`${LOG} theme decorate failed`, reason, err);
-            }
-            if (index === steps.length - 1)
-                scheduleThemeDecorateBurst._busy = false;
-        }, ms));
+        clearTimeout(scheduleThemeDecorateBurst._timer);
+        scheduleThemeDecorateBurst._timer = setTimeout(() => {
+            if (!shouldRun() || document.hidden) return;
+            try { decorateThemeQuotes(); } catch (error) { console.debug(LOG, reason, error); }
+        }, 560);
     }
     function rsIsVisibleEnough(el) {
         if (!(el instanceof HTMLElement))
@@ -17660,6 +18668,18 @@
         const isDark = bodyTheme === 'dark' || htmlTheme === 'dark' || document.documentElement.classList.contains('dark');
         popup.classList.toggle('igx-light', !isDark);
     }
+    function bindRadiosondeRefreshButton(popup = document.getElementById('igx-live-popup')) {
+        const button = popup?.querySelector?.('.btn-refresh');
+        if (!(button instanceof HTMLButtonElement))
+            return;
+        // popup이 기존 DOM을 재사용하더라도 현재 런타임의 핸들러를 항상 다시 연결한다.
+        button.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            requestRadiosondeManualRefresh();
+        };
+        button.dataset.cmuRsRefreshRuntime = VERSION;
+    }
     function ensureRadiosonde() {
         if (!shouldRun() || !settings.radiosonde || !isChatRoomPath()) {
             document.getElementById('igx-live-popup')?.remove();
@@ -17690,13 +18710,9 @@
             <button class="igx-btn btn-refresh" type="button" title="갱신" aria-label="라디오존데 갱신">↻</button>
           </div>
         </div>`;
-            popup.querySelector('.btn-refresh')?.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                scheduleRadiosondeRefresh(true);
-            });
         }
         popup.classList.add('inline');
+        bindRadiosondeRefreshButton(popup);
         applyRadiosondeTheme();
         if (popup.parentNode !== host) {
             host.appendChild(popup);
@@ -17708,7 +18724,7 @@
         }
         restartRsAutoTimer();
     }
-    function renderRsLine(text = '') {
+    function renderRsLine(text = '', forceText = false) {
         if (!shouldRun() || !settings.radiosonde)
             return;
         const line = document.getElementById('igx-live-barline');
@@ -17716,10 +18732,12 @@
             return;
         const refresh = document.querySelector('#igx-live-popup .btn-refresh');
         if (refresh) {
-            refresh.disabled = text === '갱신중…';
+            // 자동 갱신이 길어져도 수동 ↻ 클릭은 계속 받을 수 있어야 한다.
+            refresh.disabled = false;
+            refresh.toggleAttribute('data-cmu-rs-busy', text === '갱신중…');
             refresh.setAttribute('aria-label', text || '라디오존데 갱신');
         }
-        if (text && !RS.last.size) {
+        if (text && (forceText || !RS.last.size)) {
             line.textContent = text;
             return;
         }
@@ -17781,7 +18799,7 @@
         const currentId = getChatId();
         const sameId = clickedId && currentId && clickedId === currentId;
         const samePath = url.pathname.replace(/\/+$/, '') === location.pathname.replace(/\/+$/, '');
-        if (!sameId && !samePath)
+        if (!sameId || !samePath || url.search !== location.search || url.hash !== location.hash || target.closest('[data-message-group-id]'))
             return false;
         event.preventDefault();
         event.stopPropagation();
@@ -17826,6 +18844,7 @@
         if (routeKey === location.href)
             return;
         routeKey = location.href;
+        cmuAbortOtherRooms();
         CMU_DOM_WATCH.roomPanelMissUntil = 0;
         CMU_DOM_WATCH.roomPanelSearchRoot = null;
         CMU_DOM_WATCH.textObserver?.disconnect();
@@ -17863,7 +18882,11 @@
         }
         scheduleRadiosondeRefresh(true);
     }
+    let cmuViewportFrame = 0;
     cmuListen(window, 'resize', () => {
+        if (cmuViewportFrame) return;
+        cmuViewportFrame = requestAnimationFrame(() => {
+        cmuViewportFrame = 0;
         applyState();
         if (cmuUserNoteGuardActive())
             return;
@@ -17877,6 +18900,7 @@
         const input = findChatInput();
         if (input)
             ensureInlineBlocks(input);
+        });
     }, { passive: true });
     try {
         cmuListen(window.visualViewport, 'resize', scheduleCmuMenuSwipeZonePosition, { passive: true });
