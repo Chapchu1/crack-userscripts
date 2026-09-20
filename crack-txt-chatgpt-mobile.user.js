@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Crack TXT → ChatGPT 전송기 (모바일)
 // @namespace    crack-txt-chatgpt-mobile
-// @version      1.3.7
+// @version      1.3.8
 // @description  Crack 채팅 전체/이어서 TXT 저장, 작품×프리셋별 ChatGPT 대화 연결, 다중 TXT 첨부, ChatGPT 앱 열기를 지원합니다.
 // @author       chu
 // @license      MIT
@@ -1891,7 +1891,7 @@
           background:#242730;color:#fff;font-size:18px;touch-action:manipulation
         }
         #openApp{
-          pointer-events:auto;position:fixed;left:12px;bottom:calc(126px + env(safe-area-inset-bottom,0px));
+          pointer-events:auto;position:fixed;left:12px;bottom:calc(160px + env(safe-area-inset-bottom,0px));
           display:none;min-height:38px;border:1px solid #ffffff24;border-radius:12px;padding:8px 11px;
           background:#17191ff2;color:#fff;font:800 11px/1.2 inherit;box-shadow:0 8px 25px #0007;
           backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);touch-action:manipulation
@@ -1930,10 +1930,10 @@
       toastTimer = setTimeout(() => toast.classList.remove('on'), ms);
     }
 
-    function refreshAppButton(visible = true) {
+    function refreshAppButton() {
       const conversationUrl = currentChatGPTConversationUrl();
       const canOpenApp = /Android/i.test(navigator.userAgent) && !!conversationUrl;
-      openApp.classList.toggle('on', visible && canOpenApp);
+      openApp.classList.toggle('on', canOpenApp);
       openApp.dataset.url = conversationUrl || '';
     }
 
@@ -1973,15 +1973,14 @@
       // 첫 전송 직후 URL 생성이 늦어져도 이 탭에서 작품×프리셋 링크를 확정합니다.
       tryCommitTabLinkCapture();
       const p = pendingMeta();
+      refreshAppButton();
       if (!p) {
         box.classList.remove('on');
-        refreshAppButton(false);
         clearOverlaySuppression();
         return;
       }
       const showMainBox = !overlaySuppressed();
       box.classList.toggle('on', showMainBox);
-      refreshAppButton(showMainBox);
       const pendingFiles = Array.isArray(p.meta.files) ? p.meta.files : [{ fileName: p.meta.fileName || 'Crack-RP-Log.txt' }];
       title.textContent = pendingFiles.length === 1
         ? `📎 ${pendingFiles[0].fileName}`
