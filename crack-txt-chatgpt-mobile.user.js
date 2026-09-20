@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Crack TXT → ChatGPT 전송기 (모바일)
 // @namespace    crack-txt-chatgpt-mobile
-// @version      1.3.3
+// @version      1.3.7
 // @description  Crack 채팅 전체/이어서 TXT 저장, 작품×프리셋별 ChatGPT 대화 연결, 다중 TXT 첨부, ChatGPT 앱 열기를 지원합니다.
 // @author       chu
 // @license      MIT
@@ -1872,8 +1872,8 @@
         *{box-sizing:border-box}
         #box{
           pointer-events:auto;position:fixed;left:10px;right:10px;
-          bottom:calc(12px + env(safe-area-inset-bottom,0px));margin:auto;max-width:430px;
-          display:none;gap:8px;align-items:center;padding:10px;border-radius:17px;
+          bottom:calc(68px + env(safe-area-inset-bottom,0px));margin:auto;max-width:430px;
+          display:none;gap:8px;align-items:center;padding:9px 10px;border-radius:17px;
           border:1px solid #ffffff24;background:#17191ff2;box-shadow:0 10px 35px #0008;
           backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)
         }
@@ -1882,7 +1882,7 @@
         #title{font-size:12px;font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         #sub{font-size:10px;color:#aeb6c6;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         #sendHere{
-          flex:0 0 auto;min-height:44px;border:0;border-radius:12px;padding:8px 12px;
+          flex:0 0 auto;min-height:42px;border:0;border-radius:12px;padding:8px 12px;
           background:#f3f4f6;color:#121318;font:800 12px/1.2 inherit;touch-action:manipulation
         }
         #sendHere:disabled{opacity:.55}
@@ -1891,15 +1891,15 @@
           background:#242730;color:#fff;font-size:18px;touch-action:manipulation
         }
         #openApp{
-          pointer-events:auto;position:fixed;left:12px;bottom:calc(160px + env(safe-area-inset-bottom,0px));
-          display:none;min-height:40px;border:1px solid #ffffff24;border-radius:12px;padding:8px 11px;
+          pointer-events:auto;position:fixed;left:12px;bottom:calc(126px + env(safe-area-inset-bottom,0px));
+          display:none;min-height:38px;border:1px solid #ffffff24;border-radius:12px;padding:8px 11px;
           background:#17191ff2;color:#fff;font:800 11px/1.2 inherit;box-shadow:0 8px 25px #0007;
           backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);touch-action:manipulation
         }
         #openApp.on{display:block}
         #toast{
           pointer-events:none;position:fixed;left:16px;right:16px;
-          bottom:calc(82px + env(safe-area-inset-bottom,0px));margin:auto;max-width:400px;
+          bottom:calc(148px + env(safe-area-inset-bottom,0px));margin:auto;max-width:400px;
           display:none;padding:10px 12px;border-radius:12px;background:#101218ee;color:#fff;
           font:700 12px/1.45 inherit;text-align:center;box-shadow:0 8px 25px #0007
         }
@@ -1921,7 +1921,7 @@
     const $ = q => root.querySelector(q);
     const box = $('#box'), title = $('#title'), sub = $('#sub');
     const sendHere = $('#sendHere'), cancel = $('#cancel'), openApp = $('#openApp'), toast = $('#toast');
-    let busy = false, toastTimer = null;
+    let busy = false, toastTimer = null, suppressOverlayUntil = 0;
 
     function showToast(message, ms = 3200) {
       toast.textContent = message;
@@ -1930,11 +1930,23 @@
       toastTimer = setTimeout(() => toast.classList.remove('on'), ms);
     }
 
-    function refreshAppButton() {
+    function refreshAppButton(visible = true) {
       const conversationUrl = currentChatGPTConversationUrl();
       const canOpenApp = /Android/i.test(navigator.userAgent) && !!conversationUrl;
-      openApp.classList.toggle('on', canOpenApp);
+      openApp.classList.toggle('on', visible && canOpenApp);
       openApp.dataset.url = conversationUrl || '';
+    }
+
+    function suppressOverlay(ms = 90000) {
+      suppressOverlayUntil = Date.now() + Math.max(1000, ms);
+    }
+
+    function clearOverlaySuppression() {
+      suppressOverlayUntil = 0;
+    }
+
+    function overlaySuppressed() {
+      return Date.now() < suppressOverlayUntil;
     }
 
     openApp.addEventListener('click', () => {
@@ -1958,15 +1970,18 @@
     }
 
     function refresh() {
-      refreshAppButton();
       // 첫 전송 직후 URL 생성이 늦어져도 이 탭에서 작품×프리셋 링크를 확정합니다.
       tryCommitTabLinkCapture();
       const p = pendingMeta();
       if (!p) {
         box.classList.remove('on');
+        refreshAppButton(false);
+        clearOverlaySuppression();
         return;
       }
-      box.classList.add('on');
+      const showMainBox = !overlaySuppressed();
+      box.classList.toggle('on', showMainBox);
+      refreshAppButton(showMainBox);
       const pendingFiles = Array.isArray(p.meta.files) ? p.meta.files : [{ fileName: p.meta.fileName || 'Crack-RP-Log.txt' }];
       title.textContent = pendingFiles.length === 1
         ? `📎 ${pendingFiles[0].fileName}`
@@ -2001,6 +2016,7 @@
       }
 
       busy = true;
+      suppressOverlay(90000);
       sendHere.disabled = true;
       sendHere.textContent = '전송 중…';
       GM_setValue(key('claim', jobId), { at: Date.now(), clicked: false });
@@ -2128,6 +2144,7 @@
 
         // 전송 성공이 확인되면 TXT 조각, 일회성 지침/파일 메타데이터, 상태/claim/current를 즉시 모두 삭제.
         cleanupJob(jobId);
+        clearOverlaySuppression();
         showToast(meta.sourceChatroomId
           ? linkedConversation
             ? '✅ 전송 완료 · 다음부터 이 Crack 채팅 + 같은 프리셋은 현재 ChatGPT 대화방으로 연결됩니다.'
@@ -2145,6 +2162,7 @@
           GM_deleteValue(key('claim', jobId));
           clearTabLinkCapture(jobId);
         }
+        clearOverlaySuppression();
         showToast('⚠️ ' + message, 5200);
       } finally {
         busy = false;
