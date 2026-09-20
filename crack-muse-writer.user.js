@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ✨ Crack Muse Writer (AI 답변 커스텀)
 // @namespace    muse writer
-// @version      5.2.18
+// @version      5.2.19
 // @description  Crack 캐릭터챗 입력을 맥락·프로필·유저 노트·참고자료·서사 나침반에 맞춰 다듬고, 단기·장기 기억과 최신 에리 로어를 읽기 전용으로 참고하며 유저 입력 번역까지 처리하는 AI 집필 보조 도구
 // @author       chu
 // @updateURL   https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-muse-writer.user.js
@@ -483,6 +483,11 @@
     return `cmwReference_${kind}_${room}`;
   }
 
+  // 새 채팅방의 참고자료 빠른 반영 기본값.
+  // 방별 저장값이 아직 없는 새 방에서는 유저 노트·단기 기억·장기 기억·에리 로어를 모두 켠다.
+  // 사용자가 특정 방에서 직접 끄면 그 방의 명시적 OFF 값은 그대로 존중한다.
+  const REFERENCE_ENABLED_DEFAULT = true;
+
   function getCompassKey(kind, room = getChatRoomId()) {
     return `cmwCompass_${kind}_${room}`;
   }
@@ -549,20 +554,20 @@
   }
 
   function isLongMemoryReferenceEnabled(room = getChatRoomId()) {
-    return GM_getValue(getReferenceKey("longMemoryEnabled", room), false) === true;
+    return GM_getValue(getReferenceKey("longMemoryEnabled", room), REFERENCE_ENABLED_DEFAULT) === true;
   }
 
   function isShortMemoryReferenceEnabled(room = getChatRoomId()) {
-    return GM_getValue(getReferenceKey("shortMemoryEnabled", room), false) === true;
+    return GM_getValue(getReferenceKey("shortMemoryEnabled", room), REFERENCE_ENABLED_DEFAULT) === true;
   }
 
   function isEriLoreReferenceEnabled(room = getChatRoomId()) {
-    return GM_getValue(getReferenceKey("eriLoreEnabled", room), false) === true;
+    return GM_getValue(getReferenceKey("eriLoreEnabled", room), REFERENCE_ENABLED_DEFAULT) === true;
   }
 
   function isUserNoteReferenceEnabled(room = getChatRoomId()) {
-    // V2 opt-in 키는 과거 버전의 암묵적 ON 값을 승계하지 않는다.
-    return GM_getValue(getReferenceKey("userNoteEnabledOptInV2", room), false) === true;
+    // 새 방은 기본 ON. 특정 방에서 사용자가 직접 OFF로 저장한 경우에만 비활성화한다.
+    return GM_getValue(getReferenceKey("userNoteEnabledOptInV2", room), REFERENCE_ENABLED_DEFAULT) === true;
   }
 
   function isLongMemoryHookEnabled(room = getChatRoomId()) {
@@ -570,7 +575,7 @@
   }
 
   function getLongMemoryMode(room = getChatRoomId()) {
-    return GM_getValue(getReferenceKey("longMemoryMode", room), "selected") === "all" ? "all" : "selected";
+    return GM_getValue(getReferenceKey("longMemoryMode", room), "all") === "all" ? "all" : "selected";
   }
 
   function setLongMemoryMode(mode, room = getChatRoomId()) {
@@ -2577,7 +2582,7 @@
       const chatJson = await fetchCrackJson(`${API_BASE}/v3/chats/${room}`);
       const roomData = chatJson?.data ?? chatJson;
       // Crack의 유저 노트는 PC 추가 설정과 별개의 방 데이터다.
-      // 사용자가 현재 방에서 명시적으로 켠 경우에만 노트 필드를 읽는다.
+      // 새 방은 기본 ON이며, 현재 방에서 OFF로 저장한 경우에만 노트 필드를 읽지 않는다.
       // API 조회가 성공한 경우 빈 값도 저장하여 사이트에서 삭제된 노트의 낡은 캐시를 지운다.
       if (isUserNoteReferenceEnabled(room)) {
         GM_setValue("scannedUserNote_" + room, extractChatUserNote(roomData));
