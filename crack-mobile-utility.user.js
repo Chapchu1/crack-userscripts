@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.0.4.1
+// @version      4.5.0.4.4
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -12,6 +12,7 @@
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
+// @connect      old.rs.igx.kr
 // @connect      rs.igx.kr
 // @connect      claude-radiosonde.chyoyam.chatgpt.site
 // @connect      crack-api.wrtn.ai
@@ -31,7 +32,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.0.4.1';
+    const VERSION = '4.5.0.4.4';
     // Merge base: upstream 4.5.0.4 + retained custom compact model picker / integrations / mobile fixes.
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
@@ -3280,6 +3281,8 @@
       overflow-x: auto;
       scrollbar-width: none;
       -ms-overflow-style: none;
+      touch-action: pan-x !important;
+      overscroll-behavior-x: contain;
     }
     #igx-live-barline::-webkit-scrollbar { display: none; }
     #igx-live-popup.inline .bitem { flex: 0 0 auto; }
@@ -8199,7 +8202,7 @@
             return false;
         if (isCmuProtectedEditorTarget(target))
             return true;
-        return !!target.closest?.(`#${ID.panel}, #${ID.toolbarWrapper}, #${ID.leftMenuZone}, #${ID.rightMenuZone}, #${ID.toast}, #${ID.logCaptureBar}, #${ID.logCapturePreview}, input, textarea, select, [contenteditable="true"]`);
+        return !!target.closest?.(`#${ID.panel}, #${ID.toolbarWrapper}, #${ID.leftMenuZone}, #${ID.rightMenuZone}, #${ID.toast}, #${ID.logCaptureBar}, #${ID.logCapturePreview}, #igx-live-popup, #igx-live-barline, input, textarea, select, [contenteditable="true"]`);
     }
     function bindCmuMenuSwipeZone(zone) {
         if (!(zone instanceof HTMLElement))
@@ -14048,9 +14051,27 @@
         }
     }
     const RS = {
-        apiBase: 'https://rs.igx.kr/api/v2/simple/',
-        modelsUrl: 'https://rs.igx.kr/api/v2/models',
-        statistics: 'https://rs.igx.kr/api/v2/statistics',
+        // 4.5.0.4.3: IGX 이전/레거시 배포가 섞여 있어 한 주소만 고정하지 않는다.
+        // old.rs.igx.kr를 우선 사용하고, v2/legacy 경로 및 기존 rs.igx.kr를 순차 폴백한다.
+        apiBases: [
+            'https://old.rs.igx.kr/api/simple/',
+            'https://old.rs.igx.kr/api/v2/simple/',
+            'https://rs.igx.kr/api/simple/',
+            'https://rs.igx.kr/api/v2/simple/',
+        ],
+        modelsUrls: [
+            'https://old.rs.igx.kr/api/models',
+            'https://old.rs.igx.kr/api/v2/models',
+            'https://rs.igx.kr/api/models',
+            'https://rs.igx.kr/api/v2/models',
+        ],
+        statisticsUrls: [
+            'https://old.rs.igx.kr/api/statistics',
+            'https://old.rs.igx.kr/api/v2/statistics',
+            'https://rs.igx.kr/api/statistics',
+            'https://rs.igx.kr/api/v2/statistics',
+        ],
+        preferredApiBase: '',
         yameStatus: 'https://claude-radiosonde.chyoyam.chatgpt.site/api/v1/status',
         activeWindowMs: 72 * 60 * 60 * 1000,
         validStatuses: new Set(['active', 'degraded', 'impacted']),
@@ -14285,15 +14306,39 @@
             const cache = loadRsModelCache();
             const previous = JSON.stringify(RS.models);
             try {
-                let models;
-                try {
-                    models = modelsFromList(await gmGetJson(RS.modelsUrl, 15000));
-                    if (!models.length) throw new Error('empty v2 model list');
-                } catch (_) {
-                    models = modelsFromStatistics(await gmGetJson(RS.statistics, 30000));
+                let models = [];
+                let lastDiscoveryError = null;
+
+                // 모델 목록 API도 old/legacy/v2/current 순서로 자동 탐색한다.
+                for (const url of RS.modelsUrls) {
+                    try {
+                        const sep = url.includes('?') ? '&' : '?';
+                        models = modelsFromList(await gmGetJson(`${url}${sep}_cmu=${Date.now()}`, 7000));
+                        if (models.length)
+                            break;
+                    }
+                    catch (error) {
+                        lastDiscoveryError = error;
+                    }
                 }
+
+                // 목록 API가 없는 배포라면 통계 API에서 모델을 추출한다.
+                if (!models.length) {
+                    for (const url of RS.statisticsUrls) {
+                        try {
+                            const sep = url.includes('?') ? '&' : '?';
+                            models = modelsFromStatistics(await gmGetJson(`${url}${sep}_cmu=${Date.now()}`, 9000));
+                            if (models.length)
+                                break;
+                        }
+                        catch (error) {
+                            lastDiscoveryError = error;
+                        }
+                    }
+                }
+
                 if (!models.length)
-                    throw new Error('empty model list');
+                    throw lastDiscoveryError || new Error('empty model list');
                 RS.models = [...YAME_MODELS, ...models];
                 saveRsModelCache(models);
             }
@@ -14345,14 +14390,39 @@
         return n >= 0 ? (n / 1000).toFixed(2) : null;
     }
     async function fetchRsModel(slug) {
-        const makeUrl = () => `${RS.apiBase}${encodeURIComponent(slug)}`;
-        try {
-            return await gmGetJson(makeUrl(), 15000);
+        const encoded = encodeURIComponent(slug);
+        const bases = [...new Set([
+            RS.preferredApiBase,
+            ...RS.apiBases,
+        ].filter(Boolean))];
+
+        let lastError = null;
+        for (const base of bases) {
+            const url = `${base}${encoded}?_cmu=${Date.now()}`;
+            try {
+                // 실패한 호스트 하나 때문에 모든 모델이 '(이전)'으로 굳지 않도록
+                // 각 후보를 짧게 시도하고 성공한 API 경로를 다음 요청의 1순위로 기억한다.
+                const payload = await gmGetJson(url, 6500);
+                RS.preferredApiBase = base;
+                return payload;
+            }
+            catch (error) {
+                lastError = error;
+            }
         }
-        catch (_) {
-            await sleep(1200);
-            return await gmGetJson(makeUrl(), 15000);
+
+        // 순간적인 네트워크 실패는 현재 우선 경로만 한 번 짧게 재시도한다.
+        const retryBase = RS.preferredApiBase || bases[0];
+        if (retryBase) {
+            await sleep(700);
+            try {
+                return await gmGetJson(`${retryBase}${encoded}?_cmu=${Date.now()}`, 6500);
+            }
+            catch (error) {
+                lastError = error;
+            }
         }
+        throw lastError || new Error('radiosonde endpoint unavailable');
     }
     async function fetchYameStatus() {
         const url = `${RS.yameStatus}?t=${Date.now()}`;
