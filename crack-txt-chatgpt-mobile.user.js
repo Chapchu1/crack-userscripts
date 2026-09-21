@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Crack TXT → ChatGPT 전송기 (모바일)
 // @namespace    crack-txt-chatgpt-mobile
-// @version      1.3.8
+// @version      1.3.9
 // @description  Crack 채팅 전체/이어서 TXT 저장, 작품×프리셋별 ChatGPT 대화 연결, 다중 TXT 첨부, ChatGPT 앱 열기를 지원합니다.
 // @author       chu
 // @license      MIT
@@ -1891,15 +1891,17 @@
           background:#242730;color:#fff;font-size:18px;touch-action:manipulation
         }
         #openApp{
-          pointer-events:auto;position:fixed;left:12px;bottom:calc(160px + env(safe-area-inset-bottom,0px));
-          display:none;min-height:38px;border:1px solid #ffffff24;border-radius:12px;padding:8px 11px;
+          pointer-events:auto;position:fixed;left:12px;
+          bottom:var(--bridge-composer-clearance,calc(160px + env(safe-area-inset-bottom,0px)));
+          display:none;max-width:calc(100vw - 24px);min-height:38px;border:1px solid #ffffff24;border-radius:12px;padding:8px 11px;
           background:#17191ff2;color:#fff;font:800 11px/1.2 inherit;box-shadow:0 8px 25px #0007;
           backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);touch-action:manipulation
         }
         #openApp.on{display:block}
         #toast{
           pointer-events:none;position:fixed;left:16px;right:16px;
-          bottom:calc(148px + env(safe-area-inset-bottom,0px));margin:auto;max-width:400px;
+          bottom:calc(var(--bridge-composer-clearance,calc(148px + env(safe-area-inset-bottom,0px))) + var(--bridge-openapp-height,0px) + 10px);
+          margin:auto;max-width:400px;
           display:none;padding:10px 12px;border-radius:12px;background:#101218ee;color:#fff;
           font:700 12px/1.45 inherit;text-align:center;box-shadow:0 8px 25px #0007
         }
@@ -1923,9 +1925,43 @@
     const sendHere = $('#sendHere'), cancel = $('#cancel'), openApp = $('#openApp'), toast = $('#toast');
     let busy = false, toastTimer = null, suppressOverlayUntil = 0;
 
+    function updateFloatingLayout() {
+      // ChatGPT 모바일 입력창은 파일 첨부 시 위로 크게 확장될 수 있다.
+      // 고정 bottom 값 대신 현재 composer/form의 실제 상단 위치를 읽어서
+      // "앱에서 열기" 버튼을 첨부 영역 전체보다 위에 배치한다.
+      let clearance = 160;
+      try {
+        const editor = document.querySelector('#prompt-textarea');
+        const form = editor?.closest?.('form');
+        if (visible(form)) {
+          const rect = form.getBoundingClientRect();
+          const viewportH = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
+          const viewportTop = window.visualViewport?.offsetTop || 0;
+          if (viewportH > 0 && Number.isFinite(rect.top)) {
+            const relativeTop = rect.top - viewportTop;
+            const measured = viewportH - relativeTop + 12;
+            // 입력창/첨부영역 높이에 맞춰 충분히 올리되 화면 바깥으로 밀려나지는 않게 제한.
+            clearance = Math.max(96, Math.min(measured, viewportH * 0.72));
+          }
+        }
+      } catch {}
+
+      host.style.setProperty('--bridge-composer-clearance', `${Math.round(clearance)}px`);
+
+      // 전송 완료 토스트는 "앱에서 열기" 버튼보다 한 줄 더 위에 놓아 서로 겹치지 않게 한다.
+      let appHeight = 0;
+      try {
+        if (openApp.classList.contains('on')) {
+          appHeight = Math.ceil(openApp.getBoundingClientRect().height || openApp.offsetHeight || 0) + 8;
+        }
+      } catch {}
+      host.style.setProperty('--bridge-openapp-height', `${appHeight}px`);
+    }
+
     function showToast(message, ms = 3200) {
       toast.textContent = message;
       toast.classList.add('on');
+      updateFloatingLayout();
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => toast.classList.remove('on'), ms);
     }
@@ -1935,6 +1971,7 @@
       const canOpenApp = /Android/i.test(navigator.userAgent) && !!conversationUrl;
       openApp.classList.toggle('on', canOpenApp);
       openApp.dataset.url = conversationUrl || '';
+      requestAnimationFrame(updateFloatingLayout);
     }
 
     function suppressOverlay(ms = 90000) {
@@ -1974,6 +2011,7 @@
       tryCommitTabLinkCapture();
       const p = pendingMeta();
       refreshAppButton();
+      updateFloatingLayout();
       if (!p) {
         box.classList.remove('on');
         clearOverlaySuppression();
@@ -2176,6 +2214,11 @@
     mo.observe(document.documentElement, { childList: true, subtree: true });
     window.addEventListener('pageshow', refresh);
     window.addEventListener('popstate', () => setTimeout(refresh, 0));
+    window.addEventListener('resize', updateFloatingLayout, { passive: true });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateFloatingLayout, { passive: true });
+      window.visualViewport.addEventListener('scroll', updateFloatingLayout, { passive: true });
+    }
     setInterval(refresh, 1200);
     refresh();
   }
