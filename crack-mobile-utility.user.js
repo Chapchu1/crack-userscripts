@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.0.4.7
+// @version      4.5.0.4.8
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -35,7 +35,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.0.4.7';
+    const VERSION = '4.5.0.4.8';
     // Merge base: upstream 4.5.0.4 + retained custom compact model picker / integrations / mobile fixes.
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
@@ -2931,9 +2931,9 @@
       display: flex;
       flex-direction: column;
       gap: 2px;
-      width: min(176px, calc(100vw - 20px));
-      max-height: calc(100vh - 24px);
-      max-height: calc(100dvh - 24px);
+      width: min(170px, calc(100vw - 20px));
+      max-height: min(330px, calc(100vh - 24px));
+      max-height: min(330px, calc(100dvh - 24px));
       overflow-x: hidden;
       overflow-y: auto;
       box-sizing: border-box;
@@ -12063,7 +12063,7 @@
         const viewportWidth = Math.max(1, Number(vv?.width || window.innerWidth || 1));
         const viewportHeight = Math.max(1, Number(vv?.height || window.innerHeight || 1));
         const rect = anchor.getBoundingClientRect();
-        const width = Math.min(176, Math.max(132, viewportWidth - 20));
+        const width = Math.min(170, Math.max(132, viewportWidth - 20));
         const spaceAbove = Math.max(0, rect.top - viewportTop - 8);
         const spaceBelow = Math.max(0, viewportTop + viewportHeight - rect.bottom - 8);
         const placeAbove = spaceAbove >= 112 || spaceAbove >= spaceBelow;
@@ -12691,6 +12691,14 @@
         if (COMPACT_MODEL.opening || now < Number(COMPACT_MODEL.toggleLockUntil || 0))
             return true;
 
+        // 4.5.0.4.8: Crack 모델 메뉴 DOM/UI 변경 대응.
+        // 사이트 원본 팝업을 직접 축소해서 쓰면 원본 min-height/viewport 스타일이 섞여
+        // 긴 빈 박스가 생길 수 있으므로, 화면에는 독립 소형 선택기만 사용한다.
+        if (COMPACT_MODEL.menu?.isConnected) {
+            COMPACT_MODEL.toggleLockUntil = now + 220;
+            closeCompactModelPicker({ closeNative: true });
+            return true;
+        }
         const liveShell = COMPACT_MODEL.nativeShell;
         if (liveShell?.isConnected && liveShell.hasAttribute('data-cmu-compact-native-live') &&
             compactModelNativeIsOpen(nativeButton, liveShell)) {
@@ -12739,24 +12747,26 @@
                 return true;
             }
             nmfScanNativeModelMenu();
-            if (!compactModelUseNativeRows(snapshot, anchor, nativeButton)) {
-                // 원본 메뉴 노출 대신 기존 커스텀 소형 팝업을 안전 폴백으로 사용한다.
-                try {
-                    snapshot.shell?.setAttribute?.('data-cmu-compact-model-native', '1');
-                    renderCompactModelPicker(snapshot, anchor, nativeButton);
-                    COMPACT_MODEL.nativeShell = snapshot.shell;
-                    COMPACT_MODEL.nativeButton = nativeButton;
-                    COMPACT_MODEL.anchor = anchor;
-                    COMPACT_MODEL.toggleLockUntil = Date.now() + 160;
-                }
-                catch (_) {
-                    try { await compactModelDismissNativeMenu(nativeButton, snapshot.shell); } catch (_) { }
-                    COMPACT_MODEL.nativeShell = COMPACT_MODEL.nativeButton = COMPACT_MODEL.anchor = null;
-                    showToast('모델 목록을 불러오지 못함 · 다시 눌러 주세요');
-                }
-            }
-            else {
+
+            /* 4.5.0.4.8
+             * Crack 사이트의 원본 모델 메뉴 레이아웃이 바뀌면서 native shell/root에
+             * 큰 고정 높이·viewport 영역이 붙는 경우가 생겼다.
+             * 원본 행을 화면에 직접 재사용하지 않고, 원본 메뉴는 투명하게 숨긴 채
+             * 독립 소형 선택기(#cmu-compact-model-menu)만 표시한다.
+             * 실제 모델 변경은 기존처럼 snapshot의 원본 행을 클릭하므로 기능은 유지된다. */
+            try {
+                compactModelClearNativeLiveMarks(snapshot.shell);
+                snapshot.shell?.setAttribute?.('data-cmu-compact-model-native', '1');
+                renderCompactModelPicker(snapshot, anchor, nativeButton);
+                COMPACT_MODEL.nativeShell = snapshot.shell;
+                COMPACT_MODEL.nativeButton = nativeButton;
+                COMPACT_MODEL.anchor = anchor;
                 COMPACT_MODEL.toggleLockUntil = Date.now() + 160;
+            }
+            catch (_) {
+                try { await compactModelDismissNativeMenu(nativeButton, snapshot.shell); } catch (_) { }
+                COMPACT_MODEL.nativeShell = COMPACT_MODEL.nativeButton = COMPACT_MODEL.anchor = null;
+                showToast('모델 목록을 불러오지 못함 · 다시 눌러 주세요');
             }
             return true;
         }
