@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.0.4.8
+// @version      4.5.0.4.10
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -35,7 +35,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.0.4.8';
+    const VERSION = '4.5.0.4.10';
     // Merge base: upstream 4.5.0.4 + retained custom compact model picker / integrations / mobile fixes.
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
@@ -2928,6 +2928,8 @@
     #cmu-compact-model-menu {
       position: fixed !important;
       z-index: 2147483647 !important;
+      opacity: 1 !important;
+      pointer-events: auto !important;
       display: flex;
       flex-direction: column;
       gap: 2px;
@@ -2998,6 +3000,20 @@
       font-weight: 650;
       line-height: 1.15;
     }
+    #cmu-compact-model-menu .cmu-compact-model-recommend {
+      flex: 0 0 auto;
+      max-width: none;
+      white-space: nowrap;
+      margin-left: 3px;
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: rgba(77, 190, 107, .16);
+      color: #78d88d;
+      font-size: 9px;
+      font-weight: 850;
+      line-height: 1.1;
+      letter-spacing: -.1px;
+    }
     #cmu-compact-model-menu .cmu-compact-model-check {
       flex: 0 0 12px;
       width: 12px;
@@ -3017,6 +3033,11 @@
     html[data-theme="light"] #cmu-compact-model-menu button.is-selected {
       background: rgba(0,0,0,.09);
       color: rgba(0,0,0,.9);
+    }
+    body[data-theme="light"] #cmu-compact-model-menu .cmu-compact-model-recommend,
+    html[data-theme="light"] #cmu-compact-model-menu .cmu-compact-model-recommend {
+      background: rgba(26, 145, 63, .11);
+      color: #218a42;
     }
 
 
@@ -11769,6 +11790,30 @@
         };
         return candidates.sort((a, b) => score(b) - score(a))[0] || item;
     }
+    function compactModelRecommendedFromItem(item) {
+        if (!(item instanceof Element))
+            return false;
+        const parts = [
+            item.textContent,
+            item.getAttribute?.('aria-label'),
+            item.getAttribute?.('title'),
+            item.getAttribute?.('data-tooltip'),
+            item.getAttribute?.('data-label'),
+        ].filter(Boolean);
+        try {
+            item.querySelectorAll?.('[aria-label], [title], [data-tooltip], [data-label]').forEach(el => {
+                parts.push(
+                    el.getAttribute('aria-label'),
+                    el.getAttribute('title'),
+                    el.getAttribute('data-tooltip'),
+                    el.getAttribute('data-label')
+                );
+            });
+        }
+        catch (_) { }
+        const hay = parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+        return /제작자\s*(?:권장|추천)|(?:권장|추천)\s*(?:모델)?|\brecommended\b/i.test(hay);
+    }
     function compactModelSnapshot() {
         const roots = nmfNativeModelRoots().filter(root => {
             if (!root?.isConnected || root.getAttribute?.('data-state') === 'closed')
@@ -11822,6 +11867,7 @@
                 iconSrc: compactModelImageSource(item, flat),
                 selected,
                 disabled,
+                recommended: compactModelRecommendedFromItem(item),
             });
         }
         return entries.length ? { root, shell, entries } : null;
@@ -12225,6 +12271,44 @@
         COMPACT_MODEL.nativeButton = null;
         COMPACT_MODEL.anchor = null;
     }
+    async function compactModelHiddenSnapshotForSelection(nativeButton) {
+        if (!(nativeButton instanceof HTMLElement) || !nativeButton.isConnected)
+            return null;
+        document.documentElement.classList.add('cmu-compact-model-selecting');
+
+        let snapshot = compactModelSnapshot();
+        if (!snapshot?.entries?.length) {
+            if (nativeButton.getAttribute('aria-expanded') !== 'true')
+                compactModelClickOnce(nativeButton);
+            snapshot = await waitForCompactModelSnapshot(COMPACT_MODEL.seq, nativeButton);
+        }
+
+        if (snapshot?.shell instanceof HTMLElement)
+            snapshot.shell.setAttribute('data-cmu-compact-model-native', '1');
+        return snapshot;
+    }
+    function compactModelParkNativeMenu(nativeButton, shell) {
+        if (!(nativeButton instanceof HTMLElement))
+            return;
+        try { shell?.setAttribute?.('data-cmu-compact-model-native', '1'); } catch (_) { }
+        // Crack 상단 모델 버튼은 원본 메뉴 open 상태에서 위치/폭이 바뀔 수 있다.
+        // 스냅샷만 얻은 즉시 원본 메뉴를 닫아서 상단 배치를 원래대로 돌린다.
+        compactModelDispatchEscape(shell);
+        setTimeout(() => {
+            try {
+                if (nativeButton.getAttribute('aria-expanded') === 'true')
+                    compactModelClickOnce(nativeButton);
+            }
+            catch (_) { }
+        }, 70);
+        setTimeout(() => {
+            try {
+                if (nativeButton.getAttribute('aria-expanded') !== 'true')
+                    shell?.removeAttribute?.('data-cmu-compact-model-native');
+            }
+            catch (_) { }
+        }, 260);
+    }
     function bindCompactModelPickerEvents() {
         COMPACT_MODEL.outsideHandler = event => {
             if (!event.isTrusted)
@@ -12237,6 +12321,11 @@
         };
         COMPACT_MODEL.keyHandler = event => {
             if (event.key !== 'Escape')
+                return;
+            // 4.5.0.4.10:
+            // 원본 Crack 모델 메뉴를 뒤에서 닫기 위해 코드가 만든 synthetic Escape는
+            // 소형 모델 팝업을 닫으면 안 된다. 실제 사용자가 누른 Escape만 처리한다.
+            if (!event.isTrusted)
                 return;
             event.preventDefault();
             closeCompactModelPicker({ closeNative: true });
@@ -12277,10 +12366,16 @@
             const label = document.createElement('span');
             label.className = 'cmu-compact-model-label';
             label.textContent = entry.label;
+            const recommend = document.createElement('span');
+            recommend.className = 'cmu-compact-model-recommend';
+            recommend.textContent = '권장';
+            recommend.title = '제작자 권장 모델';
+            recommend.hidden = !entry.recommended;
+
             const check = document.createElement('span');
             check.className = 'cmu-compact-model-check';
             check.textContent = entry.token === currentToken ? '✓' : '';
-            option.append(icon, label, check);
+            option.append(icon, label, recommend, check);
             option.addEventListener('pointerdown', event => event.stopPropagation());
             option.addEventListener('click', async event => {
                 event.preventDefault();
@@ -12289,16 +12384,14 @@
                     return;
                 option.dataset.selecting = '1';
                 menu.querySelectorAll('button').forEach(button => button.disabled = true);
-                /* 먼저 이 간편목록을 만들 때 잡아 둔 정확한 원본 행을 사용한다.
-                   재스냅샷을 우선하면 hover/다른 Radix 팝업이 생긴 순간 같은 토큰의
-                   엉뚱한 행을 집을 수 있으므로, 기존 행이 사라졌을 때만 재탐색한다. */
-                const freshSnapshot = compactModelSnapshot();
-                const nativeShell = snapshot.shell?.isConnected ? snapshot.shell : freshSnapshot?.shell;
-                document.documentElement.classList.add('cmu-compact-model-selecting');
-                nativeShell?.setAttribute?.('data-cmu-compact-model-native', '1');
-                const target = entry.item?.isConnected
-                    ? entry.item
-                    : (freshSnapshot?.entries?.find(candidate => candidate.token === entry.token)?.item || null);
+
+                // 4.5.0.4.9: 목록을 보여 주는 동안에는 원본 메뉴를 닫아 상단 배치를 보존하고,
+                // 실제 모델을 누른 순간에만 원본 메뉴를 보이지 않게 다시 열어 해당 행을 클릭한다.
+                const freshSnapshot = await compactModelHiddenSnapshotForSelection(nativeButton);
+                const nativeShell = freshSnapshot?.shell || snapshot.shell;
+                const target = freshSnapshot?.entries?.find(candidate => candidate.token === entry.token)?.item ||
+                    (entry.item?.isConnected ? entry.item : null);
+
                 const changed = await compactModelActivateNativeItem(target, entry.token);
                 closeCompactModelPicker({ closeNative: false, preserveNativeHidden: true });
                 if (!changed) {
@@ -12607,6 +12700,7 @@
                     iconSrc: compactModelImageSource(row, nmfIconFlatToken(match.token)) || cmiIconUrl(match.token),
                     selected,
                     disabled,
+                    recommended: compactModelRecommendedFromItem(row),
                 });
                 used.add(match.token);
             }
@@ -12762,6 +12856,10 @@
                 COMPACT_MODEL.nativeButton = nativeButton;
                 COMPACT_MODEL.anchor = anchor;
                 COMPACT_MODEL.toggleLockUntil = Date.now() + 160;
+
+                // 원본 모델 메뉴는 목록 정보만 읽고 즉시 닫는다.
+                // 이렇게 해야 Crack 업데이트 후 상단 모델 버튼 위치가 열림 상태 스타일에 끌려가지 않는다.
+                compactModelParkNativeMenu(nativeButton, snapshot.shell);
             }
             catch (_) {
                 try { await compactModelDismissNativeMenu(nativeButton, snapshot.shell); } catch (_) { }
