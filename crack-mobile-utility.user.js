@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.0.4.10
+// @version      4.5.0.4.11
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -35,7 +35,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.0.4.10';
+    const VERSION = '4.5.0.4.11';
     // Merge base: upstream 4.5.0.4 + retained custom compact model picker / integrations / mobile fixes.
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
@@ -12271,6 +12271,78 @@
         COMPACT_MODEL.nativeButton = null;
         COMPACT_MODEL.anchor = null;
     }
+    function compactModelFreezeNativeButton(nativeButton) {
+        if (!(nativeButton instanceof HTMLElement) || !nativeButton.isConnected)
+            return () => {};
+
+        const rect = nativeButton.getBoundingClientRect();
+        if (!rect.width || !rect.height)
+            return () => {};
+
+        const originalStyle = nativeButton.getAttribute('style');
+        const originalFrozen = nativeButton.getAttribute('data-cmu-model-button-frozen');
+        let placeholder = null;
+
+        try {
+            const computed = getComputedStyle(nativeButton);
+            if (!/^(?:absolute|fixed)$/.test(computed.position || '')) {
+                placeholder = document.createElement('span');
+                placeholder.setAttribute('data-cmu-model-button-placeholder', '1');
+                placeholder.setAttribute('aria-hidden', 'true');
+                placeholder.style.setProperty('display', 'block', 'important');
+                placeholder.style.setProperty('box-sizing', 'border-box', 'important');
+                placeholder.style.setProperty('flex', `0 0 ${rect.width}px`, 'important');
+                placeholder.style.setProperty('width', `${rect.width}px`, 'important');
+                placeholder.style.setProperty('min-width', `${rect.width}px`, 'important');
+                placeholder.style.setProperty('max-width', `${rect.width}px`, 'important');
+                placeholder.style.setProperty('height', `${rect.height}px`, 'important');
+                placeholder.style.setProperty('margin', computed.margin || '0', 'important');
+                placeholder.style.setProperty('padding', '0', 'important');
+                placeholder.style.setProperty('border', '0', 'important');
+                placeholder.style.setProperty('visibility', 'hidden', 'important');
+                placeholder.style.setProperty('pointer-events', 'none', 'important');
+                nativeButton.parentNode?.insertBefore?.(placeholder, nativeButton);
+            }
+        }
+        catch (_) { }
+
+        nativeButton.setAttribute('data-cmu-model-button-frozen', '1');
+        nativeButton.style.setProperty('position', 'fixed', 'important');
+        nativeButton.style.setProperty('left', `${Math.round(rect.left)}px`, 'important');
+        nativeButton.style.setProperty('top', `${Math.round(rect.top)}px`, 'important');
+        nativeButton.style.setProperty('right', 'auto', 'important');
+        nativeButton.style.setProperty('bottom', 'auto', 'important');
+        nativeButton.style.setProperty('width', `${Math.round(rect.width)}px`, 'important');
+        nativeButton.style.setProperty('min-width', `${Math.round(rect.width)}px`, 'important');
+        nativeButton.style.setProperty('max-width', `${Math.round(rect.width)}px`, 'important');
+        nativeButton.style.setProperty('height', `${Math.round(rect.height)}px`, 'important');
+        nativeButton.style.setProperty('margin', '0', 'important');
+        nativeButton.style.setProperty('transform', 'none', 'important');
+        nativeButton.style.setProperty('transition', 'none', 'important');
+        nativeButton.style.setProperty('z-index', '2147483001', 'important');
+
+        let released = false;
+        return () => {
+            if (released)
+                return;
+            released = true;
+            try {
+                placeholder?.remove?.();
+            }
+            catch (_) { }
+            try {
+                if (originalStyle == null)
+                    nativeButton.removeAttribute('style');
+                else
+                    nativeButton.setAttribute('style', originalStyle);
+                if (originalFrozen == null)
+                    nativeButton.removeAttribute('data-cmu-model-button-frozen');
+                else
+                    nativeButton.setAttribute('data-cmu-model-button-frozen', originalFrozen);
+            }
+            catch (_) { }
+        };
+    }
     async function compactModelHiddenSnapshotForSelection(nativeButton) {
         if (!(nativeButton instanceof HTMLElement) || !nativeButton.isConnected)
             return null;
@@ -12385,33 +12457,41 @@
                 option.dataset.selecting = '1';
                 menu.querySelectorAll('button').forEach(button => button.disabled = true);
 
-                // 4.5.0.4.9: 목록을 보여 주는 동안에는 원본 메뉴를 닫아 상단 배치를 보존하고,
-                // 실제 모델을 누른 순간에만 원본 메뉴를 보이지 않게 다시 열어 해당 행을 클릭한다.
-                const freshSnapshot = await compactModelHiddenSnapshotForSelection(nativeButton);
-                const nativeShell = freshSnapshot?.shell || snapshot.shell;
-                const target = freshSnapshot?.entries?.find(candidate => candidate.token === entry.token)?.item ||
-                    (entry.item?.isConnected ? entry.item : null);
+                // 4.5.0.4.11:
+                // 실제 모델 선택을 위해 숨겨진 원본 메뉴를 잠깐 다시 여는 동안
+                // Crack 상단 모델 버튼이 좌우로 재배치되지 않도록 현재 화면 좌표에 잠깐 고정한다.
+                const releaseNativeButtonFreeze = compactModelFreezeNativeButton(nativeButton);
+                try {
+                    const freshSnapshot = await compactModelHiddenSnapshotForSelection(nativeButton);
+                    const nativeShell = freshSnapshot?.shell || snapshot.shell;
+                    const target = freshSnapshot?.entries?.find(candidate => candidate.token === entry.token)?.item ||
+                        (entry.item?.isConnected ? entry.item : null);
 
-                const changed = await compactModelActivateNativeItem(target, entry.token);
-                closeCompactModelPicker({ closeNative: false, preserveNativeHidden: true });
-                if (!changed) {
+                    const changed = await compactModelActivateNativeItem(target, entry.token);
+                    closeCompactModelPicker({ closeNative: false, preserveNativeHidden: true });
+                    if (!changed) {
+                        await compactModelDismissNativeMenu(nativeButton, nativeShell);
+                        showToast('모델 항목이 갱신됨 · 다시 눌러 주세요');
+                        return;
+                    }
+                    const confirmed = await compactModelWaitForSelection(nativeButton, entry);
                     await compactModelDismissNativeMenu(nativeButton, nativeShell);
-                    showToast('모델 항목이 갱신됨 · 다시 눌러 주세요');
-                    return;
+                    if (!confirmed) {
+                        const actualToken = compactModelButtonToken(nativeButton);
+                        showToast(actualToken && actualToken !== entry.token
+                            ? '선택 모델 불일치 · 다시 눌러 주세요'
+                            : '모델 선택 확인이 늦어짐 · 상단 모델명을 확인해 주세요');
+                    }
+                    scheduleNmfScan([120, 320, 700]);
+                    setTimeout(() => {
+                        scheduleDashboardUpdate(true);
+                        ensureInlineBlocks();
+                    }, 180);
                 }
-                const confirmed = await compactModelWaitForSelection(nativeButton, entry);
-                await compactModelDismissNativeMenu(nativeButton, nativeShell);
-                if (!confirmed) {
-                    const actualToken = compactModelButtonToken(nativeButton);
-                    showToast(actualToken && actualToken !== entry.token
-                        ? '선택 모델 불일치 · 다시 눌러 주세요'
-                        : '모델 선택 확인이 늦어짐 · 상단 모델명을 확인해 주세요');
+                finally {
+                    // 원본 메뉴가 완전히 닫힌 뒤 한 프레임 여유를 두고 원래 레이아웃으로 복귀.
+                    setTimeout(releaseNativeButtonFreeze, 90);
                 }
-                scheduleNmfScan([120, 320, 700]);
-                setTimeout(() => {
-                    scheduleDashboardUpdate(true);
-                    ensureInlineBlocks();
-                }, 180);
             });
             menu.appendChild(option);
         }
@@ -12803,6 +12883,7 @@
 
         COMPACT_MODEL.opening = true;
         COMPACT_MODEL.toggleLockUntil = now + 180;
+        let releaseOpenButtonFreeze = null;
         try {
             compactModelClearNativeLiveMarks(liveShell?.isConnected ? liveShell : null);
             COMPACT_MODEL.nativeShell = null;
@@ -12815,6 +12896,7 @@
             let snapshot = compactModelSnapshot();
             if (!snapshot) {
                 document.documentElement.classList.add('cmu-compact-model-probing');
+                releaseOpenButtonFreeze = compactModelFreezeNativeButton(nativeButton);
                 if (!compactModelClickOnce(nativeButton)) {
                     document.documentElement.classList.remove('cmu-compact-model-probing');
                     COMPACT_MODEL.nativeButton = COMPACT_MODEL.anchor = null;
@@ -12860,6 +12942,11 @@
                 // 원본 모델 메뉴는 목록 정보만 읽고 즉시 닫는다.
                 // 이렇게 해야 Crack 업데이트 후 상단 모델 버튼 위치가 열림 상태 스타일에 끌려가지 않는다.
                 compactModelParkNativeMenu(nativeButton, snapshot.shell);
+                if (releaseOpenButtonFreeze) {
+                    const release = releaseOpenButtonFreeze;
+                    releaseOpenButtonFreeze = null;
+                    setTimeout(release, 320);
+                }
             }
             catch (_) {
                 try { await compactModelDismissNativeMenu(nativeButton, snapshot.shell); } catch (_) { }
@@ -12870,6 +12957,11 @@
         }
         finally {
             COMPACT_MODEL.opening = false;
+            if (releaseOpenButtonFreeze) {
+                const release = releaseOpenButtonFreeze;
+                releaseOpenButtonFreeze = null;
+                setTimeout(release, 320);
+            }
         }
     }
     function openNativeOutputSettings({ silent = false } = {}) {
