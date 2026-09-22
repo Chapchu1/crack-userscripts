@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.0.4.11
+// @version      4.5.0.4.13
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -35,7 +35,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.0.4.11';
+    const VERSION = '4.5.0.4.13';
     // Merge base: upstream 4.5.0.4 + retained custom compact model picker / integrations / mobile fixes.
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
@@ -220,7 +220,7 @@
         settings: 'cmu_settings_v010_beta',
         settingsBackup: 'cmu_settings_v010_beta_backup',
         apiKeys: 'cmu_api_keys_v1',
-        rsModels: 'cmu_rs_models_v1',
+        rsModels: 'cmu_rs_models_v3',
         rsVisibility: 'igx_rs_popup_vis_v3',
         dashboardCachePrefix: 'cmu_dash_cache_',
         sidebarVisible: 'chud_side_visible_parts',
@@ -14318,9 +14318,9 @@
         }
     }
     const RS = {
-        // 4.5.0.4.5: rs.igx.kr가 실제 API CDN(radiosonde-api-striker.b-cdn.net)으로
-        // 리다이렉트되는 배포를 우선 대응한다. 직접 CDN을 먼저 호출해 리다이렉트/권한
-        // 문제를 피하고, 기존 old/current IGX 주소는 모두 폴백으로 유지한다.
+        // 4.5.0.4.12: IGX 공지 기준 모든 라디오존데 API의 정식 경로가 BunnyCDN으로 제공된다.
+        // BunnyCDN(radiosonde-api-striker.b-cdn.net)을 항상 1순위로 직접 호출하고,
+        // 기존 rs/old 주소는 장애 대응용 폴백으로만 유지한다.
         apiBases: [
             'https://radiosonde-api-striker.b-cdn.net/api/v2/simple/',
             'https://rs.igx.kr/api/v2/simple/',
@@ -14415,6 +14415,20 @@
                 "short": "G2.5P"
         },
         {
+                "slug": "gemini-3.8-flash",
+                "apiId": "gemini-3.8-flash",
+                "source": "igx",
+                "label": "Gemini 3.8 Flash",
+                "short": "G3.8F"
+        },
+        {
+                "slug": "gemini-3.7-flash",
+                "apiId": "gemini-3.7-flash",
+                "source": "igx",
+                "label": "Gemini 3.7 Flash",
+                "short": "G3.7F"
+        },
+        {
                 "slug": "gemini-3.6-flash",
                 "apiId": "gemini-3.6-flash",
                 "source": "igx",
@@ -14434,6 +14448,20 @@
                 "source": "igx",
                 "label": "Gemini 3.5 Flash Lite",
                 "short": "G3.5FL"
+        },
+        {
+                "slug": "gpt-6-sol",
+                "apiId": "gpt-6-sol",
+                "source": "igx",
+                "label": "ChatGPT 6 Sol",
+                "short": "G6S"
+        },
+        {
+                "slug": "gpt-6-luna",
+                "apiId": "gpt-6-luna",
+                "source": "igx",
+                "label": "ChatGPT 6 Luna",
+                "short": "G6L"
         },
         {
                 "slug": "gpt-5.6-sol",
@@ -14460,6 +14488,39 @@
     const DEFAULT_RS_MODELS = [...YAME_MODELS, ...FALLBACK_MODELS];
     const EXCLUDED_MODELS = new Set(['gemini-3-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']);
     const MODEL_OVERRIDES = new Map(FALLBACK_MODELS.map(m => [m.slug, m]));
+    // 4.5.0.4.13:
+    // IGX가 공식 지원을 공지한 모델은 /models CDN 캐시가 잠시 이전 목록을 반환하더라도
+    // 설정 목록과 실제 조회 대상에서 빠지지 않게 강제로 합친다.
+    const REQUIRED_RS_SLUGS = [
+        'gpt-6-sol',
+        'gpt-6-luna',
+        'gemini-3.8-flash',
+        'gemini-3.7-flash',
+    ];
+    function mergeRequiredRsModels(models) {
+        const map = new Map();
+        for (const model of Array.isArray(models) ? models : []) {
+            if (model?.slug)
+                map.set(model.slug, { ...model });
+        }
+        for (const slug of REQUIRED_RS_SLUGS) {
+            const fallback = MODEL_OVERRIDES.get(slug);
+            if (!fallback)
+                continue;
+            const current = map.get(slug);
+            map.set(slug, {
+                ...fallback,
+                ...(current || {}),
+                slug,
+                apiId: slug,
+                source: 'igx',
+                // 공지 모델은 사람이 읽기 쉬운 고정 라벨/축약명을 우선한다.
+                label: fallback.label,
+                short: fallback.short,
+            });
+        }
+        return ensureUniqueShorts([...map.values()]);
+    }
     function titleWord(word) {
         const known = { api: 'API', ai: 'AI', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', pro: 'Pro', flash: 'Flash', lite: 'Lite', mini: 'Mini', preview: 'Preview', thinking: 'Thinking' };
         return known[word] || (word ? word.charAt(0).toUpperCase() + word.slice(1) : '');
@@ -14515,8 +14576,10 @@
         return { slug, apiId: slug, source: 'igx', label: autoLabel(slug), short: autoShort(slug) };
     }
     function modelsFromList(payload) {
-        if (payload?.success !== true || !Array.isArray(payload.data)) return [];
-        return ensureUniqueShorts([...new Set(payload.data.filter(isRsModelSlug))].map(rsModelMeta));
+        if (payload?.success !== true || !Array.isArray(payload.data))
+            return mergeRequiredRsModels([]);
+        const discovered = [...new Set(payload.data.filter(isRsModelSlug))].map(rsModelMeta);
+        return mergeRequiredRsModels(discovered);
     }
     function latestRecordMs(records) {
         const times = Array.isArray(records) ? records.map(r => Date.parse(r?.time)).filter(Number.isFinite) : [];
@@ -14533,7 +14596,7 @@
                 models.set(model.model, rsModelMeta(model.model));
             }
         }
-        return ensureUniqueShorts([...models.values()]);
+        return mergeRequiredRsModels([...models.values()]);
     }
     function ensureUniqueShorts(models) {
         const used = new Set();
@@ -14558,7 +14621,7 @@
             const models = arr
                 .filter(m => m && typeof m.slug === 'string' && typeof m.short === 'string' && typeof m.label === 'string' && isRsModelSlug(m.slug))
                 .map(m => ({ ...m, apiId: m.slug, source: 'igx' }));
-            return models.length ? models : null;
+            return models.length ? mergeRequiredRsModels(models) : mergeRequiredRsModels([]);
         }
         catch (_) {
             return null;
@@ -14566,7 +14629,8 @@
     }
     function saveRsModelCache(models) {
         try {
-            localStorage.setItem(LS.rsModels, JSON.stringify({ ts: Date.now(), models }));
+            const merged = mergeRequiredRsModels(models);
+            localStorage.setItem(LS.rsModels, JSON.stringify({ ts: Date.now(), models: merged }));
         }
         catch (_) { }
     }
@@ -14609,11 +14673,11 @@
 
                 if (!models.length)
                     throw lastDiscoveryError || new Error('empty model list');
-                RS.models = [...YAME_MODELS, ...models];
+                RS.models = [...YAME_MODELS, ...mergeRequiredRsModels(models)];
                 saveRsModelCache(models);
             }
             catch (_) {
-                if (!RS.models.length) RS.models = [...YAME_MODELS, ...(cache?.length ? cache : FALLBACK_MODELS)];
+                if (!RS.models.length) RS.models = [...YAME_MODELS, ...mergeRequiredRsModels(cache?.length ? cache : FALLBACK_MODELS)];
             }
             RS.discoveryAt = Date.now();
             if (previous !== JSON.stringify(RS.models)) {
@@ -14781,7 +14845,7 @@
             // v2 모델 목록은 뒤에서 조회하고 변경되면 즉시 한 번 더 갱신한다.
             if (!RS.models.length) {
                 const cache = loadRsModelCache();
-                RS.models = [...YAME_MODELS, ...(cache?.length ? cache : FALLBACK_MODELS)];
+                RS.models = [...YAME_MODELS, ...mergeRequiredRsModels(cache?.length ? cache : FALLBACK_MODELS)];
             }
             if (Date.now() - RS.discoveryAt >= 5 * 60 * 1000 && !RS.discoveryPromise)
                 void discoverRsModels().catch(() => {});
