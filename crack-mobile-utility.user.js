@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.0.4.13
+// @version      4.5.0.4.15
 // @description  모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
@@ -35,7 +35,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.0.4.13';
+    const VERSION = '4.5.0.4.15';
     // Merge base: upstream 4.5.0.4 + retained custom compact model picker / integrations / mobile fixes.
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
@@ -9027,11 +9027,6 @@
         renderRsLine();
         scheduleRadiosondeRefresh(true);
     }
-    function getRsVisibleModels() {
-        const models = RS.models.length ? RS.models : DEFAULT_RS_MODELS;
-        const visibility = loadRsVisibility();
-        return models.filter(m => visibility[m.slug] !== false);
-    }
     const RS_GROUPS = [
         ['fable', 'Fable'], ['opus', 'Opus'], ['gpt', 'GPT'], ['gemini', 'Gemini'],
         ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['other', '기타'],
@@ -9041,12 +9036,44 @@
         return RS_GROUPS.find(([id]) => id !== 'other' && text.includes(id))?.[0]
             || (text.includes('openai') ? 'gpt' : 'other');
     }
+    function rsModelVersionParts(model) {
+        const slug = String(model?.slug || '');
+        const match = slug.match(/\d+(?:\.\d+)*/);
+        return match ? match[0].split('.').map(v => Number(v) || 0) : [];
+    }
+    function compareRsModelVersionDesc(a, b) {
+        const av = rsModelVersionParts(a);
+        const bv = rsModelVersionParts(b);
+        const len = Math.max(av.length, bv.length);
+        for (let i = 0; i < len; i++) {
+            const diff = (bv[i] || 0) - (av[i] || 0);
+            if (diff)
+                return diff;
+        }
+        return String(a?.label || a?.slug || '').localeCompare(String(b?.label || b?.slug || ''));
+    }
+    function sortRsModels(models) {
+        const groupOrder = new Map(RS_GROUPS.map(([id], index) => [id, index]));
+        return [...models].sort((a, b) => {
+            const ag = rsModelGroup(a);
+            const bg = rsModelGroup(b);
+            const groupDiff = (groupOrder.get(ag) ?? 999) - (groupOrder.get(bg) ?? 999);
+            if (groupDiff)
+                return groupDiff;
+            return compareRsModelVersionDesc(a, b);
+        });
+    }
+    function getRsVisibleModels() {
+        const models = RS.models.length ? RS.models : DEFAULT_RS_MODELS;
+        const visibility = loadRsVisibility();
+        return sortRsModels(models.filter(m => visibility[m.slug] !== false));
+    }
     function renderRsModelRows() {
         const models = RS.models.length ? RS.models : DEFAULT_RS_MODELS;
         const visibility = loadRsVisibility();
         const disabled = !settings.radiosonde;
         return RS_GROUPS.map(([id, label]) => {
-            const members = models.filter(m => rsModelGroup(m) === id);
+            const members = sortRsModels(models.filter(m => rsModelGroup(m) === id));
             if (!members.length)
                 return '';
             const count = members.filter(m => visibility[m.slug] !== false).length;
@@ -14366,6 +14393,13 @@
                 "short": "F5.1"
         },
         {
+                "slug": "claude-opus-5.5",
+                "apiId": "claude-opus-5.5",
+                "source": "igx",
+                "label": "Claude Opus 5.5",
+                "short": "O5.5"
+        },
+        {
                 "slug": "claude-opus-5",
                 "apiId": "claude-opus-5",
                 "source": "igx",
@@ -14488,10 +14522,12 @@
     const DEFAULT_RS_MODELS = [...YAME_MODELS, ...FALLBACK_MODELS];
     const EXCLUDED_MODELS = new Set(['gemini-3-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']);
     const MODEL_OVERRIDES = new Map(FALLBACK_MODELS.map(m => [m.slug, m]));
-    // 4.5.0.4.13:
-    // IGX가 공식 지원을 공지한 모델은 /models CDN 캐시가 잠시 이전 목록을 반환하더라도
-    // 설정 목록과 실제 조회 대상에서 빠지지 않게 강제로 합친다.
+    // 4.5.0.4.14:
+    // 공지 직후 /models CDN 캐시 반영이 늦어도 확인된 신규 모델은 즉시 사용할 수 있게 유지한다.
+    // 동시에 아래 자동 탐색 로직이 여러 /models + /statistics 출처를 합쳐서,
+    // 앞으로 새 모델이 생기면 스크립트 업데이트 없이도 자동 등록한다.
     const REQUIRED_RS_SLUGS = [
+        'claude-opus-5.5',
         'gpt-6-sol',
         'gpt-6-luna',
         'gemini-3.8-flash',
@@ -14522,7 +14558,12 @@
         return ensureUniqueShorts([...map.values()]);
     }
     function titleWord(word) {
-        const known = { api: 'API', ai: 'AI', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', pro: 'Pro', flash: 'Flash', lite: 'Lite', mini: 'Mini', preview: 'Preview', thinking: 'Thinking' };
+        const known = {
+            api: 'API', ai: 'AI', gpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini',
+            opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku',
+            pro: 'Pro', flash: 'Flash', lite: 'Lite', mini: 'Mini',
+            preview: 'Preview', thinking: 'Thinking',
+        };
         return known[word] || (word ? word.charAt(0).toUpperCase() + word.slice(1) : '');
     }
     function parseSlug(slug) {
@@ -14546,6 +14587,11 @@
             return override.label;
         const { brand, version, descriptors } = parseSlug(slug);
         const brandName = titleWord(brand);
+        if (brand === 'claude') {
+            const family = descriptors.find(v => ['fable', 'opus', 'sonnet', 'haiku'].includes(v));
+            const rest = descriptors.filter(v => v !== family).map(titleWord);
+            return [brandName, family ? titleWord(family) : '', version, ...rest].filter(Boolean).join(' ');
+        }
         const desc = descriptors.map(titleWord).join(' ');
         if (version && desc)
             return `${brandName} ${version} ${desc}`;
@@ -14575,28 +14621,46 @@
     function rsModelMeta(slug) {
         return { slug, apiId: slug, source: 'igx', label: autoLabel(slug), short: autoShort(slug) };
     }
+    function rsSlugFromDiscoveryItem(item) {
+        if (typeof item === 'string')
+            return item.trim();
+        if (!item || typeof item !== 'object')
+            return '';
+        return String(item.slug || item.model || item.id || item.name || '').trim();
+    }
     function modelsFromList(payload) {
-        if (payload?.success !== true || !Array.isArray(payload.data))
-            return mergeRequiredRsModels([]);
-        const discovered = [...new Set(payload.data.filter(isRsModelSlug))].map(rsModelMeta);
-        return mergeRequiredRsModels(discovered);
+        if (!payload || payload.success === false)
+            return [];
+        const raw = Array.isArray(payload.data)
+            ? payload.data
+            : Array.isArray(payload.data?.models)
+                ? payload.data.models
+                : Array.isArray(payload.models)
+                    ? payload.models
+                    : [];
+        const slugs = raw.map(rsSlugFromDiscoveryItem).filter(isRsModelSlug);
+        return [...new Set(slugs)].map(rsModelMeta);
     }
     function latestRecordMs(records) {
         const times = Array.isArray(records) ? records.map(r => Date.parse(r?.time)).filter(Number.isFinite) : [];
         return times.length ? Math.max(...times) : null;
     }
     function modelsFromStatistics(payload) {
-        if (payload?.success !== true || !Array.isArray(payload.data)) return [];
+        if (!payload || payload.success === false || !Array.isArray(payload.data))
+            return [];
         const models = new Map();
         for (const provider of payload.data) {
             for (const model of Array.isArray(provider?.models) ? provider.models : []) {
-                if (!isRsModelSlug(model?.model)) continue;
+                const slug = rsSlugFromDiscoveryItem(model);
+                if (!isRsModelSlug(slug))
+                    continue;
                 const latest = latestRecordMs(model.statistics);
-                if (latest === null || Date.now() - latest > RS.activeWindowMs) continue;
-                models.set(model.model, rsModelMeta(model.model));
+                if (latest === null || Date.now() - latest > RS.activeWindowMs)
+                    continue;
+                models.set(slug, rsModelMeta(slug));
             }
         }
-        return mergeRequiredRsModels([...models.values()]);
+        return [...models.values()];
     }
     function ensureUniqueShorts(models) {
         const used = new Set();
@@ -14641,39 +14705,46 @@
             const cache = loadRsModelCache();
             const previous = JSON.stringify(RS.models);
             try {
-                let models = [];
-                let lastDiscoveryError = null;
+                const discovered = new Map();
+                const discoveryErrors = [];
+                const absorb = (models) => {
+                    for (const model of Array.isArray(models) ? models : []) {
+                        if (model?.slug && isRsModelSlug(model.slug))
+                            discovered.set(model.slug, { ...model, apiId: model.slug, source: 'igx' });
+                    }
+                };
 
-                // 4.5.0.4.6: 실제 브라우저에서 정상 확인된 공개 API URL 그대로 요청한다.
-                // Bunny CDN 앞에서 임의 query string이 캐시/라우팅을 다르게 처리하는 경우를 피한다.
-                for (const url of RS.modelsUrls) {
-                    try {
-                        models = modelsFromList(await gmGetRsJson(url, 9000));
-                        if (models.length)
-                            break;
-                    }
-                    catch (error) {
-                        lastDiscoveryError = error;
-                    }
+                // 4.5.0.4.14: 한 CDN의 오래된 목록 때문에 신규 모델이 빠지지 않도록
+                // 모든 공개 /models 출처를 병렬 조회하고 결과를 합집합으로 만든다.
+                const listResults = await Promise.allSettled(
+                    RS.modelsUrls.map(url => gmGetRsJson(url, 9000).then(modelsFromList))
+                );
+                for (const result of listResults) {
+                    if (result.status === 'fulfilled')
+                        absorb(result.value);
+                    else
+                        discoveryErrors.push(result.reason);
                 }
 
-                // 목록 API가 없는 배포라면 통계 API에서 모델을 추출한다.
+                // /models보다 실제 통계 수집이 먼저 시작될 수도 있어 /statistics 결과도 합친다.
+                // 새 모델 slug가 어느 한 공개 출처에 나타나기만 하면 다음 자동 탐색 때 등록된다.
+                const statResults = await Promise.allSettled(
+                    RS.statisticsUrls.map(url => gmGetRsJson(url, 10000).then(modelsFromStatistics))
+                );
+                for (const result of statResults) {
+                    if (result.status === 'fulfilled')
+                        absorb(result.value);
+                    else
+                        discoveryErrors.push(result.reason);
+                }
+
+                let models = [...discovered.values()];
                 if (!models.length) {
-                    for (const url of RS.statisticsUrls) {
-                        try {
-                            models = modelsFromStatistics(await gmGetRsJson(url, 10000));
-                            if (models.length)
-                                break;
-                        }
-                        catch (error) {
-                            lastDiscoveryError = error;
-                        }
-                    }
-                }
-
-                if (!models.length)
+                    const lastDiscoveryError = discoveryErrors.filter(Boolean).at(-1);
                     throw lastDiscoveryError || new Error('empty model list');
-                RS.models = [...YAME_MODELS, ...mergeRequiredRsModels(models)];
+                }
+                models = mergeRequiredRsModels(models);
+                RS.models = [...YAME_MODELS, ...models];
                 saveRsModelCache(models);
             }
             catch (_) {
