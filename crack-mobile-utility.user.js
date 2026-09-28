@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.5.6
-// @description  선택 통합 4.5.5.6: 라이트/다크·소설/채팅·입력창 전환, 설정 내 메모리/노트 UI, 코드 줄바꿈·라이트 가독성·반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
+// @version      4.5.5.25
+// @description  선택 통합 4.5.5.25: 검은 숨김 제거·키보드 전환 중 직전 화면 유지, 실측 자동 하단 맞춤·보정 전환 끊김 제거·직접 조절 선택, 입력창 아래 남은 공간 안에서 실제 이동·저장 범위 반영, 정상 입력창의 지연 이동 제거·보정값 저장/이동 범위 안내·위아래 조절 버튼, Android 키보드 페이지 리사이즈·설정창 잘림·닫힘 뒤 대화 위치 복원 수정, 키보드 보정값 잘림·설정창 화면 범위·적용 버튼 대비와 완료 표시 수정, 글 감싸기 미니 사이드바 이동·아이콘 눌림 효과·설정 페이지 전환, 키보드 열림 안정화·편집 도구 통합·설정창 새 디자인, 첫 터치 키보드 보정 안정화·초기화 버튼 배치 수정, 대화 끝 감지·자동 스크롤 판정 보완, 휴대폰 키보드 진단 복사, 키보드 입력창 위치 보정 ON/OFF(기본 OFF), 단축어 일괄 삭제 연속 처리·새 목록 결과 확인, 설명 중복 체크박스 제거, 단축어 팝업 감지 보완, 라이트/다크·소설/채팅·입력창 전환, 설정 내 메모리/노트 UI, 코드 줄바꿈·라이트 가독성·반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL   none
@@ -34,6 +34,97 @@
 // ==/UserScript==
 
 /*
+ * 4.5.5.25 변경: opacity로 대화/입력창을 검게 비우던 방식 완전 제거.
+ * 보이는 대화와 입력창의 비활성 복제 화면을 짧게 유지하고 정착 뒤 제거.
+ * 원본 DOM·초안·커서·투명도 변경 없음. 키보드 여백/자동·수동 좌표 유지.
+ * 복제 화면의 사이트 식별자/입력 역할 제거, 진단/저장/외부 전송 대상에서 제외.
+ * 입력·스크롤·OFF·설정 열기·이탈·최대650ms 시 복제 화면 즉시 해제.
+ * 4.5.5.24 변경: 키보드 전환 흔들림 숨기기 옵션(기본 ON, 키보드 보정 ON일 때).
+ * 열림 중 임시 높이로 튀는 대화/입력창만 opacity로 잠시 숨긴 뒤 안정된 위치에서 표시.
+ * DOM·초안·커서·실제 배치는 유지. 위치 강제 고정, 복제, 추가 이동 애니메이션 없음.
+ * 첫 높이 변경 뒤 최소 180ms / 마지막 치수 변경 뒤 140ms / 최대 650ms로 제한.
+ * 이미 열린 입력창 재터치·하드웨어 키보드에는 재실행하지 않음.
+ * OFF·설정 열기·포커스 해제·페이지 이탈 시 표시와 기존 투명도를 즉시 복원.
+ * 4.5.5.23의 자동/수동 좌표와 여백, 기존 대화 프로필 및 다른 기능 보존.
+ * 4.5.5.23 변경: 자동 맞춤 기본 모드. 기존 키보드 보정 ON/OFF와 수동 값 보존.
+ * 기기별 고정 보정값 대신 실제 보이는 화면 하단과 입력창 크기로 좌표 결정.
+ * 네이티브 여백이 32px를 넘을 때 보정 해제/대기가 반복되던 경로 제거.
+ * 클리핑으로 배치 방식 전환이 필요할 때도 같은 갱신 안에서 재정렬.
+ * 자동 모드에서는 수동 보정값을 사용하지 않으며 직접 조절에서 기존 값 재사용.
+ * 브라우저가 제공하는 화면 범위 안에서 작동. OS 키보드 자체를 이동하지 않음.
+ * 4.5.5.22 변경: 네이티브 입력창의 기본 위치를 기준으로 수동 이동.
+ * 16px 하단 여백이 있어도 양수 보정을 0으로 막던 계산 수정.
+ * 화면 안의 실제 이동 범위로 저장/스테퍼 제한. 요청값과 조정값을 함께 표시.
+ * 재터치·재측정 때 자체 이동을 중복 적용하지 않고 대화 끝도 동기화.
+ * 위로 이동할 때 로그 스크롤 여유 확보. 닫힘/OFF/초기화 시 원본 복원.
+ * 키보드 개방 초반의 치수 변화를 진단에 별도로 보존.
+ * 4.5.5.21 변경: 브라우저가 키보드 위에 입력창을 이미 배치했으면 원래 위치 유지.
+ * 매번 360ms 뒤 Popover로 올리며 8px 더 움직이던 중복 보정 제거.
+ * 대화는 기존 입력창 간격을 따라가되 순정 스크롤 영역 높이는 변경하지 않음.
+ * 숫자 저장과 실제 이동을 구분. 양수 이동이 0으로 제한되는 경우 범위를 안내.
+ * 위로/아래로 10px 조절 버튼, 빈 값 저장 방지, 범위 초과 시 조정 안내.
+ * 4.5.5.20 변경: Android 보정 ON일 때 키보드가 페이지 전체 높이도 줄이도록
+ * 입력 전에 resizes-content 정책 적용. OFF·방 이동·해제 시 원래 메타 설정 복원.
+ * 브라우저가 실제 줄어든 경우 보정값이 그리기 영역을 넘지 않게 제한.
+ * 설정창에는 채팅 보정값을 더하지 않으며, 키보드 중 제목/탭을 작게 하고
+ * 설정 본문만 스크롤해 입력 항목·적용 버튼이 가려지는 문제 보완. Enter로 적용.
+ * 키보드 닫힌 뒤 순정 지연 스크롤을 짧게 재정렬하고 직접 스크롤하면 즉시 중단.
+ * 설정창 진입/닫힘을 짧은 페이드로 변경. 대화 프로필·글 감싸기·버튼 효과 유지.
+ * 4.5.5.19 변경: 키보드와 함께 레이아웃 높이도 줄어들 때 추가 이동값이 0으로 잘리는 문제 수정.
+ * 입력창·설정창이 같은 보정된 화면 경계를 사용. 설정 열기/닫기 때 가려진 입력 포커스 해제.
+ * 설정창 높이·위치를 키보드와 화면 이동에 맞춰 제한해 제목·메뉴가 화면 밖으로 밀리지 않음.
+ * 적용 버튼의 라이트/다크 대비 보장, 적용/초기화 완료를 버튼에 1.2초 표시.
+ * 진단에 현재 보정값·실제 적용값·설정창 치수 추가. 기존 사이드바·애니메이션·프로필 유지.
+ * 4.5.5.18 변경: 입력 감싸기 버튼을 하단 툴바에서 상단 미니 사이드바로 이동.
+ * 사이드바 아이콘 표시 설정과 도구 설정의 표시 선택을 하나로 동기화.
+ * 상단 아이콘·설정 버튼의 눌림 피드백, 설정 페이지의 짧고 부드러운 전환.
+ * 스크롤 제스처 취소·빠른 연속 터치·동작 줄이기 설정·런타임 정리 대응.
+ * 기존 키보드 위치 보정·대화프로필·저장된 설정과 감싸기 도구 유지.
+ * 4.5.5.17 변경: 키보드가 열리는 중간 치수를 바로 적용하지 않고 안정된 뒤 한 번 정렬.
+ * 분수 픽셀 스타일의 반복 적용 중단. 입력창과 대화 끝의 기존 동기화·80px 등 저장값 유지.
+ * 첨부 charclockbadge 1.2.8-integrated.8 / chathub 1.1.6의 신규 도구·보완점을 통합.
+ * 수정창 줄바꿈 보존·단어 치환/삭제/미리보기/되돌리기·선택 글자수·입력 감싸기·더블클릭 수정.
+ * 리롤 배지 임시 캐시·수정 중 배지 유지·저장 뒤 갱신, 출력 모델 숨김 연동·AI 답변 바로가기.
+ * 기존 초안 확인/단축어 삭제/모델 메뉴/라존데/대화프로필 구현은 유지(중복 런타임 추가 없음).
+ * 설정창: 민트 라이트/차분한 다크/자동 색상, 3열 메뉴, 읽기 쉬운 카드·버튼·설명 배치.
+ * 4.5.5.16 변경: 키보드 기본 동작을 바꾸던 overlaysContent 전환 제거.
+ * 첫 터치·포커스가 남은 입력창 재터치·늦은 화면 크기 갱신까지 자동 재정렬.
+ * 추가 이동 값이 있는 경우 화면 측정 기준 유지, 마지막 대화 위치도 함께 조절.
+ * 초기화·적용 버튼을 설명 아래 같은 너비로 배치하고 한 줄 표기. 저장 값 유지.
+ * 4.5.5.15 변경: 입력 중 VirtualKeyboard 실제 경계 우선 사용. 키보드가 뜬 뒤
+ * 실제 화면과 다르게 보고된 visualViewport 높이에 입력창을 맞추던 문제 보완.
+ * 미지원·실제 치수 미제공 시 브라우저 기본 동작으로 복귀, OFF·설정·노트·해제 시 복원.
+ * 설정 > UI > 키보드에 추가 이동(px) 저장/초기화: 입력창과 대화 끝에 함께 적용.
+ * 4.5.5.14 변경: 목록의 아래 예약 공간 때문에 최신 대화 추적이 꺼지는 조건 보완.
+ * 사용자 스크롤과 브라우저 자동 스크롤을 구분해 최신 대화 추적 유지.
+ * 설정 > UI > 키보드에 진단 복사 추가: 키보드를 닫아도 직전 화면 치수 보존.
+ * 진단에는 메시지·초안·주소·방 ID·인증 정보가 포함되지 않음.
+ * 4.5.5.13 변경: 키보드 표시 중 대화 영역을 입력창 바로 위까지 함께 조절.
+ * 마지막 대화가 아래에 가려지지 않도록 실제 메시지 끝을 기준으로 스크롤 동기화.
+ * 역순 목록·새 응답·입력창 높이 변경 대응, 이전 대화 읽는 중에는 위치 보존.
+ * 닫힘·OFF·방 이동 때 대화 영역의 원본 높이와 스타일도 복원.
+ * 4.5.5.12 변경: 키보드 표시 중 원본 입력창을 최상위 화면 하단에 직접 고정.
+ * 상위 컨테이너의 transform/overflow/높이 제한에서 벗어나 실제 입력 상자 정렬.
+ * 원본 DOM·입력 내용·커서를 유지하고 색/테두리/여백 보존, 닫힘·OFF 시 복원.
+ * Popover 미지원/사용 불가 환경은 기존 측정 보정으로 동작.
+ * 4.5.5.11 변경: 키보드가 열릴 때 입력창이 대화 중간에 뜨는 위치 보정 수정.
+ * 바깥 래퍼의 예약 여백을 제외하고 전송 버튼을 포함한 실제 입력 상자를 정렬.
+ * 화면 고정 입력창에 잘못 적용하던 상위 스크롤 영역 제한 제거.
+ * 원본 위치 변경 뒤 남은 차이만 보정, 키보드가 열린 동안 보정 대상 유지.
+ * 4.5.5.10 변경: 설정 > UI > 키보드에서 입력창 위치 보정 ON/OFF(기본 OFF).
+ * 실제 화면 축소가 확인될 때만 입력창을 보이는 화면 하단에 정렬.
+ * 키보드 닫힘·OFF·방 이동·해제 시 복원, 노트/설정·화면 확대 중에는 보정 중지.
+ * 브라우저 바깥의 키보드/검은 영역은 제어하지 않으며 빈 공간을 추가하지 않음.
+ * 4.5.5.9 변경: 설명의 /를 별도 항목으로 인식하지 않도록 실제 행 단위로 선택.
+ * 전체/내 단축어 전환 때 나 배지와 무관하게 항목을 식별, 삭제창으로 목록이
+ * 닫히거나 재생성되어도 입력 내용을 보존하며 이어서 처리. 삭제 응답과 최종
+ * 완료를 구분하고, 갱신한 전체 목록에서 사라진 항목만 삭제 확인으로 집계.
+ * 4.5.5.8 변경: 단축어 탭·추가 버튼의 띄어쓰기/아이콘 분리, 깊은 래퍼,
+ * 추가 버튼 없는 창도 감지. 지연 열림 재탐색·다시 그려진 편집 버튼 복구.
+ * URL 형태 제한 대신 실제 단축어 탭으로 범위를 확인.
+ * 4.5.5.7 변경: 단축어 편집기 통합. 분리된 /·이름과 div형 더보기 메뉴 인식,
+ * 테마에 가려지지 않는 체크박스, 선택 개수 즉시 반영·목록 읽기 시간 제한·중단 복구.
+ * 설정 > UI > 단축어 편집기에서 ON/OFF. 내 단축어만 원본 메뉴를 통해 확인 후 삭제.
  * 4.5.5.6 변경: 모델 하나만 펼치기(다른 모델 선택 시 이전 항목 순정 접기),
  * 조절 항목의 제목 기반 구조 감지·평면 DOM 대응, 조절부 간격/높이 축소.
  * 4.5.5.5 변경: 답변 길이·생각 조절 창의 제목/설명/카드 여백 축소,
@@ -70,7 +161,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.5.6';
+    const VERSION = '4.5.5.25';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
@@ -278,6 +369,19 @@
         fullscreenButton: false,
         composerExpandButton: true,
         inputCharacterCounter: true,
+        keyboardComposerAssist: false,
+        keyboardComposerMode: 'auto',
+        keyboardComposerMotionGuard: true,
+        keyboardComposerOffset: 0,
+        shortcutEditor: true,
+        editPasteFix: true,
+        editTextCleaner: true,
+        selectionTextCounter: true,
+        inputWrapper: true,
+        messageDoubleClickEdit: true,
+        messageWordWrap: true,
+        outputModelSync: true,
+        settingsPalette: 'light',
         outputLayout: true,
         memoryUi: true,
         userNoteUi: true,
@@ -626,6 +730,8 @@
     function normalizeCmuSettings(raw = {}) {
         const source = raw && typeof raw === 'object' ? raw : {};
         const merged = { ...DEFAULTS, ...source };
+        merged.keyboardComposerMode = source.keyboardComposerMode === 'manual' ? 'manual' : 'auto';
+        merged.keyboardComposerMotionGuard = source.keyboardComposerMotionGuard !== false;
         let captureRules = normalizeLogCaptureRules(source.logCaptureRules ?? merged.logCaptureRules);
         if (!captureRules.some(rule => String(rule.from || '').trim() || String(rule.to || '').trim())) {
             const migrated = [];
@@ -4269,6 +4375,7 @@
             );
             if (!detectCmuExternalThemeProvider())
                 html.classList.remove('sgb-bg-room', 'sgb-bg-active', 'sgb-bg-image-active');
+            CMU_KEYBOARD_COMPOSER.reset();
             // 예약된 채팅창 초안 복구도 무효화한다.
             CMU_DRAFT.restoreToken += 1;
             cmuMessageActionsClearGesture();
@@ -7440,6 +7547,8 @@
             panel.style.transform = '';
             panel.classList.add('open');
             document.documentElement.classList.add('cmu-panel-open');
+            cmuFocusSettingsPanel(panel);
+            CMU_KEYBOARD_COMPOSER.sync();
             renderSettingsPanel();
             if (!wasOpen) {
                 cmuSettingsScrim(true);
@@ -7449,8 +7558,10 @@
         }
         if (!wasOpen)
             return;
+        if (panel.contains(document.activeElement)) document.activeElement.blur?.();
         panel.classList.remove('open', 'cmu-dragging', 'cmu-snap');
         document.documentElement.classList.remove('cmu-panel-open');
+        CMU_KEYBOARD_COMPOSER.schedule();
         cmuPanelBindOpenListeners(false);
         cmuSettingsScrim(false);
         panel.classList.add('cmu-closing');
@@ -7502,11 +7613,21 @@
         }, 260);
     }
     function cmuPanelOnResize() {
+        cmuSyncSettingsViewport();
         const panel = document.getElementById(ID.panel);
         if (panel?.classList.contains('open'))
             cmuPanelPlaceTabIndicator(panel, true);
     }
     function cmuPanelOnKeydown(e) {
+        if (e.key === 'Enter' && !e.isComposing && e.target.matches?.('[data-cmu-keyboard-offset]')) {
+            const panel = e.target.closest('#cmu-settings-panel.open');
+            if (panel) {
+                e.preventDefault();
+                cmuSaveKeyboardOffset(panel);
+                e.target.blur();
+                return;
+            }
+        }
         if (e.key !== 'Escape')
             return;
         const panel = document.getElementById(ID.panel);
@@ -7532,26 +7653,7 @@
         }
     }
     function cmuPanelPlaceTabIndicator(panel, instant) {
-        const tabs = panel?.querySelector?.('.cmu-tabs');
-        const ind = tabs?.querySelector?.('.cmu-tab-ind');
-        const on = tabs?.querySelector?.('.cmu-tab.on');
-        if (!tabs || !ind || !on || !on.offsetWidth)
-            return;
-        if (instant)
-            ind.classList.add('cmu-snap');
-        ind.style.width = `${on.offsetWidth}px`;
-        ind.style.transform = `translateX(${on.offsetLeft}px)`;
-        if (instant) {
-            void ind.offsetWidth;
-            ind.classList.remove('cmu-snap');
-        }
-        const left = Math.max(0, on.offsetLeft - (tabs.clientWidth - on.offsetWidth) / 2);
-        try {
-            tabs.scrollTo({ left, behavior: instant ? 'auto' : 'smooth' });
-        }
-        catch (_) {
-            tabs.scrollLeft = left;
-        }
+        panel?.querySelector('.cmu-tab-ind')?.remove();
     }
     function cmuPanelShowPage(panel, id, dir) {
         clearTimeout(CMU_PANEL_ANIM.pageTimer);
@@ -7759,9 +7861,9 @@
     const CMU_TAB_ICONONLY_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg>`;
     const CMU_SEARCH_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>`;
     const CMU_TABS = Object.freeze([
-        { id: 'ui', icon: Q_ICONS.ui, label: 'UI', keys: ['autoHideHeader', 'wideView', 'hideStatBar', 'fullscreenButton', 'composerExpandButton', 'inputCharacterCounter', 'mobileMenuSwipeZone', 'mobileLeftMenuButton', 'mobileRightMenuButton', 'emptySendGuard', 'draftAutoSave', 'hideEndingHint'] },
+        { id: 'ui', icon: Q_ICONS.ui, label: '화면·입력', keys: ['autoHideHeader', 'wideView', 'hideStatBar', 'fullscreenButton', 'composerExpandButton', 'inputCharacterCounter', 'keyboardComposerAssist', 'keyboardComposerMotionGuard', 'shortcutEditor', 'inputWrapper', 'selectionTextCounter', 'mobileMenuSwipeZone', 'mobileLeftMenuButton', 'mobileRightMenuButton', 'emptySendGuard', 'draftAutoSave', 'hideEndingHint'] },
         { id: 'memory', icon: Q_ICONS.message, label: '메모리·노트', keys: ['memoryUi', 'userNoteUi', 'memoryDraftOverflow'] },
-        { id: 'message', icon: Q_ICONS.message, label: '길게 누르기', keys: ['messageLongPressMenu'] },
+        { id: 'message', icon: Q_ICONS.message, label: '대화·편집', keys: ['messageLongPressMenu', 'editPasteFix', 'editTextCleaner', 'messageDoubleClickEdit', 'messageWordWrap'] },
         { id: 'theme', icon: Q_ICONS.theme, label: '테마', keys: ['themeSkin'] },
         { id: 'radiosonde', icon: Q_ICONS.radio, label: '라존데', keys: ['radiosonde'] },
         { id: 'dashboard', icon: Q_ICONS.dash, label: '대시보드', keys: ['dashboard', 'dashboardSidebar'] },
@@ -7846,6 +7948,7 @@
           data-key="${key}"
           ${group}${depAttr}
           role="switch"
+          aria-label="${escapeHtml(title)}"
           aria-checked="${checked ? 'true' : 'false'}"
           aria-disabled="${disabled ? 'true' : 'false'}"
           ${disabled ? 'disabled' : ''}
@@ -8420,7 +8523,7 @@
             return false;
         if (isCmuProtectedEditorTarget(target))
             return true;
-        return !!target.closest?.(`#${ID.panel}, #${ID.toolbarWrapper}, #${ID.leftMenuZone}, #${ID.rightMenuZone}, #${ID.toast}, #${ID.logCaptureBar}, #${ID.logCapturePreview}, #igx-live-popup, #igx-live-barline, input, textarea, select, [contenteditable="true"]`);
+        return !!target.closest?.(`#${ID.panel}, #${ID.toolbarWrapper}, #${ID.leftMenuZone}, #${ID.rightMenuZone}, #${ID.toast}, #${ID.logCaptureBar}, #${ID.logCapturePreview}, #igx-live-popup, #igx-live-barline, #cerc-panel, #ciw-settings-overlay, #ciw-selection-bar, [data-cmu-sce-root], input, textarea, select, [contenteditable="true"]`);
     }
     function bindCmuMenuSwipeZone(zone) {
         if (!(zone instanceof HTMLElement))
@@ -8981,6 +9084,11 @@
         if (['memoryUi', 'userNoteUi', 'memoryDraftOverflow', 'enabled'].includes(key)) scheduleCmuMemoryUi();
         if (key === 'enabled')
             scheduleInject('setting-enabled');
+        if (key === 'shortcutEditor' || key === 'enabled') CMU_SHORTCUT_EDITOR.sync();
+        if (['keyboardComposerAssist', 'keyboardComposerOffset', 'keyboardComposerMode', 'keyboardComposerMotionGuard', 'enabled'].includes(key)) CMU_KEYBOARD_COMPOSER.sync();
+        CMU_TEXT_TOOLS.sync();
+        if (['settingsPalette', 'settingsTabLabels'].includes(key)) renderSettingsPanel();
+        if (['nativeModelFilter', 'outputModelSync', 'outputModelFilter', 'enabled'].includes(key)) omfScanOpenDialogs();
         if (key === 'emptySendGuard')
             scheduleEmptySendGuardUiUpdate();
         if (key === 'inputCharacterCounter') {
@@ -9090,13 +9198,14 @@
         ['deducted', '차감']
     ];
     const SIDE_PART_LABELS = [
-        ['modelButton', '모델'], ['themeButton', '라이트/다크'], ['episodeModeButton', '소설/채팅'], ['guideButton', '가이드'], ['profileButton', '프로필'], ['profileBoxButton', '프로필 박스'], ['noteButton', '노트'],
+        ['modelButton', '모델'], ['themeButton', '라이트/다크'], ['episodeModeButton', '소설/채팅'], ['inputWrapperButton', '글 감싸기'], ['guideButton', '가이드'], ['profileButton', '프로필'], ['profileBoxButton', '프로필 박스'], ['noteButton', '노트'],
         ['outputButton', '출력'], ['summaryButton', '요약'], ['imageButton', '이미지'], ['archiveButton', '보관함'],
         ['roomBackgroundButton', '이미지 테마'], ['scenePainterButton', '모바일 삽화'], ['wishManagerButton', 'Wish RP'], ['sceneBlurButton', 'CSP 테마'],
-        ['startButton', '시작'], ['loreButton', '로어'], ['translatorButton', '번역'], ['aiSummaryButton', 'AI 요약'], ['gameHudButton', '게임 HUD']
+        ['startButton', '시작'], ['loreButton', '로어'], ['translatorButton', '번역'], ['aiSummaryButton', 'AI 요약'], ['aiWriterButton', 'AI 답변'], ['gameHudButton', '게임 HUD']
     ];
     const SIDE_PART_ICON_KEYS = Object.freeze({
         modelButton: 'model',
+        inputWrapperButton: 'inputWrapper',
         guideButton: 'guide',
         profileButton: 'profile',
         profileBoxButton: 'profileBox',
@@ -9113,6 +9222,7 @@
         loreButton: 'lore',
         translatorButton: 'translator',
         aiSummaryButton: 'aiSummary',
+        aiWriterButton: 'aiWriter',
         gameHudButton: 'gameHud',
     });
     function sidePartSettingIcon(key) {
@@ -9303,11 +9413,33 @@
         ${qSwitch('emptySendGuard', '빈 메시지 전송 막기')}
       `)}
 
+      <div class="sec">키보드</div>
+      ${qCard(qSwitch('keyboardComposerAssist', '키보드 입력창 위치 보정', '기본 OFF · 키보드 위에 입력창을 맞추고 마지막 대화가 그 위에 보이도록 함께 조절'))}
+      ${qCard(qSwitch('keyboardComposerMotionGuard', '키보드 전환 화면 유지', '키보드가 열리는 동안 직전 화면을 잠깐 유지해요. 검게 가리지 않고, 안정되면 입력 화면으로 전환해요.'))}
+      ${cmuKeyboardOffsetCard()}
+      ${cmuKeyboardDiagnosticCard()}
+
+      <div class="sec">글쓰기 도구</div>
+      ${qCard(`
+        ${qSwitch('inputWrapper', '선택한 글 감싸기', '따옴표·괄호·마크다운을 선택한 글 양쪽에 넣어요.')}
+        <div class="subrow"><div class="lbl">감싸기 도구 편집<div class="note">기호 추가 · 순서 변경 · 선택 유지 설정</div></div><button type="button" class="cmu-action-btn" data-action="wrapper-settings">도구 편집</button></div>
+        ${qSwitch('selectionTextCounter', '선택 글자수 표시', '선택한 부분의 글자수를 화면 아래에 작게 표시해요.')}
+      `)}
+      <div class="sec">단축어</div>
+      ${qCard(qSwitch('shortcutEditor', '단축어 편집기', '/ 창에서 체크박스 · 전체 선택 · 내 단축어 선택 삭제'))}
+
       <div class="sec">채팅창 임시 저장</div>
       ${qCard(qSwitch('draftAutoSave', '입력창 초안 자동 저장', '채팅방별 저장 · 빈 입력창에만 복구 · 전송 확인 후 삭제'))}
 
       <div class="sec">알림</div>
       ${qCard(qSwitch('hideEndingHint', '엔딩 힌트/알림 점 숨기기'))}
+      <div class="sec">설정창 모양</div>
+      ${qCard(`
+        ${qChoice('q-panel-palette', 'settingsPalette', '색상', [
+          {value:'light',label:'민트 라이트'}, {value:'dark',label:'차분한 다크'}, {value:'auto',label:'화면에 맞춤'}
+        ], settings.settingsPalette || 'light')}
+        ${qSwitch('settingsTabLabels', '메뉴 이름 표시', '끄면 메뉴를 아이콘으로 간단히 표시해요.')}
+      `)}
     `);
     }
     // Adapted from 혀노's 답변 길이 및 생각 조절 2열 배치 1.0.0.
@@ -9834,6 +9966,13 @@
 
     function renderSettingsMessagePage() {
         return qPage('message', `
+      <div class="sec">읽기와 편집</div>
+      ${qCard(`
+        ${qSwitch('messageWordWrap', '단어 단위 줄바꿈', '긴 단어는 화면 폭에 맞춰 줄바꿈해요.')}
+        ${qSwitch('messageDoubleClickEdit', '두 번 눌러 수정', '메시지 본문을 빠르게 두 번 누르면 수정창을 열어요.')}
+        ${qSwitch('editPasteFix', '붙여넣기 줄바꿈 보존', '수정창에 여러 줄을 붙여넣을 때 빈 줄이 늘어나지 않게 해요.')}
+        ${qSwitch('editTextCleaner', '수정창 단어 정리', '수정 완료 옆에서 치환·삭제 · 미리보기 · 되돌리기')}
+      `)}
       <div class="sec">메시지 길게 누르기</div>
       ${qCard(qSwitch('messageLongPressMenu', '길게 누르기 메뉴', '말풍선을 약 0.4초 누르면 메시지 메뉴 표시'))}
 
@@ -9879,7 +10018,7 @@
         ['profileBoxButton', '프로필 박스'], ['roomBackgroundButton', '일반 이미지 테마'],
         ['scenePainterButton', '모바일 Scene Painter'], ['wishManagerButton', 'Wish RP / Core'],
         ['sceneBlurButton', 'CSP 테마'], ['loreButton', '에리 로어'],
-        ['translatorButton', '초월 번역기'], ['aiSummaryButton', 'AI 요약'], ['gameHudButton', '게임 HUD'],
+        ['translatorButton', '초월 번역기'], ['aiSummaryButton', 'AI 요약'], ['aiWriterButton', 'AI 답변'], ['gameHudButton', '게임 HUD'],
     ];
     function renderUnavailableIntegrations() {
         const availability = refreshSideAvailability();
@@ -9961,6 +10100,7 @@
       <div class="sec">답변 길이 · 생각 조절</div>
       ${qCard(`
         ${qSwitch('outputLayout', '답변 길이·생각 조절 UI 개선', '모델 하나만 펼치기 · 길이/생각 나란히 · 작은 조절창')}
+        ${qSwitch('outputModelSync', '모델 숨김 연동', '모델 메뉴에서 숨긴 항목을 여기에서도 숨겨요.', { dep: 'outputModelFilter' })}
         ${qSwitch('outputModelFilter', '표시할 모델 필터', '체크 해제한 모델만 숨김 · 새 모델은 자동 표시', { group: 'g-omf' })}
         ${outputModelList}
       `)}
@@ -10016,13 +10156,13 @@
         if (String(cmuSettingsQuery || '').trim())
             cmuSettingsSearchOpen = true;
         const searchOpen = !!cmuSettingsSearchOpen;
+        cmuApplySettingsPalette(panel);
         panel.innerHTML = `
       <div class="cmu-panel-grab" aria-hidden="true"></div>
       <div class="cmu-panel-head${searchOpen ? ' cmu-s-open' : ''}">
-        <div class="cmu-panel-title">모바일 유틸 설정</div>
+        <div class="cmu-panel-title"><span class="cmu-panel-eyebrow">CMU · ${VERSION}</span>모바일 유틸 설정</div>
         ${renderCmuSearchBar()}
         <div class="cmu-panel-actions">
-          <button class="cmu-panel-icon-btn" data-action="tab-label-toggle" type="button" title="${showLabel ? '탭 이름 숨기기' : '탭 이름 보이기'}" aria-label="탭 표시 전환">${showLabel ? CMU_TAB_LABEL_ICON : CMU_TAB_ICONONLY_ICON}</button>
           <button class="cmu-panel-icon-btn" data-action="api-open" type="button" title="API 키 보관함" aria-label="API 키 보관함">${CMU_KEY_ICON}</button>
           <button class="cmu-panel-icon-btn${searchOpen ? ' on' : ''}" data-action="search-toggle" type="button" title="설정 검색" aria-label="설정 검색" aria-expanded="${searchOpen ? 'true' : 'false'}">${CMU_SEARCH_ICON}</button>
           <button class="cmu-panel-close" data-action="close" type="button" aria-label="닫기">×</button>
@@ -10091,6 +10231,33 @@
                     return true;
                 }
                 copyTextToClipboard(value).then(ok => showToast(ok ? 'API 키 복사됨' : '복사 실패'));
+                return true;
+            }
+            if (action === 'wrapper-settings') {
+                if (!settings.inputWrapper) { showToast('선택한 글 감싸기를 먼저 켜 주세요.'); return true; }
+                toggleSettingsPanel(false);
+                setTimeout(() => CMU_TEXT_TOOLS.wrapper?.open(), 260);
+                return true;
+            }
+            if (action === 'q-panel-palette') {
+                const value = String(key || '').split('::')[1];
+                if (['light', 'dark', 'auto'].includes(value)) setSettingFromQ('settingsPalette', value);
+                return true;
+            }
+            if (action === 'keyboard-mode') {
+                cmuSetKeyboardMode(panel, target.dataset.mode);
+                return true;
+            }
+            if (action === 'keyboard-offset-step') {
+                cmuStepKeyboardOffset(panel, Number(target.dataset.delta) || 0);
+                return true;
+            }
+            if (action === 'keyboard-offset-save' || action === 'keyboard-offset-reset') {
+                cmuSaveKeyboardOffset(panel, action === 'keyboard-offset-reset');
+                return true;
+            }
+            if (action === 'keyboard-diagnostics') {
+                cmuCopyKeyboardDiagnostics(panel);
                 return true;
             }
             if (action === 'q-tab') {
@@ -11472,6 +11639,7 @@
         modelButton: true,
         themeButton: true,
         episodeModeButton: true,
+        inputWrapperButton: true,
 
         guideButton: true,
         profileButton: true,
@@ -11490,6 +11658,7 @@
         loreButton: true,
         translatorButton: true,
         aiSummaryButton: true,
+        aiWriterButton: true,
         gameHudButton: true,
     };
     const DASH_SIDE = {
@@ -11545,6 +11714,8 @@
         catch (_) { }
     }
     const SIDE_ICON = {
+        inputWrapper: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 7-5 5 5 5m10-10 5 5-5 5M14 4l-4 16"/></svg>',
+        aiWriter: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 17-1 4 4-1L20 7l-3-3Z"/><path d="m14 7 3 3M4 5h6M4 9h4"/></svg>',
         model: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 3.5 6.5v11L12 22l8.5-4.5v-11L12 2Zm0 2.2 5.9 3.1L12 10.4 6.1 7.3 12 4.2ZM5.5 9l5.5 2.9v7.2l-5.5-2.9V9Zm13 0v7.2L13 19.1v-7.2L18.5 9Z"/></svg>',
         guide: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg>',
         profile: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 22c1.8-4 4.4-6 8-6s6.2 2 8 6"/></svg>',
@@ -11566,7 +11737,7 @@
         wishManager: '<svg class="chud-btn-icon chud-wish-heart-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21.35 10.55 20.03C5.4 15.36 2 12.27 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.77-3.4 6.86-8.55 11.54L12 21.35Z"/></svg>',
     };
     function isOwnElement(el) {
-        return !!el?.closest?.(`#${ID.panel}, #${ID.toolbarWrapper}, #chud-infobar, #chud-sidebar, #chud-info-menu, #chud-side-menu, #igx-live-popup, #cmu-compact-model-menu, #rpcm-overlay, #csp-v35-root`);
+        return !!el?.closest?.(`#${ID.panel}, #${ID.toolbarWrapper}, #chud-infobar, #chud-sidebar, #chud-info-menu, #chud-side-menu, #igx-live-popup, #cmu-compact-model-menu, #cerc-panel, #ciw-settings-overlay, #ciw-selection-bar, #ciw-toolbar-wrapper, #rpcm-overlay, #csp-v35-root`);
     }
     function fireClickSequence(el) {
         if (!el)
@@ -12145,6 +12316,7 @@
             modelButton: true,
             themeButton: true,
             episodeModeButton: true,
+            inputWrapperButton: true,
 
             guideButton: true,
             profileButton: true,
@@ -12156,6 +12328,7 @@
             loreButton: isLoreToolsInstalledLite(),
             translatorButton: isTranslatorInstalledLite(),
             aiSummaryButton: isAiSummaryInstalledLite(),
+            aiWriterButton: cmuAiWriterInstalled(),
             gameHudButton: isGameHudInstalledLite(),
             scenePainterButton: isMobileScenePainterInstalledLite(),
             wishManagerButton: isWishRpManagerInstalledLite(),
@@ -14204,6 +14377,7 @@
                 themeButton: makeSideButton('themeButton', 'chud-theme-btn', '라이트/다크 테마 전환', QUICK_MODE_ICON.light, toggleQuickTheme),
                 episodeModeButton: makeSideButton('episodeModeButton', 'chud-episode-mode-btn', '소설형/채팅형 전환', QUICK_MODE_ICON.novel, toggleQuickEpisodeMode),
 
+                inputWrapperButton: makeSideButton('inputWrapperButton', 'chud-input-wrapper-btn', '글 감싸기 도구 설정', SIDE_ICON.inputWrapper, () => CMU_TEXT_TOOLS.wrapper?.open()),
                 guideButton: makeSideButton('guideButton', 'chud-guide-btn', '플레이 가이드', SIDE_ICON.guide, () => clickFirst([/플레이\s*가이드/, /가이드/], '플레이 가이드')),
                 profileButton: makeSideButton('profileButton', 'chud-native-profile-btn', '크랙 기본 프로필', SIDE_ICON.profile, () => clickFirst([/대화\s*프로필/, /프로필/], '대화 프로필')),
                 profileBoxButton: makeSideButton('profileBoxButton', 'chud-profile-box-btn', '프로필 박스', SIDE_ICON.profileBox, openProfileBoxLite),
@@ -14220,6 +14394,7 @@
                 loreButton: makeSideButton('loreButton', 'chud-lore-btn', '에리 로어', SIDE_ICON.lore, openLoreToolsLite),
                 translatorButton: makeSideButton('translatorButton', 'chud-translator-btn', '초월 번역기', SIDE_ICON.translator, openTranslatorLite),
                 aiSummaryButton: makeSideButton('aiSummaryButton', 'chud-ai-summary-btn', 'AI 요약', SIDE_ICON.aiSummary, openAiSummaryLite),
+                aiWriterButton: makeSideButton('aiWriterButton', 'chud-ai-writer-btn', 'AI 답변 설정', SIDE_ICON.aiWriter, cmuOpenAiWriter),
                 gameHudButton: makeSideButton('gameHudButton', 'chud-game-hud-btn', '게임 HUD', SIDE_ICON.gameHud, openGameHudLite),
             };
             // Profile Box 1.2.x는 기존 프로필 버튼을 외부 런처로 가로채므로,
@@ -14227,7 +14402,7 @@
             buttons.profileButton.dataset.sideKey = 'nativeProfileButton';
             buttons.profileBoxButton.dataset.cpmExternalProfileLauncher = 'true';
             DASH_SIDE.btns = buttons;
-            content.append(buttons.modelButton, buttons.themeButton, buttons.episodeModeButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.gameHudButton);
+            content.append(buttons.modelButton, buttons.themeButton, buttons.episodeModeButton, buttons.inputWrapperButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.aiWriterButton, buttons.gameHudButton);
             bar.append(content);
         }
         if (bar.parentElement !== shell)
@@ -14251,9 +14426,10 @@
         Object.entries(DASH_SIDE.btns || {}).forEach(([key, btn]) => {
             if (!btn)
                 return;
-            const isAvailable = available[key] !== false;
+            const isAvailable = available[key] !== false && (key !== 'inputWrapperButton' || cmuTextToolEnabled('inputWrapper'));
             const isUserVisible = visible[key] !== false;
-            btn.style.display = (isAvailable && isUserVisible) ? 'inline-flex' : 'none';
+            const display = (isAvailable && isUserVisible) ? 'inline-flex' : 'none';
+            if (btn.style.display !== display) btn.style.display = display;
         });
         DASH_SIDE.menu?.querySelectorAll('.chud-menu-row[data-part], .chud-menu-row').forEach(row => {
             const input = row.querySelector?.('input[data-part]');
@@ -16118,6 +16294,7 @@
         apiPromise: null,
         resultCache: new Map(),
         missCache: new Map(),
+        editing: new Map(), retry: new Map(),
     };
     function resetBadgeCacheIfNeeded() {
         const key = location.origin + location.pathname + location.search;
@@ -16131,6 +16308,9 @@
         BADGE.apiPromise = null;
         BADGE.resultCache.clear();
         BADGE.missCache.clear();
+        BADGE.editing.clear();
+        for (const retry of BADGE.retry.values()) clearTimeout(retry.timer);
+        BADGE.retry.clear();
     }
     function anyBadgeEnabled() {
         return !!(settings.badgeChars || settings.badgeTime);
@@ -16277,6 +16457,7 @@
                     const ordered = variants.sort((a, b) => (idMap.get(messageIdOf(b))?.index ?? 0) - (idMap.get(messageIdOf(a))?.index ?? 0));
                     return enrichWithMsg(fallback, ordered[compare.current - 1], 'api-current-reroll');
                 }
+                return { ...enrichWithMsg(fallback, anchor, 'api-message'), provisional: true };
             }
             return enrichWithMsg(fallback, anchor, 'api-message');
         }
@@ -16410,6 +16591,17 @@
         BADGE.forcePromise = task;
         return task;
     }
+    function cmuBadgeRetryLater(group, key) {
+        const previous = BADGE.retry.get(key) || { count: 0, timer: 0 };
+        if (previous.timer || previous.count >= 5) return;
+        const generation = BADGE.generation, chatId = getChatId();
+        previous.timer = setTimeout(() => {
+            previous.timer = 0;
+            if (!shouldRun() || !group.isConnected || getChatId() !== chatId || generation !== BADGE.generation || makeBadgeCacheKey(group) !== key) return;
+            processBadgeGroup(group);
+        }, Math.min(30000, 1600 * (2 ** previous.count++)));
+        BADGE.retry.set(key, previous);
+    }
     function processBadgeGroup(group) {
         if (!group || !group.matches?.(BADGE.selector))
             return;
@@ -16420,8 +16612,23 @@
             return;
         }
         resetBadgeCacheIfNeeded();
+        const groupId = groupMessageId(group), chatId = getChatId();
+        if (group.querySelector('[contenteditable="true"].ProseMirror, [contenteditable="true"][data-history-hooked]')) {
+            if (!BADGE.editing.has(groupId)) BADGE.editing.set(groupId, cmuRoomData(chatId).revision);
+            return;
+        }
+        if (BADGE.editing.has(groupId)) {
+            const revision = BADGE.editing.get(groupId);
+            BADGE.editing.delete(groupId);
+            setTimeout(async () => {
+                if (!shouldRun() || !group.isConnected || getChatId() !== chatId) return;
+                if (cmuRoomData(chatId).revision === revision) await refreshBadgeApiCacheThrottled().catch(() => null);
+                for (const key of BADGE.resultCache.keys()) if (key === groupId || key.startsWith(groupId + ':')) BADGE.resultCache.delete(key);
+                processBadgeGroup(group);
+            }, 1500);
+            return;
+        }
         const generation = BADGE.generation;
-        const chatId = getChatId();
         const key = makeBadgeCacheKey(group);
         const isCurrent = () => shouldRun() && group.isConnected && generation === BADGE.generation && getChatId() === chatId && makeBadgeCacheKey(group) === key;
         if (!key)
@@ -16442,12 +16649,12 @@
             if (!isCurrent())
                 return;
             const gotChars = typeof resolved?.charCount === 'number' && Number.isFinite(resolved.charCount);
-            if (!settings.badgeChars || gotChars || resolved?.apiFinalMiss)
+            if (!resolved?.provisional && (!settings.badgeChars || gotChars || resolved?.apiFinalMiss))
                 BADGE.resultCache.set(key, resolved);
             setBadge(group, resolved);
             setModelIcon(group, resolved);
             cacSetAnswerCost(group, resolved);
-            if (settings.badgeChars && !gotChars && !resolved?.apiFinalMiss && group.isConnected) {
+            if ((resolved?.provisional || (settings.badgeChars && !gotChars)) && !resolved?.apiFinalMiss && group.isConnected) {
                 refreshBadgeApiCacheThrottled()
                     .then(() => {
                     if (!isCurrent() || BADGE.resultCache.has(key))
@@ -16458,8 +16665,9 @@
                     if (!retryResolved || !isCurrent())
                         return;
                     const retryGotChars = typeof retryResolved?.charCount === 'number' && Number.isFinite(retryResolved.charCount);
-                    if (!settings.badgeChars || retryGotChars || retryResolved?.apiFinalMiss)
+                    if (!retryResolved?.provisional && (!settings.badgeChars || retryGotChars || retryResolved?.apiFinalMiss))
                         BADGE.resultCache.set(key, retryResolved);
+                    else if (retryResolved?.provisional) cmuBadgeRetryLater(group, key);
                     setBadge(group, retryResolved);
                     setModelIcon(group, retryResolved);
                     cacSetAnswerCost(group, retryResolved);
@@ -17156,6 +17364,14 @@
             return [];
         }
     }
+    function omfEffectiveHidden() {
+        const hidden = new Set(omfLoadHidden());
+        if (settings.outputModelSync && settings.nativeModelFilter) {
+            const visibility = nmfLoadVis();
+            for (const {token, label} of nmfModelEntries()) if (visibility[token] === false) hidden.add(label);
+        }
+        return hidden;
+    }
     function omfSaveHidden(values) {
         try {
             localStorage.setItem(LS.outputModelHidden, JSON.stringify(Array.from(new Set(values || [])).filter(Boolean)));
@@ -17255,8 +17471,7 @@
         const header = Array.from(dialog.children).find(child =>
             child instanceof HTMLElement && child.querySelector('h2') && omfFindHelpButton(child)
         );
-        if (!(header instanceof HTMLElement))
-            return null;
+        if (!cmuOutputDialogMatches(dialog)) return null;
         return { dialog, header, ...accordion };
     }
     function omfApplyContext(context) {
@@ -17272,9 +17487,10 @@
         const previousSeen = omfLoadSeen();
         if (names.length !== previousSeen.length || names.some((name, index) => name !== previousSeen[index]))
             omfSaveSeen(names);
-        const hidden = new Set(omfLoadHidden());
+        const hidden = omfEffectiveHidden();
         for (const entry of context.entries) {
-            entry.item.classList.toggle(OMF_HIDDEN_CLASS, !!settings.outputModelFilter && hidden.has(entry.name));
+            const shouldHide = shouldRun() && settings.enabled !== false && !!settings.outputModelFilter && hidden.has(entry.name);
+            if (entry.item.classList.contains(OMF_HIDDEN_CLASS) !== shouldHide) entry.item.classList.toggle(OMF_HIDDEN_CLASS, shouldHide);
         }
         return true;
     }
@@ -17291,7 +17507,7 @@
             if (context && omfApplyContext(context))
                 found = true;
         }
-        if (!settings.outputModelFilter) {
+        if (!shouldRun() || settings.enabled === false || !settings.outputModelFilter) {
             document.querySelectorAll(`.${OMF_HIDDEN_CLASS}`).forEach(el => el.classList.remove(OMF_HIDDEN_CLASS));
         }
         return found;
@@ -17325,6 +17541,7 @@
             localStorage.setItem(LS.nativeModelVis, JSON.stringify(v || {}));
         }
         catch (_) { }
+        omfScanOpenDialogs();
     }
     function nmfLoadSeen() {
         try {
@@ -19143,7 +19360,7 @@
         if (!late)
             scheduleBadgeScan();
     }
-    const CMU_SELF_SELECTOR = `#${ID.panel}, #${ID.toolbarWrapper}, #${ID.topZone}, #${ID.leftMenuZone}, #${ID.rightMenuZone}, #${ID.menuSwipeZone}, #${ID.toast}, #${ID.dashboard}, #${ID.dashboardSidebar}, #${ID.logCaptureBar}, #${ID.logCapturePreview}, #${ID.inputCounterWrap}, #chud-info-menu, #chud-side-menu, #igx-live-popup, #cmu-compact-model-menu, .cmi-model-badge, .cmi-model-slot, .cac-answer-cost, #cmu-message-select-copy, .cmu-message-badge, .cmu-user-badge-row`;
+    const CMU_SELF_SELECTOR = `#${ID.panel}, #${ID.toolbarWrapper}, #${ID.topZone}, #${ID.leftMenuZone}, #${ID.rightMenuZone}, #${ID.menuSwipeZone}, #${ID.toast}, #${ID.dashboard}, #${ID.dashboardSidebar}, #${ID.logCaptureBar}, #${ID.logCapturePreview}, #${ID.inputCounterWrap}, #chud-info-menu, #chud-side-menu, #igx-live-popup, #cmu-compact-model-menu, .cmi-model-badge, .cmi-model-slot, .cac-answer-cost, #cmu-message-select-copy, .cmu-message-badge, .cmu-user-badge-row, .cmu-sce-ui, #cerc-panel, [data-cerc-trigger], #ciw-toolbar-wrapper, #ciw-selection-bar, #ciw-settings-overlay, #ciw-toast, #crack-selection-text-counter-popup`;
     function isSelfMutation(m) {
         const el = m.target instanceof Element ? m.target : m.target?.parentElement;
         return !!el?.closest?.(CMU_SELF_SELECTOR);
@@ -19326,6 +19543,7 @@
             scheduleComposerExpandSync();
             scheduleCmuInputCounterSync();
             scheduleEmptySendGuardUiUpdate();
+            CMU_KEYBOARD_COMPOSER.schedule();
         }
         if (inlineDirty)
             ensureInlineBlocks(input || findChatInput());
@@ -20438,6 +20656,10 @@
         if (routeKey === location.href)
             return;
         routeKey = location.href;
+        CMU_SHORTCUT_EDITOR.sync();
+        CMU_KEYBOARD_COMPOSER.reset();
+        CMU_KEYBOARD_COMPOSER.schedule();
+        CMU_TEXT_TOOLS.reset(); CMU_TEXT_TOOLS.sync();
         cmuAbortOtherRooms();
         CMU_DOM_WATCH.roomPanelMissUntil = 0;
         CMU_DOM_WATCH.roomPanelSearchRoot = null;
@@ -20542,6 +20764,5938 @@
         if (!insidePanel && !insideButton && !recentPanelAction)
             toggleSettingsPanel(false);
     }, true);
+    // 4.5.5.9 — one selector per native row; resume native deletion across popup remounts.
+    // No guessed API endpoints, tokens, local hiding, or message deletion. All writes
+    // go through the selected shortcut's own native menu, after explicit confirmation.
+    function cmuCreateShortcutEditor(options) {
+        const OWN = '.cmu-sce-ui';
+        const EXCLUDE = '[data-message-group-id], .wrtn-markdown, #cmu-settings-panel, #chud-sidebar, #chud-infobar';
+        const TABS = ['전체', '제작자 단축어', '내 단축어', '단축어 허브'];
+        const S = { enabled: false, root: null, footer: null, entry: null, bar: null, dock: null, add: null,
+            editing: false, busy: false, stop: false, nativeAction: false, epoch: 0, route: '', timer: 0,
+            observer: null, records: new Map(), selected: new Set(), rows: new Map(),
+            tab: '', full: false, message: '', style: null, pending: new Map(), listeners: [], discoverUntil: 0, batchInput: null };
+        const norm = text => String(text || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+        const compact = text => norm(text).replace(/\s/g, '');
+        const elOf = node => node instanceof Element ? node : node?.parentElement;
+        const visible = el => !!(el?.isConnected && el.getClientRects().length &&
+            getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden');
+        const own = node => !!elOf(node)?.closest(OWN);
+        const setText = (el, text) => { if (el && el.textContent !== text) el.textContent = text; };
+        const allowed = () => S.enabled && options.enabled();
+        const route = () => location.pathname;
+        const listen = (el, type, fn, opts = false) => {
+            el.addEventListener(type, fn, opts); S.listeners.push([el, type, fn, opts]);
+        };
+        const pause = ms => new Promise(resolve => {
+            const timer = window.setTimeout(() => { S.pending.delete(timer); resolve(); }, ms);
+            S.pending.set(timer, resolve);
+        });
+        const check = token => {
+            if (!allowed() || token !== S.epoch || route() !== S.route || S.stop)
+                throw new Error('작업을 중단했어요. 아직 처리하지 않은 단축어는 그대로 남겨뒀어요.');
+            if (S.batchInput && composerText(chatComposer()) !== S.batchInput.text)
+                throw new Error('입력 내용이 바뀌어 삭제 작업을 멈췄어요.');
+        };
+        const ui = (tag, cls, text = '') => {
+            const el = document.createElement(tag); el.className = `cmu-sce-ui ${cls}`;
+            if (text) el.textContent = text;
+            return el;
+        };
+        const button = (action, text) => {
+            const el = ui('button', 'cmu-sce-button', text);
+            el.type = 'button'; el.dataset.cmuSceAction = action; return el;
+        };
+        function nativeActivate(el, fn) {
+            S.nativeAction = true;
+            try { if (fn) fn(); else el.click(); }
+            finally { S.nativeAction = false; }
+        }
+        function exactControls(root, pattern) {
+            return [...root.querySelectorAll('button, [role="button"], [role="menuitem"], [role="tab"], a, span, p, div')]
+                .filter(el => !own(el) && !el.closest(EXCLUDE) && pattern.test(norm(el.textContent)) &&
+                    ![...el.children].some(child => pattern.test(norm(child.textContent))));
+        }
+        function actionable(el) {
+            return el?.closest('button, [role="button"], [role="menuitem"], [role="tab"], a') || el;
+        }
+        function labelText(el) {
+            // CSS gaps are not text spaces; SVG titles are not control captions.
+            // Neither should decide whether the real shortcut popup exists.
+            let text = '';
+            const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+                acceptNode(node) {
+                    const p = node.parentElement;
+                    return !p || own(p) || p.closest('svg,script,style,[aria-hidden="true"]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+                }
+            });
+            while (walker.nextNode()) text += walker.currentNode.nodeValue;
+            return compact(text);
+        }
+        function popupLabels(root, captions) {
+            const accepted = new Set(captions.map(compact));
+            return [...root.querySelectorAll('button,[role="tab"],[role="button"],a,span,p,div,label,strong,b')]
+                .filter(el => !own(el) && !el.closest(EXCLUDE) && el.textContent.length < 200 && accepted.has(labelText(el)))
+                .filter(el => ![...el.children].some(child => accepted.has(labelText(child))))
+                .map(el => {
+                    const control = actionable(el);
+                    if (control && root.contains(control)) return control;
+                    return el;
+                });
+        }
+        function inspectRoot(root) {
+            const labels = popupLabels(root, TABS);
+            const names = new Set(labels.map(labelText));
+            if (!names.has('내단축어') || !names.has('제작자단축어')) return null;
+            const adds = popupLabels(root, ['단축어 추가', '+ 단축어 추가', '＋ 단축어 추가']);
+            const add = adds.find(el => root.contains(el) && el !== root &&
+                (visible(el) || el === S.add || el.hasAttribute('data-cmu-sce-add'))) || null;
+            const rect = root.getBoundingClientRect();
+            const rects = labels.map(el => el.getBoundingClientRect()).filter(r => r.width && r.height);
+            const tabTop = rects.length ? Math.min(...rects.map(r => r.top)) : rect.top;
+            const tabBottom = rects.length ? Math.max(...rects.map(r => r.bottom)) : rect.top;
+            // Exclude the tab strip itself, but do not require an Add button or a known URL.
+            if (rect.width < 150 || rect.height < 55 || (!add && rect.height < tabBottom - tabTop + 25)) return null;
+            if (root.querySelector('textarea,[contenteditable="true"],[contenteditable="plaintext-only"]')) return null;
+            return { root, add, footer: add?.parentElement || null };
+        }
+        function findRoot() {
+            const tabs = [...new Set(popupLabels(document, ['내 단축어']))].filter(visible);
+            for (const tab of tabs) {
+                let node = tab.parentElement;
+                for (let level = 0; node && level < 20; level++, node = node.parentElement) {
+                    if (node.matches('body, html, main') || node.closest(EXCLUDE)) break;
+                    if (!visible(node)) continue;
+                    const found = inspectRoot(node);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+        function activeTab(root) {
+            for (const leaf of popupLabels(root, TABS)) {
+                const el = actionable(leaf);
+                if (el?.getAttribute('aria-selected') === 'true' || el?.getAttribute('data-state') === 'active' ||
+                    leaf.getAttribute('aria-selected') === 'true' || leaf.getAttribute('data-state') === 'active')
+                    return TABS.find(text => compact(text) === labelText(leaf)) || '';
+            }
+            return '';
+        }
+        function menuTriggers(row, title) {
+            const candidates = [...row.querySelectorAll('button, [role="button"], [aria-haspopup="menu"], [tabindex], [aria-label], [title], svg, span, div')]
+                .filter(el => !own(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true')
+                .map(el => {
+                    const t = norm(el.textContent), label = `${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''} ${el.getAttribute('data-testid') || ''} ${el.getAttribute('class') || ''}`;
+                    let score = el.getAttribute('aria-haspopup') === 'menu' ? 20 : 0;
+                    if (/더\s*보기|옵션|메뉴|more|ellipsis/i.test(label)) score += 12;
+                    if (/^(?:\.{3}|…|⋯)$/.test(t)) score += 12;
+                    const svg = el.matches('svg') ? el : el.querySelector('svg');
+                    if (svg && (!t || /^(?:\.{3}|…|⋯)$/.test(t)) && svg.querySelectorAll('circle').length === 3) score += 8;
+                    if (el.contains(title) || /고정|해제|pin|복사|copy|수정|삭제/i.test(label)) score -= 50;
+                    const control = el.closest('button,[role="button"],[aria-haspopup="menu"],[tabindex]');
+                    let target = control && row.contains(control) && !control.contains(title) ? control : el.matches('svg') ? el.parentElement : el;
+                    if (!control) {
+                        while (target.parentElement && target.parentElement !== row && !target.parentElement.contains(title) &&
+                            /^(?:\.{3}|…|⋯)?$/.test(norm(target.parentElement.textContent)) && target.parentElement.getBoundingClientRect().width < 90)
+                            target = target.parentElement;
+                    }
+                    return { el: target,
+                        score, x: el.getBoundingClientRect().left };
+                }).filter(x => x.score >= 2).sort((a, b) => b.score - a.score || b.x - a.x);
+            return [...new Set(candidates.map(x => x.el))];
+        }
+        function commandTitles(root) {
+            // React may render '/', a text node and the name span separately.
+            // Read their common title element instead of requiring '/name' in one node.
+            const titles = new Map();
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+                acceptNode(node) {
+                    const p = node.parentElement;
+                    if (!p || own(p) || !visible(p) || p.closest('textarea,input,[contenteditable="true"],script,style,svg')) return NodeFilter.FILTER_REJECT;
+                    return /^[\/／]/.test(norm(node.nodeValue)) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                }
+            });
+            while (walker.nextNode()) {
+                let el = walker.currentNode.parentElement;
+                for (let level = 0; el && el !== root && level < 5; level++, el = el.parentElement) {
+                    if (own(el) || el.contains(S.footer) || el.querySelector('[role="tab"]')) break;
+                    const clone = el.cloneNode(true);
+                    clone.querySelectorAll(`${OWN}, svg, [aria-hidden="true"]`).forEach(x => x.remove());
+                    clone.querySelectorAll('span,small').forEach(x => {
+                        if (/^(나|제작자|허브)$/.test(norm(x.textContent))) x.remove();
+                    });
+                    const text = norm(clone.textContent).replace(/^[／]/, '/').replace(/^\/\s+/, '/').replace(/[📌📍]/gu, '').trim();
+                    if (text === '/') continue;
+                    if (/^\/[^\s/]/.test(text) && text.length <= 160) titles.set(el, text);
+                    break;
+                }
+            }
+            return [...titles].map(([title, name]) => ({ title, name }));
+        }
+        function fingerprint(row, name) {
+            const clone = row.cloneNode(true);
+            clone.querySelectorAll(`${OWN}, button, [role="button"], svg, [aria-hidden="true"]`).forEach(el => el.remove());
+            // The native menu may switch from All to My, where source badges disappear.
+            // A view-only badge must not change the identity of an item queued for deletion.
+            clone.querySelectorAll('span,small,div').forEach(el => {
+                if (/^(나|제작자|허브)$/.test(norm(el.textContent))) el.remove();
+            });
+            return JSON.stringify([name, norm(clone.textContent)]);
+        }
+        function readRows(root = S.root) {
+            if (!root?.isConnected) return [];
+            const titles = commandTitles(root);
+            const counts = new Map();
+            for (const { title } of titles) {
+                for (let el = title; el && el !== root; el = el.parentElement) counts.set(el, (counts.get(el) || 0) + 1);
+            }
+            const rows = new Map();
+            const inMyTab = (activeTab(root) || S.tab) === '내 단축어';
+            for (const seed of titles) {
+                const { title } = seed;
+                let row = title;
+                let chosen = null, fallback = null;
+                for (let level = 0; row && row !== root && level < 9; level++, row = row.parentElement) {
+                    if (row.contains(S.footer) || row.querySelector('[role="tab"]')) break;
+                    // Descriptions can also begin with '/'. Resolve the native item first,
+                    // then use only its first title; never decorate title/description lines separately.
+                    const triggers = menuTriggers(row, title);
+                    if (triggers.length > 1) break;
+                    if (triggers.length === 1) { chosen = row; break; }
+                    const parent = row.parentElement;
+                    const semantic = row.matches('[data-shortcut-id],[data-command-id],[role="option"],li');
+                    if (semantic) { chosen = row; break; }
+                    if (/auto|scroll|overlay/.test(getComputedStyle(row).overflowY)) break;
+                    const siblingRows = parent && [...parent.children].some(el => el !== row && counts.has(el));
+                    const listChild = parent && parent !== root && /auto|scroll|overlay/.test(getComputedStyle(parent).overflowY);
+                    if (listChild) { chosen = fallback && row.getBoundingClientRect().height > 240 ? fallback : row; break; }
+                    if (siblingRows && row.getBoundingClientRect().height >= 28) fallback = row;
+                }
+                row = chosen || fallback;
+                if (row && !rows.has(row)) {
+                    const primary = titles.find(candidate => row.contains(candidate.title));
+                    if (!primary) continue;
+                    const { title, name } = primary;
+                    const trigger = menuTriggers(row, title)[0] || null;
+                    // Badge "나" on the title line, or an explicitly selected native My tab.
+                    const tr = title.getBoundingClientRect();
+                    const isMine = inMyTab || [...row.querySelectorAll('span,small,div')].some(el => {
+                        if (own(el) || !visible(el) || norm(el.textContent) !== '나' || el.contains(title)) return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width < 80 && Math.abs(r.top - tr.top) < Math.max(22, tr.height);
+                    });
+                    const fp = fingerprint(row, name);
+                    const nativeId = row.getAttribute('data-shortcut-id') || row.getAttribute('data-command-id') || '';
+                    const key = nativeId ? `id:${nativeId}` : fp;
+                    rows.set(row, { key, row, title, trigger, name, fp, isMine, ambiguous: false });
+                }
+            }
+            const all = [...rows.values()].filter(item => ![...rows.keys()].some(other => other !== item.row && other.contains(item.row)));
+            for (const entry of all)
+                entry.ambiguous = all.filter(other => other.key === entry.key).length !== 1;
+            return all;
+        }
+        function absorb(entries) {
+            for (const item of entries) {
+                const previous = S.records.get(item.key);
+                if (previous && previous.fp !== item.fp) S.selected.delete(item.key);
+                S.records.set(item.key, { key: item.key, fp: item.fp, name: item.name,
+                    isMine: item.isMine, ambiguous: item.ambiguous });
+                if (!item.isMine || item.ambiguous) S.selected.delete(item.key);
+            }
+        }
+        function setMessage(text) { S.message = text; updateBar(); }
+        function updateBar() {
+            if (!S.bar) return;
+            const count = S.selected.size;
+            setText(S.bar.querySelector('.cmu-sce-count'), `단축어 편집 · ${count}개 선택`);
+            setText(S.bar.querySelector('.cmu-sce-message'), S.message ||
+                (S.rows.size ? '체크박스나 항목을 눌러 선택해요. 전체 선택은 아래쪽 항목도 확인해요.' :
+                    '인식한 항목이 없어요. 내 단축어 탭을 누르거나 / 창을 다시 열어 주세요.'));
+            for (const b of S.bar.querySelectorAll('button')) {
+                const a = b.dataset.cmuSceAction;
+                b.disabled = S.busy && a !== 'stop';
+                if (a === 'delete') { setText(b, `선택 삭제${count ? ` (${count})` : ''}`); b.disabled ||= !count; }
+                if (a === 'clear') b.disabled ||= !count;
+                if (a === 'stop') { b.hidden = !S.busy; b.disabled = S.stop; }
+                if (a === 'done') b.hidden = S.busy;
+            }
+            for (const [row, item] of S.rows) {
+                const box = row.querySelector(':scope > .cmu-sce-check');
+                if (!box) continue;
+                const checked = S.selected.has(item.key);
+                if (box.getAttribute('aria-checked') !== String(checked)) box.setAttribute('aria-checked', String(checked));
+                box.disabled = S.busy || !item.isMine || item.ambiguous;
+                setText(box.firstElementChild, checked ? '✓' : '');
+                row.classList.toggle('cmu-sce-selected', checked);
+            }
+        }
+        function undecorate(row) {
+            row.querySelectorAll(':scope > .cmu-sce-check').forEach(el => el.remove());
+            row.classList.remove('cmu-sce-row', 'cmu-sce-selected', 'cmu-sce-static');
+        }
+        function decorateRows(entries = readRows()) {
+            if (!S.editing || !S.root) return;
+            absorb(entries);
+            const next = new Set(entries.map(x => x.row));
+            for (const row of S.rows.keys()) if (!next.has(row)) undecorate(row);
+            S.rows = new Map(entries.map(x => [x.row, x]));
+            for (const item of entries) {
+                const { row } = item;
+                if (getComputedStyle(row).position === 'static') row.classList.add('cmu-sce-static');
+                if (!row.classList.contains('cmu-sce-row')) row.classList.add('cmu-sce-row');
+                let label = row.querySelector(':scope > .cmu-sce-check');
+                if (!label) {
+                    label = ui('button', 'cmu-sce-check'); label.type = 'button';
+                    label.setAttribute('role', 'checkbox');
+                    const mark = ui('span', 'cmu-sce-check-mark'); mark.setAttribute('aria-hidden', 'true');
+                    label.appendChild(mark); row.prepend(label);
+                }
+                const aria = `${item.name} 선택`;
+                if (label.getAttribute('aria-label') !== aria) label.setAttribute('aria-label', aria);
+                label.title = item.ambiguous ? '이름과 내용이 같은 항목은 개별 메뉴에서 확인해 주세요.' :
+                    item.isMine ? `${item.name} 선택` : '제작자·허브 단축어는 일괄 삭제 대상이 아니에요.';
+            }
+            updateBar();
+        }
+        function removeDecorations() {
+            S.root?.querySelectorAll('.cmu-sce-row').forEach(undecorate);
+            S.root?.classList.remove('cmu-sce-editing');
+            S.footer?.classList.remove('cmu-sce-footer-editing');
+            S.bar?.remove(); S.bar = null;
+            if (S.entry) S.entry.hidden = false;
+        }
+        function leave() {
+            S.epoch++; S.stop = true; S.editing = false; S.busy = false;
+            S.batchInput = null;
+            removeDecorations(); S.records.clear(); S.selected.clear(); S.rows.clear();
+            S.full = false; S.message = '';
+        }
+        function enter() {
+            if (!allowed() || !S.root) return;
+            S.editing = true; S.stop = false; S.route = route(); S.epoch++;
+            S.records.clear(); S.selected.clear(); S.full = false; S.message = '';
+            S.tab = activeTab(S.root);
+            S.root.classList.add('cmu-sce-editing');
+            mountBar();
+            decorateRows();
+        }
+        function mountBar() {
+            if (!S.entry?.isConnected) return;
+            if (S.footer !== S.root) S.footer?.classList.add('cmu-sce-footer-editing');
+            S.entry.hidden = true;
+            S.bar?.remove();
+            S.bar = ui('div', 'cmu-sce-bar');
+            const head = ui('div', 'cmu-sce-head');
+            head.append(ui('strong', 'cmu-sce-count'), button('done', '완료'), button('stop', '중단'));
+            const actions = ui('div', 'cmu-sce-actions');
+            actions.append(button('all', '전체 선택'), button('clear', '선택 해제'), button('delete', '선택 삭제'));
+            const status = ui('div', 'cmu-sce-message'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+            S.bar.append(head, actions, status); S.entry.before(S.bar);
+        }
+        function locateScroller() {
+            const entries = readRows();
+            let el = entries[0]?.row?.parentElement;
+            while (el && el !== S.root) {
+                const oy = getComputedStyle(el).overflowY;
+                if (/auto|scroll|overlay/.test(oy) && el.clientHeight > 40 && el.scrollHeight > el.clientHeight + 3) return el;
+                el = el.parentElement;
+            }
+            return [...(S.root?.querySelectorAll('div,ul,[role="listbox"]') || [])].find(el =>
+                !own(el) && /auto|scroll|overlay/.test(getComputedStyle(el).overflowY) && el.clientHeight > 40 && el.scrollHeight > el.clientHeight + 3 &&
+                entries.some(e => el.contains(e.row))) || null;
+        }
+        function nativeLoading() {
+            return [...(S.root?.querySelectorAll('[aria-busy="true"], [role="progressbar"]') || [])].some(el => !own(el) && visible(el));
+        }
+        // Scroll only the shortcut list. We never alter the chat editor, query, or page scroll.
+        async function scan(token, seekKey = '', restore = true, progress = null, allowEmpty = false) {
+            check(token);
+            const found = new Map(); let scroller = locateScroller();
+            const original = scroller?.scrollTop || 0;
+            let stableBottom = 0, lastHeight = -1, lastSignature = '', complete = false;
+            const until = Date.now() + 15000;
+            let lastProgress = Date.now(), lastPosition = -1, lastSize = -1;
+            const scrollTo = top => scroller?.scrollTo({ top, behavior: 'instant' });
+            try {
+                if (scroller) { scrollTo(0); await pause(100); }
+                for (let step = 0; step < 240 && Date.now() < until; step++) {
+                    check(token);
+                    if (!S.root?.isConnected || !visible(S.root)) throw new Error('단축어 창이 닫혀 작업을 멈췄어요. / 창을 다시 열어 주세요.');
+                    const entries = readRows();
+                    for (const item of entries) {
+                        if (found.has(item.key) && found.get(item.key).fp !== item.fp)
+                            item.ambiguous = true;
+                        found.set(item.key, item);
+                    }
+                    absorb(entries);
+                    if (progress) progress(found);
+                    decorateRows(entries);
+                    if (seekKey && entries.some(e => e.key === seekKey)) return { found, complete: false, match: entries.find(e => e.key === seekKey) };
+                    if (!entries.length && !found.size && !nativeLoading() && !seekKey && !allowEmpty) throw new Error('단축어 항목을 인식하지 못했어요. 내 단축어 탭에서 다시 눌러 주세요.');
+                    if (!scroller) scroller = locateScroller();
+                    if (!scroller && !nativeLoading()) { complete = true; break; }
+                    if (scroller && !scroller.isConnected) throw new Error('목록이 바뀌었어요. 다시 전체 선택을 눌러 주세요.');
+                    const position = scroller?.scrollTop || 0;
+                    const height = scroller?.scrollHeight || 0;
+                    if (found.size !== lastSize || position !== lastPosition || height !== lastHeight) lastProgress = Date.now();
+                    if (Date.now() - lastProgress > 2500) throw new Error('목록 읽기가 멈춰 확인한 항목까지만 선택했어요. 다시 눌러 주세요.');
+                    const bottom = !scroller || position + scroller.clientHeight >= height - 3;
+                    const signature = entries.map(e => e.key).join('\n');
+                    if (bottom && height === lastHeight && signature === lastSignature && !nativeLoading()) stableBottom++;
+                    else stableBottom = 0;
+                    if (stableBottom >= 3) { complete = true; break; }
+                    lastHeight = height; lastSignature = signature; lastPosition = position; lastSize = found.size;
+                    if (scroller) scrollTo(Math.min(height - scroller.clientHeight, position + Math.max(60, scroller.clientHeight * .8)));
+                    await pause(bottom ? 180 : 70);
+                }
+                if (!complete) throw new Error('확인한 항목까지만 선택했어요. 목록 끝까지 읽지 못해 멈췄어요.');
+                return { found, complete, match: null };
+            } finally {
+                if (restore && scroller?.isConnected && token === S.epoch) scrollTo(original);
+                queueScan();
+            }
+        }
+        async function selectAll() {
+            if (S.busy) return;
+            const initial = readRows();
+            if (!initial.length) { decorateRows(initial); setMessage('선택할 항목을 찾지 못했어요. 내 단축어 탭에서 다시 눌러 주세요.'); return; }
+            const select = records => {
+                for (const record of records) {
+                    if (record.isMine && !record.ambiguous) S.selected.add(record.key);
+                    else S.selected.delete(record.key);
+                }
+            };
+            absorb(initial); select(initial);
+            S.busy = true; S.stop = false; const token = S.epoch;
+            setMessage(`${S.selected.size}개 선택 · 아래쪽 항목 확인 중…`);
+            try {
+                const result = await scan(token, '', true, found => {
+                    select(found.values());
+                    setMessage(`${S.selected.size}개 선택 · ${found.size}개 항목 확인 중…`);
+                }); check(token);
+                let skipped = 0;
+                for (const record of result.found.values()) {
+                    if (record.isMine && !record.ambiguous) S.selected.add(record.key); else skipped++;
+                }
+                if (result.complete) for (const key of S.selected) if (!result.found.has(key)) S.selected.delete(key);
+                S.full = result.complete;
+                setMessage(`${S.selected.size}개 선택했어요.${skipped ? ` 제작자·허브 또는 구분이 어려운 ${skipped}개는 제외했어요.` : ''}`);
+            } catch (error) { if (token === S.epoch) setMessage(error.message); }
+            finally { if (token === S.epoch) { S.busy = false; S.stop = false; decorateRows(); } }
+        }
+        function visibleMenus() {
+            return [...document.querySelectorAll('[role="menu"], [data-radix-menu-content]')].filter(el => visible(el) && el !== S.root && !el.contains(S.root));
+        }
+        function linkedMenu(trigger, previous) {
+            const control = trigger.getAttribute('aria-controls');
+            const menus = visibleMenus();
+            const linked = menus.find(menu => (control && menu.id === control) ||
+                (trigger.id && menu.getAttribute('aria-labelledby') === trigger.id));
+            if (linked) return linked;
+            const created = menus.filter(menu => !previous.has(menu));
+            return created.length === 1 ? created[0] : null;
+        }
+        function findDeleteControl(menu, pattern = /^(?:단축어\s*)?삭제(?:하기)?$/) {
+            const candidates = exactControls(menu, pattern).map(actionable).filter(Boolean);
+            // A dialog heading can also say '단축어 삭제'; only activate real controls.
+            return [...new Set(candidates)].find(el => el.matches('button,[role="button"],[role="menuitem"],a') &&
+                visible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true') || null;
+        }
+        async function wait(token, test, ms) {
+            const until = Date.now() + ms;
+            while (Date.now() < until) { check(token); const result = test(); if (result) return result; await pause(80); }
+            return null;
+        }
+        function shortcutDialog(previous, record) {
+            const list = [...document.querySelectorAll('[role="alertdialog"], [role="dialog"], [aria-modal="true"]')]
+                .filter(el => visible(el) && el !== S.root && !S.root?.contains(el) && !own(el) && !previous.has(el));
+            // Only a NEW, explicitly shortcut-related confirmation is eligible.
+            const safe = list.filter(el => /삭제/.test(norm(el.textContent)) &&
+                (/단축어/.test(norm(el.textContent)) || norm(el.textContent).includes(record.name)));
+            for (const el of safe) {
+                const text = compact(el.textContent);
+                if (/\/[^/]*단축어/.test(text) && !text.includes(compact(record.name) + '단축어'))
+                    throw new Error(`${record.name}: 다른 항목의 삭제 확인창이 열려 중단했어요.`);
+            }
+            return safe.sort((a,b) => a.textContent.length - b.textContent.length)[0] || null;
+        }
+        function chatComposer() {
+            const known = options.composer?.();
+            return known?.isConnected ? known : document.querySelector('textarea,[contenteditable="true"],[contenteditable="plaintext-only"]');
+        }
+        function composerText(el) { return el ? String('value' in el ? el.value : el.textContent || '') : ''; }
+        async function ensurePopup(token) {
+            check(token);
+            let found = findRoot();
+            if (!found) {
+                const editor = chatComposer();
+                if (!editor || !S.batchInput || composerText(editor) !== S.batchInput.text || !/^\s*\//.test(composerText(editor)))
+                    throw new Error('단축어 창이 닫혔어요. / 창을 다시 열어 남은 항목을 확인해 주세요.');
+                // Reopen the existing native suggestion popup without replacing the draft.
+                nativeActivate(editor, () => {
+                    editor.focus({ preventScroll: true });
+                    editor.click();
+                    editor.dispatchEvent(new Event('input', { bubbles: true }));
+                    editor.dispatchEvent(new KeyboardEvent('keyup', { key: '/', code: 'Slash', bubbles: true }));
+                });
+                found = await wait(token, findRoot, 2400);
+            }
+            if (!found) throw new Error('단축어 창을 다시 열지 못했어요. 남은 항목은 삭제하지 않았어요.');
+            if (found.root !== S.root || !S.entry?.isConnected) installAt(found, true);
+            return found.root;
+        }
+        function watchDeleteNotice() {
+            const result = { success: false, error: '', close: null };
+            const inspect = node => {
+                const el = elOf(node);
+                if (!el || own(el) || S.root?.contains(el) || el.closest(EXCLUDE)) return;
+                const text = norm(el.textContent);
+                if (text.length > 160) return;
+                if (/단축어[가를]?\s*삭제(?:되었|됐|했|하였)/.test(text)) result.success = true;
+                if (/단축어.*(?:삭제.*실패|삭제하지 못|삭제할 수 없)/.test(text)) result.error = '크랙에서 삭제하지 못했다고 안내했어요.';
+            };
+            const observer = new MutationObserver(mutations => {
+                for (const mutation of mutations) {
+                    if (mutation.type === 'characterData') inspect(mutation.target);
+                    for (const node of mutation.addedNodes) {
+                        inspect(node);
+                        if (node instanceof Element && !own(node)) node.querySelectorAll('div,span,p,[role="status"],[role="alert"]').forEach(inspect);
+                    }
+                }
+            });
+            observer.observe(document.body || document.documentElement, { childList: true, subtree: true, characterData: true });
+            result.close = () => observer.disconnect();
+            return result;
+        }
+        async function refreshNativeList(token) {
+            await ensurePopup(token);
+            const target = activeTab(S.root) || S.tab || '내 단축어';
+            const alternate = target === '내 단축어' ? '전체' : '내 단축어';
+            for (const label of [alternate, target]) {
+                const control = popupLabels(S.root, [label]).find(visible);
+                if (!control) continue;
+                check(token); nativeActivate(control); S.tab = label;
+                await pause(180); await ensurePopup(token);
+                if (!await wait(token, () => !nativeLoading(), 3000)) throw new Error('목록 갱신이 끝나지 않아 삭제 결과를 확인하지 못했어요.');
+            }
+            S.tab = activeTab(S.root) || target;
+        }
+        async function deleteOne(record, token) {
+            check(token); await ensurePopup(token);
+            let item = readRows().find(row => row.key === record.key);
+            if (!item) item = (await scan(token, record.key, false)).match;
+            if (!item) throw new Error(`${record.name}: 원본 항목을 찾지 못해 중단했어요.`);
+            if (!item.isMine || item.ambiguous || item.fp !== record.fp)
+                throw new Error(`${record.name}: 내용 또는 소유자 확인이 달라져 중단했어요.`);
+            const trigger = item.trigger;
+            if (!trigger) throw new Error(`${record.name}: 원본 더보기 메뉴를 찾지 못했어요. 이 항목은 직접 삭제해 주세요.`);
+            const previousMenus = new Set(visibleMenus());
+            if (previousMenus.size) throw new Error('이미 열린 더보기 메뉴를 닫은 뒤 다시 눌러 주세요.');
+            let menu = null;
+            if (trigger.getAttribute('aria-haspopup') === 'menu') {
+                // Radix opens on pointerdown. Trying click first can bubble into the
+                // shortcut row (and insert its text), so pointerdown is always first.
+                nativeActivate(trigger, () => {
+                    trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true,
+                        pointerType: 'mouse', pointerId: 1, isPrimary: true, button: 0, buttons: 1 }));
+                    trigger.dispatchEvent(new PointerEvent('pointerup', { bubbles: true,
+                        pointerType: 'mouse', pointerId: 1, isPrimary: true, button: 0, buttons: 0 }));
+                });
+                menu = await wait(token, () => linkedMenu(trigger, previousMenus), 450);
+            }
+            if (!menu) {
+                nativeActivate(trigger);
+                menu = await wait(token, () => linkedMenu(trigger, previousMenus), 1800);
+            }
+            if (!menu) throw new Error(`${record.name}: 이 항목의 원본 메뉴를 확인하지 못했어요.`);
+            const del = findDeleteControl(menu);
+            if (!del) throw new Error(`${record.name}: 크랙에서 삭제 메뉴를 제공하지 않아 중단했어요.`);
+            const dialogs = new Set([...document.querySelectorAll('[role="alertdialog"], [role="dialog"], [aria-modal="true"]')].filter(visible));
+            const notice = watchDeleteNotice();
+            try {
+                check(token); nativeActivate(del);
+                const confirm = await wait(token, () => shortcutDialog(dialogs, record) || notice.success || notice.error ||
+                    (S.root?.isConnected && !readRows().some(x => x.key === record.key) && !nativeLoading() && 'removed'), 2500);
+                if (confirm instanceof Element) {
+                    const submit = findDeleteControl(confirm) || findDeleteControl(confirm, /^확인$/);
+                    if (!submit) throw new Error(`${record.name}: 삭제 확인창을 직접 확인해 주세요.`);
+                    check(token); nativeActivate(submit);
+                }
+                const settled = await wait(token, () => {
+                    if (notice.error) throw new Error(notice.error);
+                    if (confirm instanceof Element && visible(confirm)) return false;
+                    return notice.success || (S.root?.isConnected && visible(S.root) && !nativeLoading() && !readRows().some(x => x.key === record.key));
+                }, 8000);
+                if (!settled) throw new Error(`${record.name}: 삭제 응답을 확인하지 못해 멈췄어요. 자동 재시도하지 않아요.`);
+                // This is a request acknowledgement only. Verify the refreshed complete list
+                // once after the queue, rather than scrolling the whole list after every item.
+            } finally { notice.close(); }
+        }
+        async function deleteSelected() {
+            if (S.busy || !S.selected.size) return;
+            const queue = [...S.selected].map(key => S.records.get(key)).filter(x => x?.isMine && !x.ambiguous);
+            if (!queue.length) return;
+            const names = queue.slice(0, 8).map(x => x.name).join('\n');
+            const message = `선택한 내 단축어 ${queue.length}개를 실제로 삭제할까요?\n\n${names}${queue.length > 8 ? `\n외 ${queue.length - 8}개` : ''}\n\n이 삭제는 되돌릴 수 없어요. 채팅 메시지는 삭제하지 않아요.`;
+            if (!window.confirm(message)) return;
+            S.busy = true; S.stop = false; const token = S.epoch;
+            S.batchInput = { text: composerText(chatComposer()) };
+            let done = 0, failure = ''; const requested = [];
+            const scroller = locateScroller(), oldTop = scroller?.scrollTop || 0;
+            try {
+                for (const record of queue) {
+                    check(token); setMessage(`${requested.length}/${queue.length}개 삭제 요청 완료 · ${record.name} 처리 중…`);
+                    await deleteOne(record, token); requested.push(record);
+                }
+            } catch (error) {
+                failure = error.message;
+            }
+            try {
+                if (requested.length && !S.stop && token === S.epoch) {
+                    check(token); setMessage(`${requested.length}/${queue.length}개 삭제 요청 완료 · 새 목록에서 결과 확인 중…`);
+                    await refreshNativeList(token);
+                    const verified = await scan(token, '', true, null, true); check(token);
+                    for (const record of requested) {
+                        const remains = [...verified.found.values()].some(item => item.key === record.key || (item.name === record.name && item.fp === record.fp));
+                        if (!remains && verified.complete) { done++; S.records.delete(record.key); S.selected.delete(record.key); }
+                    }
+                    if (done < requested.length) failure = `${requested.length - done}개가 목록에 남아 있어 삭제 완료로 처리하지 않았어요.`;
+                }
+                if (token === S.epoch) {
+                    const result = failure ? `${done}/${queue.length}개 삭제 확인. ${failure}` : `${done}개 삭제를 확인했어요.`;
+                    setMessage(result); options.notify?.(result);
+                }
+            } catch (error) {
+                if (token === S.epoch) {
+                    const result = `${requested.length}개 삭제 요청 후 결과 확인을 마치지 못했어요. ${error.message}`;
+                    setMessage(result); options.notify?.(result);
+                }
+            } finally {
+                if (token === S.epoch) {
+                    const current = scroller?.isConnected ? scroller : locateScroller();
+                    if (current) current.scrollTop = oldTop;
+                    S.busy = false; S.stop = false; S.batchInput = null;
+                    S.tab = activeTab(S.root) || S.tab; decorateRows();
+                }
+            }
+        }
+        function dispatchAction(action) {
+            if (action === 'stop') {
+                S.stop = true; setMessage('작업을 중단했어요. 선택된 항목은 유지해요.');
+                for (const [timer, resolve] of S.pending) { window.clearTimeout(timer); resolve(); }
+                S.pending.clear(); return;
+            }
+            if (S.busy) return;
+            if (action === 'launch') enter();
+            if (action === 'done') leave();
+            if (action === 'all') void selectAll();
+            if (action === 'clear') { S.selected.clear(); setMessage('선택을 해제했어요.'); decorateRows(); }
+            if (action === 'delete') void deleteSelected();
+        }
+        function handleEvent(e) {
+            if (S.nativeAction) return;
+            const target = elOf(e.target);
+            if (!target || !allowed() || !S.root?.contains(target)) return;
+            const action = target.closest('[data-cmu-sce-action]');
+            const rowEl = target.closest('.cmu-sce-row');
+            const row = rowEl && S.rows.get(rowEl);
+            const isCheck = !!target.closest('.cmu-sce-check');
+            const nativeButton = target.closest('button,[role="button"],a');
+            const isMenu = row?.trigger && (row.trigger === target || row.trigger.contains(target));
+            // During management, tapping a row selects it rather than inserting /text.
+            const selects = S.editing && row && !isMenu && (isCheck || !nativeButton || nativeButton === rowEl || nativeButton.contains(rowEl));
+            if (action || selects || (S.busy && !own(target))) {
+                if (e.type === 'touchstart' || e.type === 'touchmove' || e.type === 'pointermove') return;
+                e.stopPropagation();
+                if (e.type === 'click' || e.type === 'pointerdown' || e.type === 'mousedown') e.preventDefault();
+                if (e.type !== 'click') return;
+                if (action) dispatchAction(action.dataset.cmuSceAction);
+                else if (selects && !S.busy && row.isMine && !row.ambiguous) {
+                    if (S.selected.has(row.key)) S.selected.delete(row.key); else S.selected.add(row.key);
+                    S.message = ''; updateBar(); queueScan(0);
+                }
+                return;
+            }
+            if (e.type === 'click' && S.editing) {
+                for (let el = target, depth = 0; el && el !== S.root && depth < 5; el = el.parentElement, depth++) {
+                    const label = TABS.find(text => compact(text) === labelText(el));
+                    if (label) {
+                        S.tab = label; S.records.clear(); S.selected.clear(); S.full = false; S.message = '';
+                        queueScan(100); break;
+                    }
+                }
+            }
+        }
+        function installAt(found, preserve = false) {
+            if (S.root !== found.root) {
+                if (S.editing && !preserve) leave();
+                detachRoot();
+                S.root = found.root;
+                S.root.dataset.cmuSceRoot = '1';
+                if (S.editing) S.root.classList.add('cmu-sce-editing');
+                for (const event of ['pointerdown','mousedown','click']) S.root.addEventListener(event, handleEvent, true);
+                S.root.addEventListener('keydown', onKey, true);
+            }
+            if (!S.entry?.isConnected || !S.root.contains(S.entry) || S.add !== found.add) {
+                S.footer?.classList.remove('cmu-sce-footer-editing');
+                if (S.add) delete S.add.dataset.cmuSceAdd;
+                S.entry?.remove(); S.bar?.remove(); S.bar = null; S.dock?.remove(); S.dock = null;
+                S.add = found.add;
+                S.entry = button('launch', '☑ 단축어 편집'); S.entry.classList.add('cmu-sce-entry');
+                if (S.add?.isConnected) {
+                    S.add.dataset.cmuSceAdd = '1';
+                    S.footer = S.add.parentElement; S.add.before(S.entry);
+                } else {
+                    S.dock = ui('div', 'cmu-sce-dock'); S.dock.append(S.entry);
+                    S.root.prepend(S.dock); S.footer = S.dock;
+                }
+            }
+            if (S.editing && (!S.bar?.isConnected || !S.root.contains(S.bar))) mountBar();
+            if (S.editing) decorateRows();
+        }
+        function onKey(e) {
+            if (e.key === 'Escape' && S.editing && !S.busy) {
+                e.preventDefault(); e.stopPropagation(); leave();
+            }
+        }
+        function detachRoot() {
+            removeDecorations();
+            if (S.root) {
+                for (const event of ['pointerdown','mousedown','click']) S.root.removeEventListener(event, handleEvent, true);
+                S.root.removeEventListener('keydown', onKey, true);
+                delete S.root.dataset.cmuSceRoot;
+                S.root.querySelectorAll('[data-cmu-sce-add]').forEach(el => delete el.dataset.cmuSceAdd);
+            }
+            S.entry?.remove(); S.dock?.remove();
+            S.entry = null; S.root = null; S.footer = null; S.dock = null; S.add = null;
+        }
+        function update() {
+            S.timer = 0; if (!allowed()) return;
+            if (S.editing && route() !== S.route) leave();
+            if (S.root && visible(S.root)) {
+                if (!S.entry?.isConnected || !S.root.contains(S.entry) || (S.editing && !S.bar?.isConnected)) {
+                    const found = inspectRoot(S.root) || findRoot();
+                    if (found) installAt(found);
+                }
+                if (S.editing && !S.busy) {
+                    const tab = activeTab(S.root);
+                    if (tab && tab !== S.tab) { S.tab = tab; S.selected.clear(); S.records.clear(); S.message = ''; }
+                    decorateRows();
+                }
+                return;
+            }
+            if (S.busy) return;
+            const found = findRoot();
+            if (found) installAt(found);
+            else if (S.root) { leave(); if (!S.root.isConnected) detachRoot(); }
+            if (!found && Date.now() < S.discoverUntil) queueScan(120);
+        }
+        function queueScan(ms = 70) {
+            if (!allowed() || S.timer) return;
+            S.timer = window.setTimeout(update, ms);
+        }
+        function onMutations(mutations) {
+            if (!allowed()) return;
+            for (const m of mutations) {
+                if (S.root && (!S.entry?.isConnected || (S.editing && !S.bar?.isConnected))) { queueScan(); return; }
+                if (own(m.target)) continue;
+                if (m.type === 'attributes' && /^(class|style)$/.test(m.attributeName) &&
+                    S.root?.contains(m.target) && m.target !== S.root) continue;
+                if (m.type === 'attributes' && (!S.root || !visible(S.root))) {
+                    const text = compact(m.target.textContent);
+                    if (text.length < 24000 && /내단축어|제작자단축어|단축어추가/.test(text)) { queueScan(); return; }
+                }
+                const changed = [...m.addedNodes, ...m.removedNodes];
+                if (changed.length && changed.every(own)) continue;
+                if (S.root && (S.root.contains(m.target) || changed.some(n => n === S.root || elOf(n)?.contains(S.root)))) { queueScan(); return; }
+                for (const node of m.addedNodes) {
+                    const el = elOf(node);
+                    if (!el || el.closest(EXCLUDE) || own(el)) continue;
+                    const text = compact(el.textContent);
+                    if (text.length < 24000 && /내단축어|제작자단축어|단축어추가/.test(text)) { queueScan(); return; }
+                }
+            }
+        }
+        function injectStyle() {
+            S.style = document.createElement('style'); S.style.id = 'cmu-shortcut-editor-style';
+            S.style.textContent = `
+            [data-cmu-sce-root] .cmu-sce-ui{box-sizing:border-box}
+            [data-cmu-sce-root] .cmu-sce-button{display:inline-flex!important;align-items:center!important;justify-content:center!important;visibility:visible!important;font:600 12px/1.3 system-ui,sans-serif!important;min-height:36px!important;padding:7px 10px!important;border-radius:9px!important;border:1px solid #ffffff28!important;background:#2a2b31!important;color:#eceef2!important;cursor:pointer;touch-action:manipulation;white-space:nowrap}
+            [data-cmu-sce-root] .cmu-sce-button:disabled{opacity:.4!important;cursor:default}
+            [data-cmu-sce-root] .cmu-sce-button:focus-visible{outline:2px solid #67df9d!important;outline-offset:2px}
+            [data-cmu-sce-root] .cmu-sce-ui[hidden]{display:none!important}
+            [data-cmu-sce-root] .cmu-sce-entry{margin-right:auto!important;flex-shrink:0!important}
+            [data-cmu-sce-root] .cmu-sce-dock{display:flex!important;flex:none!important;gap:6px!important;padding:8px 12px!important;width:100%!important;min-width:0!important;border-bottom:1px solid #ffffff22!important;box-sizing:border-box!important}
+            [data-cmu-sce-root].cmu-sce-editing [data-cmu-sce-add]{display:none!important}
+            [data-cmu-sce-root] .cmu-sce-footer-editing{display:block!important;padding:9px 12px!important}
+            [data-cmu-sce-root] .cmu-sce-bar{width:100%;min-width:0;display:flex;flex-direction:column;gap:7px;font-family:system-ui,sans-serif;color:#eceef2}
+            [data-cmu-sce-root] .cmu-sce-head{display:flex;gap:7px;align-items:center}
+            [data-cmu-sce-root] .cmu-sce-count{font-size:12px;font-weight:700;flex:1;min-width:0}
+            [data-cmu-sce-root] .cmu-sce-actions{display:flex;flex-wrap:wrap;gap:6px}
+            [data-cmu-sce-root] .cmu-sce-actions button{flex:1}
+            [data-cmu-sce-root] [data-cmu-sce-action="delete"]{background:#70353d!important;border-color:#d5758460!important;color:#fff!important}
+            [data-cmu-sce-root] .cmu-sce-message{font-size:11px;line-height:1.45;color:#aeb4bf;overflow-wrap:anywhere;max-height:4.4em;overflow-y:auto}
+            [data-cmu-sce-root] .cmu-sce-row{padding-left:43px!important;box-sizing:border-box!important}
+            [data-cmu-sce-root] .cmu-sce-row.cmu-sce-static{position:relative!important}
+            [data-cmu-sce-root] .cmu-sce-selected{box-shadow:inset 3px 0 #51cf8a;background-color:#258a5a20!important}
+            [data-cmu-sce-root] button.cmu-sce-check{position:absolute!important;left:6px!important;top:50%!important;transform:translateY(-50%)!important;width:32px!important;height:40px!important;min-width:32px!important;min-height:0!important;display:flex!important;align-items:center!important;justify-content:center!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;opacity:1!important;visibility:visible!important;z-index:3!important;touch-action:pan-y;pointer-events:auto!important;cursor:pointer}
+            [data-cmu-sce-root] .cmu-sce-check-mark{display:flex!important;align-items:center!important;justify-content:center!important;width:21px!important;height:21px!important;flex:0 0 21px!important;border:2px solid #aeb8c8!important;border-radius:5px!important;background:#242830!important;color:#fff!important;font:700 16px/1 system-ui!important;box-sizing:border-box!important}
+            [data-cmu-sce-root] .cmu-sce-check[aria-checked="true"] .cmu-sce-check-mark{background:#238254!important;border-color:#63e5a0!important}
+            [data-cmu-sce-root] .cmu-sce-check:disabled .cmu-sce-check-mark{opacity:.45!important}
+            [data-cmu-sce-root] .cmu-sce-check:focus-visible{outline:2px solid #67df9d!important;outline-offset:0}
+            html[data-theme="light"] [data-cmu-sce-root] .cmu-sce-button,body[data-theme="light"] [data-cmu-sce-root] .cmu-sce-button{background:#f0f1f4!important;color:#252832!important;border-color:#0002!important}
+            html[data-theme="light"] [data-cmu-sce-root] .cmu-sce-bar,body[data-theme="light"] [data-cmu-sce-root] .cmu-sce-bar{color:#252832}
+            html[data-theme="light"] [data-cmu-sce-root] .cmu-sce-message,body[data-theme="light"] [data-cmu-sce-root] .cmu-sce-message{color:#626875}
+            `;
+            (document.head || document.documentElement).appendChild(S.style);
+        }
+        function disable() {
+            S.enabled = false; leave(); detachRoot();
+            S.batchInput = null;
+            S.discoverUntil = 0;
+            if (S.timer) window.clearTimeout(S.timer); S.timer = 0;
+            S.observer?.disconnect(); S.observer = null;
+            for (const [timer, resolve] of S.pending) { window.clearTimeout(timer); resolve(); }
+            S.pending.clear();
+            for (const [el, type, fn, opts] of S.listeners) el.removeEventListener(type, fn, opts);
+            S.listeners = []; S.style?.remove(); S.style = null;
+        }
+        function sync() {
+            if (!options.enabled()) { disable(); return; }
+            if (S.enabled) { if (S.editing && route() !== S.route) leave(); queueScan(0); return; }
+            S.enabled = true; S.stop = false; injectStyle();
+            S.observer = new MutationObserver(onMutations);
+            S.observer.observe(document.body || document.documentElement, { childList:true, subtree:true, attributes:true, attributeFilter:['aria-selected','aria-hidden','aria-expanded','hidden','data-state','class','style'] });
+            const discover = () => { S.discoverUntil = Date.now() + 3500; queueScan(0); };
+            const isEditor = target => !!target?.closest('textarea,input,[contenteditable]:not([contenteditable="false"])');
+            listen(document, 'input', e => { if (isEditor(elOf(e.target))) discover(); }, true);
+            listen(document, 'keyup', e => { if (e.key === '/' && isEditor(elOf(e.target))) discover(); }, true);
+            listen(document, 'click', e => {
+                const el = elOf(e.target)?.closest('button,[role="button"]');
+                if (el && !own(el) && (/단축어/.test(el.getAttribute('aria-label') || '') || labelText(el) === '/')) discover();
+            }, true);
+            queueScan(0);
+        }
+        return { sync, dispose: disable };
+    }
+
+    const CMU_SHORTCUT_EDITOR = cmuCreateShortcutEditor({
+        enabled: () => shouldRun() && settings.enabled !== false && !!settings.shortcutEditor,
+        composer: () => findChatInput(),
+        notify: text => showToast(text),
+    });
+    CMU_RESOURCES.cleanups.push(() => CMU_SHORTCUT_EDITOR.dispose());
+    CMU_SHORTCUT_EDITOR.sync();
+    // 4.5.5.25: preserve the visible chat during the brief keyboard resize transition.
+    function cmuCreateKeyboardComposer(options = {}) {
+        const S = { disposed: false, frame: 0, timers: [], host: null, shift: 0,
+            saved: null, applied: '', blockedHost: null, resize: null, mutation: null,
+            box: null, input: null, dock: null, dockCss: null, transcript: null, beforeKeyboard: null,
+            width: 0, height: 0, screenHeight: 0, listeners: [], opening: null, openingTimer: 0, returning: null, nativeFit: false, nativeStyles: null };
+        const D = { baseline: null, lastFocus: null, lastKeyboard: null, trace: [], openingTrace: [], baselineTime: 0, at: 0, stage: '' };
+        const K = { api: null };
+        const P = { node: null, original: null, applied: '', created: false };
+        const M = { seed: null, active: null, timer: 0, last: null, blockedClick: 0 };
+        try { K.api = navigator.virtualKeyboard || null; } catch (_) { /* Unsupported context. */ }
+        const editable = el => el instanceof Element && !!el.closest('textarea, input, [contenteditable="true"]');
+        const automatic = () => options.mode?.() === 'auto';
+        function motionAllowed() {
+            return !!options.stabilize?.() && !!options.enabled?.() && !options.suspended?.();
+        }
+        function releaseMotion(reason = 'cancelled') {
+            clearTimeout(M.timer); M.timer = 0;
+            const active = M.active;
+            M.active = null; M.seed = null;
+            active?.surface.remove();
+            if (active) M.last = { reason, duration: Math.round(performance.now() - active.start), changes: active.changes };
+        }
+        function snapshotMotion(input, v) {
+            const context = findContext(input), transcript = findTranscript(input);
+            if (!context || !transcript || transcript.document) return null;
+            const main = input.closest('main'), mainRect = main.getBoundingClientRect();
+            const top = Math.max(v.top, mainRect.top), bottom = Math.min(v.measuredBottom, mainRect.bottom);
+            if (bottom - top < 120) return null;
+            const surface = document.createElement('div');
+            surface.setAttribute('data-cmu-keyboard-freeze', '');
+            surface.setAttribute('aria-hidden', 'true'); surface.inert = true;
+            const style = surface.style;
+            for (const [prop, value] of Object.entries({ position: 'fixed', top: `${top}px`, left: `${v.left}px`,
+                width: `${v.width}px`, height: `${bottom - top}px`, overflow: 'hidden', 'pointer-events': 'none',
+                margin: '0', padding: '0', border: '0', 'box-sizing': 'border-box', 'max-width': 'none',
+                'max-height': 'none', transform: 'none', translate: 'none', transition: 'none', animation: 'none',
+                'z-index': '2147482991', isolation: 'isolate', display: 'block' })) style.setProperty(prop, value, 'important');
+            // Paint the existing page background, then the actual visible content.
+            // No original element is hidden, moved, replaced or made inert.
+            let backdrop = main;
+            while (backdrop.parentElement && ['transparent', 'rgba(0, 0, 0, 0)'].includes(getComputedStyle(backdrop).backgroundColor) &&
+                getComputedStyle(backdrop).backgroundImage === 'none') backdrop = backdrop.parentElement;
+            const background = getComputedStyle(backdrop);
+            style.setProperty('background', background.background, 'important');
+            if (['transparent', 'rgba(0, 0, 0, 0)'].includes(background.backgroundColor)) {
+                // Transparent canvas defaults are browser/theme dependent. Abort
+                // rather than ever replacing the view with an invented blank color.
+                return null;
+            }
+            let count = 0;
+            const started = performance.now(), scrolls = [];
+            const visualProperties = ('display position top right bottom left box-sizing width height min-width min-height max-width max-height ' +
+                'margin-top margin-right margin-bottom margin-left padding-top padding-right padding-bottom padding-left ' +
+                'border-top border-right border-bottom border-left border-radius border-collapse border-spacing outline box-shadow ' +
+                'background color font-family font-size font-weight font-style font-variant line-height letter-spacing word-spacing ' +
+                'text-align text-indent text-transform text-decoration white-space word-break overflow-wrap vertical-align ' +
+                'overflow-x overflow-y text-overflow opacity visibility filter backdrop-filter transform transform-origin translate rotate scale ' +
+                'flex-direction flex-wrap flex-grow flex-shrink flex-basis align-items align-self align-content justify-content gap order ' +
+                'grid-template-columns grid-template-rows grid-auto-flow grid-column grid-row object-fit object-position aspect-ratio ' +
+                'fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray fill-rule clip-path z-index direction writing-mode').split(' ');
+            function copy(node) {
+                if (node.nodeType === Node.TEXT_NODE) return document.createTextNode(node.textContent);
+                if (!(node instanceof Element) || /^(SCRIPT|STYLE|IFRAME|VIDEO|AUDIO|OBJECT|EMBED|LINK|META)$/.test(node.tagName)) return null;
+                if (++count > 900 || performance.now() - started > 80) throw new Error('snapshot-budget');
+                const css = getComputedStyle(node);
+                const formControl = /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(node.tagName);
+                let clone = formControl ? document.createElement('div') : node.cloneNode(false);
+                for (const attr of [...clone.attributes]) if (/^(id|class|style|role|tabindex|contenteditable|name|autofocus|form|href|srcdoc)$/i.test(attr.name) ||
+                    /^(data-|aria-|on)/i.test(attr.name)) clone.removeAttribute(attr.name);
+                for (const prop of visualProperties) {
+                    const value = css.getPropertyValue(prop);
+                    if (value) clone.style.setProperty(prop, value, 'important');
+                }
+                clone.style.setProperty('animation', 'none', 'important');
+                clone.style.setProperty('transition', 'none', 'important');
+                clone.style.setProperty('pointer-events', 'none', 'important');
+                clone.style.setProperty('caret-color', 'transparent', 'important');
+                if (/^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName)) {
+                    clone.textContent = node.tagName === 'SELECT' ? node.selectedOptions[0]?.textContent || '' : node.value;
+                    clone.style.setProperty('white-space', 'pre-wrap', 'important');
+                } else for (const child of node.childNodes) { const next = copy(child); if (next) clone.append(next); }
+                if (node.scrollTop || node.scrollLeft) scrolls.push([clone, node.scrollTop, node.scrollLeft]);
+                return clone;
+            }
+            function part(node, kind) {
+                const rect = node.getBoundingClientRect(), clone = copy(node);
+                if (!clone) return;
+                clone.setAttribute('data-cmu-keyboard-freeze-part', kind);
+                for (const [prop, value] of Object.entries({ position: 'absolute', top: `${rect.top - top}px`,
+                    left: `${rect.left - v.left}px`, width: `${rect.width}px`, height: `${rect.height}px`,
+                    'min-width': '0px', 'min-height': '0px', 'max-width': 'none', 'max-height': 'none',
+                    right: 'auto', bottom: 'auto', margin: '0', transform: 'none', translate: 'none',
+                    rotate: 'none', scale: 'none', 'box-sizing': 'border-box' })) clone.style.setProperty(prop, value, 'important');
+                surface.append(clone);
+            }
+            try {
+                const hostRect = context.host.getBoundingClientRect();
+                const visible = messages(main).filter(node => {
+                    const r = node.getBoundingClientRect();
+                    return r.bottom > top && r.top < Math.min(bottom, hostRect.top) && r.right > v.left && r.left < v.left + v.width;
+                });
+                if (!visible.length) return null;
+                for (const node of visible) part(node, 'message');
+                part(context.host, 'composer');
+            } catch (_) { return null; }
+            return { surface, top, bottom, scrolls };
+        }
+        function armMotion(input) {
+            if (!motionAllowed() || M.active || !(input instanceof HTMLElement)) return;
+            const v = viewport(false), now = performance.now();
+            if (v.keyboard || Math.abs(v.scale - 1) > .06) return;
+            if (M.seed?.input === input && now - M.seed.at < 200) return;
+            const shot = snapshotMotion(input, v);
+            M.seed = shot ? { ...shot, input, height: v.measuredBottom - v.top, width: v.width, at: now } : null;
+        }
+        function queueMotionRelease() {
+            const active = M.active;
+            if (!active || active.finishing) return;
+            clearTimeout(M.timer);
+            const deadline = Math.min(active.start + 650, Math.max(active.start + 200, active.changed + 160));
+            M.timer = setTimeout(() => {
+                if (M.active !== active) return;
+                active.finishing = true;
+                try { sync(); } finally { if (M.active === active) releaseMotion('settled'); }
+            }, Math.max(0, deadline - performance.now()) + 1);
+        }
+        function updateMotion(v) {
+            if (!motionAllowed() || Math.abs(v.scale - 1) > .06 || document.hidden) { releaseMotion('inactive'); return; }
+            const seed = M.seed;
+            if (!seed) return;
+            const input = options.composer?.();
+            if (!seed.input.isConnected || input !== seed.input || !input.contains(document.activeElement) ||
+                Math.abs(v.width - seed.width) > Math.max(60, seed.width * .15)) { releaseMotion('context-changed'); return; }
+            const now = performance.now(), height = v.measuredBottom - v.top;
+            if (!M.active) {
+                if (now - seed.at > 1800) { M.seed = null; return; }
+                if (seed.height - height < 24) return;
+                M.active = { surface: seed.surface, start: now, changed: now, values: [], changes: 0, finishing: false };
+                document.body.append(seed.surface);
+                // A dedicated noninteractive top-layer surface also covers a docked
+                // composer. The live editor stays focused underneath throughout.
+                if (typeof seed.surface.showPopover === 'function') {
+                    try { seed.surface.setAttribute('popover', 'manual'); seed.surface.showPopover(); }
+                    catch (_) { seed.surface.removeAttribute('popover'); }
+                }
+                for (const [node, y, x] of seed.scrolls) { node.scrollTop = y; node.scrollLeft = x; }
+            }
+            const active = M.active;
+            if (height >= seed.height - 12) { releaseMotion('keyboard-closed'); return; }
+            if (active.finishing) return;
+            // Clip the preserved image to the real available viewport; never shift
+            // the photographed content when transient keyboard heights change.
+            active.surface.style.setProperty('height', `${Math.max(0, Math.min(seed.bottom, v.measuredBottom) - seed.top)}px`, 'important');
+            const values = [v.top, v.measuredBottom, v.width, window.innerHeight];
+            if (!active.values.length || values.some((value, i) => Math.abs(value - active.values[i]) > 1)) {
+                active.values = values; active.changed = now; active.changes++;
+            }
+            queueMotionRelease();
+        }
+        function motionResize() {
+            updateMotion(viewport(false));
+            settle();
+        }
+        function liftMotionSurface() {
+            const surface = M.active?.surface;
+            if (!surface?.matches(':popover-open')) return;
+            // A newly docked live composer must not paint above the preserved view.
+            try { surface.hidePopover(); surface.showPopover(); } catch (_) { releaseMotion('layer-unavailable'); }
+        }
+        function releaseViewportPolicy() {
+            if (!P.node) return;
+            const current = P.node.getAttribute('content');
+            if (current === P.applied) {
+                if (P.created) P.node.remove();
+                else if (P.original == null) P.node.removeAttribute('content');
+                else P.node.setAttribute('content', P.original);
+            } else if (/interactive-widget\s*=\s*resizes-content/i.test(current || '')) {
+                // Preserve unrelated viewport edits made by the site while open.
+                const oldPolicy = (P.original || '').match(/interactive-widget\s*=\s*[^,;\s]+/i)?.[0];
+                P.node.setAttribute('content', (current || '').replace(/[,;]?\s*interactive-widget\s*=\s*resizes-content/i,
+                    oldPolicy ? `, ${oldPolicy}` : '').replace(/^[,;]\s*/, ''));
+            }
+            P.node = null; P.original = null; P.applied = ''; P.created = false;
+        }
+        function syncViewportPolicy() {
+            const enabled = !!options.nativeResize?.() && !!options.enabled?.();
+            if (!enabled) { releaseViewportPolicy(); return; }
+            if (P.node?.isConnected && P.node.getAttribute('content') === P.applied) return;
+            // Set the policy before typing, not in the middle of keyboard animation.
+            if (editable(document.activeElement) || viewport(false).keyboard) return;
+            releaseViewportPolicy();
+            let node = document.querySelector('meta[name="viewport" i]');
+            const created = !node;
+            if (!node) { node = document.createElement('meta'); node.name = 'viewport'; }
+            const original = node.getAttribute('content');
+            const content = (original || 'width=device-width, initial-scale=1')
+                .replace(/[,;]?\s*interactive-widget\s*=\s*[^,;\s]+/ig, '').replace(/^[,;]\s*/, '');
+            Object.assign(P, { node, original, created, applied: `${content}, interactive-widget=resizes-content` });
+            node.setAttribute('content', P.applied);
+            if (created) (document.head || document.documentElement).append(node);
+        }
+        function keyboardRect() {
+            try {
+                const r = K.api?.boundingRect;
+                if (!r) return null;
+                const rect = { top: Number(r.top), left: Number(r.left), bottom: Number(r.bottom),
+                    right: Number(r.right), width: Number(r.width), height: Number(r.height) };
+                return Object.values(rect).every(Number.isFinite) ? rect : null;
+            } catch (_) { return null; }
+        }
+        function keyboardOverlayMode() {
+            // Read an existing page policy only. Changing it on focus can suppress
+            // the initial native resize and give the next tap a different reference.
+            try { return K.api?.overlaysContent === true; } catch (_) { return false; }
+        }
+        function viewport(calibrated = true) {
+            const vv = window.visualViewport;
+            const top = Number(vv?.offsetTop) || 0;
+            // Android can resize the layout viewport before visualViewport catches
+            // up. Keep that transition from looking like a keyboard close/reopen.
+            const height = Math.min(Number(vv?.height) || window.innerHeight, window.innerHeight);
+            const width = Number(vv?.width) || window.innerWidth;
+            const left = Number(vv?.offsetLeft) || 0, scale = Number(vv?.scale) || 1;
+            const layoutBottom = Math.max(window.innerHeight, document.documentElement.clientHeight);
+            const rect = keyboardRect();
+            const overlays = keyboardOverlayMode();
+            // boundingRect is in layout-client coordinates. Do not clamp its top
+            // to visualViewport.bottom: Edge can report that edge ~82px too high.
+            // A floating keyboard or a keyboard on the other fold must not dock this editor.
+            const usableGeometry = !!(overlays && rect && Math.abs(scale - 1) <= .06 &&
+                rect.height >= 80 && rect.top >= top + 80 && rect.top < layoutBottom - 40 &&
+                rect.bottom >= layoutBottom - 64 && rect.left <= left + width * .25 && rect.right >= left + width * .75);
+            const viewportKeyboard = Math.max(S.height - height, window.innerHeight - (top + height)) >= Math.max(120, S.height * .18);
+            const configuredOffset = calibrated && !automatic() && Math.abs(scale - 1) <= .06 ? Math.max(-160, Math.min(160, Number(options.offset?.()) || 0)) : 0;
+            // A user-calibrated viewport keeps that same reference throughout
+            // opening; a late geometry event must not apply the correction twice.
+            const geometry = usableGeometry && (!viewportKeyboard || configuredOffset === 0);
+            const keyboard = usableGeometry || viewportKeyboard;
+            const measuredBottom = geometry ? rect.top : top + height;
+            const offset = keyboard ? configuredOffset : 0;
+            // Calibration is only usable inside the browser's paintable surface.
+            const resizedLayout = S.height - layoutBottom >= Math.max(120, S.height * .18);
+            // A positive calibration cannot extend a resized browser surface. Doing
+            // so clips settings/buttons and makes their DOM rects misleading.
+            const layoutLimit = resizedLayout ? layoutBottom : Math.max(layoutBottom, measuredBottom);
+            const bottom = Math.max(top + 1, Math.min(layoutLimit, measuredBottom + offset));
+            return { top, left, height: bottom - top, width, bottom, scale, keyboard, geometry,
+                source: geometry ? 'virtual-keyboard' : 'visual-viewport', measuredBottom, offset,
+                appliedOffset: bottom - measuredBottom, layoutLimit, resizedLayout,
+                nativeResize: !!P.node?.isConnected };
+        }
+        function remember(v) {
+            if (Math.abs(v.scale - 1) > .06) return;
+            const naturalHeight = Math.max(1, v.measuredBottom - v.top);
+            const screenHeight = Number(window.screen?.height) || 0;
+            const rotated = S.screenHeight > 0 && screenHeight > 0 && Math.abs(screenHeight - S.screenHeight) > S.screenHeight * .15;
+            if (!S.width || rotated || Math.abs(v.width - S.width) > Math.max(60, S.width * .15)) {
+                // A fold/width change while typing must not teach the shortened
+                // keyboard viewport as the normal height and release correction.
+                // On rotation retain the baseline proportion of the actual screen;
+                // otherwise a portrait baseline could keep a landscape keyboard
+                // falsely detected even after it closes.
+                const activeBaseline = S.host && v.keyboard ? S.height * (rotated ? screenHeight / S.screenHeight : 1) : 0;
+                S.width = v.width;
+                S.height = Math.max(activeBaseline, naturalHeight, window.innerHeight);
+            }
+            S.screenHeight = screenHeight;
+            // Do not learn the shrunken keyboard viewport as the normal height.
+            if (!editable(document.activeElement)) S.height = Math.max(S.height, naturalHeight, window.innerHeight);
+        }
+        function diagnosticNode(node) {
+            if (!(node instanceof Element)) return null;
+            const r = node.getBoundingClientRect(), css = getComputedStyle(node);
+            const round = value => Math.round(Number(value) * 10) / 10;
+            const style = {};
+            for (const prop of ['position', 'top', 'bottom', 'height', 'min-height', 'max-height',
+                'overflow-y', 'transform', 'translate', 'display', 'flex-direction', 'padding-bottom'])
+                style[prop] = css.getPropertyValue(prop);
+            return { tag: node.tagName.toLowerCase(),
+                markers: ['data-cmu-theme-input-box', 'data-sgb-input-box', 'data-cmu-composer-expand-host',
+                    'data-cmu-keyboard-composer', 'data-cmu-keyboard-transcript', 'data-message-group-id']
+                    .filter(name => node.hasAttribute(name)),
+                rect: { top: round(r.top), bottom: round(r.bottom), left: round(r.left), width: round(r.width), height: round(r.height) },
+                scroll: { top: round(node.scrollTop), height: node.scrollHeight, client: node.clientHeight }, style };
+        }
+        function diagnosticSnapshot(stage) {
+            const input = options.composer?.(), view = viewport(), raw = window.visualViewport;
+            const context = S.host ? { host: S.host, box: S.box } : input && findContext(input);
+            const t = S.transcript || (input && findTranscript(input));
+            const nodes = input?.closest('main') ? messages(input.closest('main')) : [];
+            const ancestors = [];
+            for (let node = context?.host?.parentElement; node && ancestors.length < 6; node = node.parentElement)
+                ancestors.push(diagnosticNode(node));
+            return { stage, at: new Date().toISOString(), enabled: !!options.enabled?.(), suspended: !!options.suspended?.(),
+                focused: !!input?.contains(document.activeElement), baselineHeight: S.height,
+                viewport: { used: view, rawHeight: raw?.height, rawTop: raw?.offsetTop, pageTop: raw?.pageTop,
+                    innerHeight: window.innerHeight, innerWidth: window.innerWidth,
+                    clientHeight: document.documentElement.clientHeight, scrollY: window.scrollY },
+                virtualKeyboard: { supported: !!K.api, overlaysContent: keyboardOverlayMode(),
+                    policy: 'native-read-only', rect: keyboardRect() },
+                alignment: automatic() ? 'auto' : 'manual',
+                motionGuard: { enabled: !!options.stabilize?.(), frozen: !!M.active, last: M.last },
+                mode: S.nativeFit ? 'native-resize' : S.dock ? 'top-layer' : S.applied ? 'translate' : 'native',
+                nativeAdjustment: S.nativeFit && context ? nativeAdjustment(view, context) : null,
+                input: diagnosticNode(input), box: diagnosticNode(context?.box), host: diagnosticNode(context?.host), ancestors,
+                conversation: { found: !!t, count: nodes.length, reverse: t?.reverse, follow: S.transcript?.follow,
+                    reason: S.transcript?.followReason || S.beforeKeyboard?.reason,
+                    beforeFollow: S.beforeKeyboard?.follow, target: S.transcript?.end,
+                    port: diagnosticNode(t?.port), last: diagnosticNode(latestMessage(nodes)) } };
+        }
+        function recordDiagnostic(stage, baseline = false) {
+            const now = performance.now();
+            if (!baseline && D.stage === stage && now - D.at < 100) return;
+            const input = options.composer?.();
+            if (!input || (!baseline && !input.contains(document.activeElement))) return;
+            try {
+                const data = diagnosticSnapshot(stage);
+                if (baseline) {
+                    D.baseline = data;
+                    if (!data.viewport.used.keyboard) { D.openingTrace = []; D.baselineTime = now; }
+                }
+                else D.lastFocus = data;
+                const v = data.viewport.used;
+                const keyboard = v.keyboard;
+                if (keyboard) D.lastKeyboard = data;
+                if (keyboard && D.openingTrace.length < 12) {
+                    const sample = { ms: Math.round(now - D.baselineTime), stage, height: v.measuredBottom - v.top,
+                        inner: data.viewport.innerHeight, boxBottom: data.box?.rect.bottom, mode: data.mode };
+                    const previous = D.openingTrace.at(-1);
+                    if (!previous || ['height', 'inner', 'boxBottom', 'mode'].some(key => sample[key] !== previous[key]))
+                        D.openingTrace.push(sample);
+                }
+                D.at = now; D.stage = stage;
+                if (baseline || keyboard) D.trace.push({ stage, view: data.viewport.used, inner: data.viewport.innerHeight,
+                    box: data.box?.rect, port: data.conversation.port?.scroll,
+                    last: data.conversation.last?.rect.bottom, follow: data.conversation.follow,
+                    reason: data.conversation.reason });
+                // Keep the copied report small enough for a mobile message.
+                if (D.trace.length > 8) D.trace.shift();
+            } catch (_) { /* Diagnostics never interrupt typing or scrolling. */ }
+        }
+        function report() {
+            // Layout values only: no conversation text, draft, room IDs, URLs,
+            // cookies, credentials or network requests are read or included.
+            const current = diagnosticSnapshot('diagnostic-copy');
+            const data = { version: options.version || '4.5.5.25', browser: navigator.userAgent,
+                screen: { width: screen.width, height: screen.height, dpr: window.devicePixelRatio },
+                baseline: D.baseline, keyboardDetected: !!D.lastKeyboard,
+                lastFocus: D.lastKeyboard || D.lastFocus, openingTrace: D.openingTrace, trace: D.trace,
+                current: { enabled: current.enabled, suspended: current.suspended, focused: current.focused,
+                    viewport: current.viewport, mode: current.mode, box: current.box?.rect, host: current.host?.rect,
+                    conversationEnd: current.conversation.last?.rect?.bottom },
+                alignment: automatic() ? 'auto' : 'manual', configuredOffset: Number(options.offset?.()) || 0,
+                motionGuard: current.motionGuard,
+                settingsPanel: diagnosticNode(document.getElementById('cmu-settings-panel')) };
+            return '[CMU 키보드 진단]\n' +
+                (D.lastFocus ? '문제가 보인 직후의 화면 정보예요. 대화 내용과 초안은 포함하지 않아요.\n' :
+                    '기록 없음: 설정을 닫고 채팅 입력창을 눌러 문제를 재현한 뒤 다시 복사해 주세요.\n') + JSON.stringify(data, null, 2);
+        }
+        function restore() {
+            S.resize?.disconnect(); S.mutation?.disconnect();
+            S.resize = S.mutation = null;
+            const anchor = S.transcript && !S.transcript.follow ? S.transcript.anchor || readAnchor(S.transcript) : null;
+            releaseDock();
+            if (S.nativeStyles) { restoreStyles(S.nativeStyles); S.nativeStyles = null; }
+            if (S.host) {
+                if (S.saved && S.host.style.getPropertyValue('translate') === S.applied &&
+                    S.host.style.getPropertyPriority('translate') === 'important') {
+                    if (S.saved.value) S.host.style.setProperty('translate', S.saved.value, S.saved.priority);
+                    else S.host.style.removeProperty('translate');
+                }
+                S.host.removeAttribute('data-cmu-keyboard-composer');
+            }
+            releaseTranscript(anchor);
+            S.host = S.saved = S.box = S.input = null; S.shift = 0; S.applied = ''; S.nativeFit = false;
+        }
+        function reset() {
+            releaseMotion('reset');
+            if (S.frame) cancelAnimationFrame(S.frame);
+            S.frame = 0;
+            for (const timer of S.timers) clearTimeout(timer);
+            S.timers = [];
+            cancelOpening();
+            restore(); S.blockedHost = null; S.beforeKeyboard = null; S.returning = null;
+            releaseViewportPolicy();
+        }
+        function cancelOpening() {
+            clearTimeout(S.openingTimer); S.openingTimer = 0; S.opening = null;
+        }
+        function openingReady(v) {
+            if (S.host) return true;
+            const now = performance.now();
+            const values = [v.top, v.bottom, v.left, v.width];
+            if (!S.opening) S.opening = { start: now, changed: now, values, source: v.source };
+            const opening = S.opening;
+            if (opening.source !== v.source || values.some((value, i) => Math.abs(value - opening.values[i]) > 1)) {
+                opening.changed = now; opening.values = values; opening.source = v.source;
+            }
+            // Edge can briefly report a viewport shorter than the final keyboard
+            // viewport. Docking there produces an up/down bounce. Keep the native
+            // editor, focus and caret until the opening has been quiet for 140ms.
+            // The bounded deadline also covers keyboards which emit resize noise.
+            const wait = Math.min(900 - (now - opening.start),
+                Math.max(360 - (now - opening.start), 140 - (now - opening.changed)));
+            clearTimeout(S.openingTimer);
+            if (wait > 0) {
+                S.openingTimer = setTimeout(schedule, Math.ceil(wait) + 1);
+                return false;
+            }
+            cancelOpening();
+            return true;
+        }
+        const messageSelector = '[data-message-group-id]';
+        function messages(main) {
+            const groups = [...main.querySelectorAll(messageSelector)];
+            return (groups.length ? groups : [...main.querySelectorAll('.wrtn-markdown')])
+                .filter(node => !node.closest('[role="dialog"], [data-cmu-sce-root], [aria-hidden="true"]') &&
+                    node.getClientRects().length && !S.host?.contains(node));
+        }
+        function latestMessage(nodes) {
+            // The real list can use column-reverse. DOM lastChild is not necessarily latest.
+            return nodes.reduce((last, node) => !last || node.getBoundingClientRect().bottom > last.getBoundingClientRect().bottom ? node : last, null);
+        }
+        function findTranscript(input) {
+            const main = input?.closest('main');
+            if (!main) return null;
+            const nodes = messages(main), last = latestMessage(nodes);
+            if (!last) return null;
+            for (let port = last.parentElement; port && port !== document.body && port !== document.documentElement; port = port.parentElement) {
+                if (port.closest(messageSelector)) continue;
+                const css = getComputedStyle(port), rect = port.getBoundingClientRect();
+                if (/auto|scroll|overlay/.test(css.overflowY) && rect.height > 60 && rect.width > 100)
+                    return { main, port, document: false, reverse: css.flexDirection === 'column-reverse' };
+            }
+            const port = document.scrollingElement;
+            return port && port.scrollHeight > port.clientHeight + 2 ? { main, port, document: true, reverse: false } : null;
+        }
+        function atEnd(t) {
+            return t.reverse ? Math.abs(t.port.scrollTop) < 48 : t.port.scrollHeight - t.port.clientHeight - t.port.scrollTop < 48;
+        }
+        function transcriptTop(t) { return t.document ? viewport().top : t.port.getBoundingClientRect().top; }
+        function readAnchor(t) {
+            const top = Math.max(viewport().top, transcriptTop(t));
+            const nodes = messages(t.main).filter(node => t.document || t.port.contains(node));
+            const node = nodes.filter(node => node.getBoundingClientRect().bottom > top + 2)
+                .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
+            return node ? { node, top: node.getBoundingClientRect().top - transcriptTop(t) } : null;
+        }
+        function captureTranscript(input) {
+            const t = findTranscript(input);
+            if (!t) return null;
+            const last = latestMessage(messages(t.main));
+            const box = (S.box || findContext(input)?.box)?.getBoundingClientRect();
+            const view = viewport();
+            const end = Math.min(view.bottom, box?.top ?? view.bottom);
+            const rect = last?.getBoundingClientRect();
+            // The native list can reserve space below its last message. Seeing the
+            // actual end just above the composer still means the user is at the end.
+            const visibleEnd = rect && rect.bottom > Math.max(view.top, transcriptTop(t)) &&
+                rect.bottom <= end + 32 && rect.bottom >= end - 112;
+            const reason = atEnd(t) ? 'scroll-end' : visibleEnd ? 'message-end-visible' : 'reading-history';
+            return { ...t, follow: reason !== 'reading-history', reason, anchor: readAnchor(t),
+                endGap: Math.max(8, Math.min(160, (box?.top ?? end) - (rect?.bottom ?? end))) };
+        }
+        function ownStyle(owner, prop, value) {
+            const style = owner.host.style;
+            const current = style.getPropertyValue(prop), priority = style.getPropertyPriority(prop);
+            let saved = owner.styles.get(prop);
+            if (saved && saved.requested === value && current === saved.applied && priority === 'important') return;
+            if (!saved || current !== saved.applied || priority !== 'important') {
+                saved = { value: current, priority, applied: '' };
+                owner.styles.set(prop, saved);
+            }
+            if (current !== value || priority !== 'important') style.setProperty(prop, value, 'important');
+            saved.applied = style.getPropertyValue(prop);
+            saved.requested = value;
+        }
+        function restoreStyles(owner) {
+            for (const [prop, saved] of [...owner.styles].reverse()) {
+                if (owner.host.style.getPropertyValue(prop) !== saved.applied || owner.host.style.getPropertyPriority(prop) !== 'important') continue;
+                if (saved.value) owner.host.style.setProperty(prop, saved.value, saved.priority);
+                else owner.host.style.removeProperty(prop);
+            }
+        }
+        function scrollTranscript(t, value) {
+            t.port.scrollTop = value;
+            t.written = t.port.scrollTop;
+        }
+        function preserveAnchor(t, anchor) {
+            if (!anchor?.node.isConnected || !t.port.contains(anchor.node)) return;
+            const delta = anchor.node.getBoundingClientRect().top - transcriptTop(t) - anchor.top;
+            if (Math.abs(delta) > 1) scrollTranscript(t, t.port.scrollTop + delta / transcriptScale(t));
+        }
+        function transcriptScale(t) {
+            return !t.document && t.port.offsetHeight ? Math.max(.25, t.port.getBoundingClientRect().height / t.port.offsetHeight) : 1;
+        }
+        function releaseTranscript(previousAnchor) {
+            const t = S.transcript;
+            if (!t) return;
+            S.transcript = null;
+            t.resize?.disconnect(); t.mutation.disconnect();
+            for (const stop of t.listeners) stop();
+            const anchor = t.follow ? null : previousAnchor || readAnchor(t);
+            // Scroll immediately, even on pages with smooth-scroll enabled.
+            for (const [prop, saved] of [...t.styles]) {
+                if (prop === 'scroll-behavior') continue;
+                restoreStyles({ host: t.host, styles: new Map([[prop, saved]]) });
+            }
+            if (t.port.isConnected) {
+                if (t.follow && !t.nativeFit) scrollTranscript(t, t.reverse ? 0 : t.port.scrollHeight);
+                else preserveAnchor(t, anchor);
+            }
+            const behavior = t.styles.get('scroll-behavior');
+            if (behavior) restoreStyles({ host: t.host, styles: new Map([['scroll-behavior', behavior]]) });
+            t.port.removeAttribute('data-cmu-keyboard-transcript');
+            if (!S.disposed) S.returning = { ...t, anchor: t.follow ? null : readAnchor(t), until: performance.now() + 1100 };
+        }
+        function reconcileReturn() {
+            const t = S.returning;
+            if (!t) return;
+            if (performance.now() > t.until || !t.port.isConnected || !t.main.isConnected || S.transcript) {
+                S.returning = null; return;
+            }
+            const previous = { value: t.port.style.getPropertyValue('scroll-behavior'), priority: t.port.style.getPropertyPriority('scroll-behavior') };
+            t.port.style.setProperty('scroll-behavior', 'auto', 'important');
+            if (t.follow) {
+                const input = options.composer?.(), box = input && findContext(input)?.box;
+                const last = latestMessage(messages(t.main));
+                if (box && last) {
+                    const edge = Math.min(viewport(false).bottom, box.getBoundingClientRect().top) - t.endGap;
+                    const delta = last.getBoundingClientRect().bottom - edge;
+                    if (Math.abs(delta) > 1) scrollTranscript(t, t.port.scrollTop + delta / transcriptScale(t));
+                }
+            } else preserveAnchor(t, t.anchor);
+            if (previous.value) t.port.style.setProperty('scroll-behavior', previous.value, previous.priority);
+            else t.port.style.removeProperty('scroll-behavior');
+        }
+        function cancelReturnForGesture(event) {
+            const t = S.returning;
+            if (t && t.port.contains(event.target) && !editable(event.target) &&
+                !event.target.closest?.('#cmu-settings-panel, #ciw-settings-overlay, #cerc-panel')) S.returning = null;
+        }
+        function startTranscript(input) {
+            const context = findTranscript(input);
+            if (!context) return;
+            const seed = S.beforeKeyboard?.port === context.port ? S.beforeKeyboard : captureTranscript(input);
+            S.returning = null;
+            const t = S.transcript = { ...context, host: context.port, styles: new Map(), listeners: [], nativeFit: S.nativeFit,
+                follow: seed?.follow ?? atEnd(context), anchor: seed?.anchor, written: context.port.scrollTop,
+                padding: parseFloat(getComputedStyle(context.port).paddingBottom) || 0, end: 0,
+                followReason: seed?.reason || 'current-scroll', userUntil: 0, endGap: seed?.endGap ?? 8 };
+            const listenHere = (node, event, fn, flags = { passive: true }) => {
+                node.addEventListener(event, fn, flags);
+                t.listeners.push(() => node.removeEventListener(event, fn, flags));
+            };
+            listenHere(t.document ? document : t.port, 'scroll', () => {
+                if (S.transcript !== t || Math.abs(t.port.scrollTop - t.written) < 2) return;
+                const last = latestMessage(messages(t.main));
+                const gap = last ? Math.abs(last.getBoundingClientRect().bottom - t.end) : Infinity;
+                const nearEnd = atEnd(t) || gap < 48;
+                if (performance.now() < t.userUntil) {
+                    t.follow = nearEnd;
+                    t.followReason = nearEnd ? 'user-at-end' : 'user-reading';
+                } else if (nearEnd) t.follow = true;
+                // Browser focus scrolling and native resize callbacks are not a
+                // request to read older history. Keep following through those changes.
+                t.anchor = t.follow ? null : readAnchor(t); t.written = t.port.scrollTop;
+                if (t.follow) schedule();
+            });
+            // While a finger/wheel is moving the history, do not pull it back down.
+            const intent = event => {
+                if (!editable(event.target) && !S.host?.contains(event.target)) t.userUntil = performance.now() + 1200;
+            };
+            listenHere(t.port, 'pointerdown', intent);
+            listenHere(t.port, 'touchstart', intent);
+            listenHere(t.port, 'touchmove', intent);
+            listenHere(t.port, 'wheel', intent);
+            listenHere(t.port, 'keydown', event => {
+                if (!editable(event.target) && /^(ArrowUp|ArrowDown|PageUp|PageDown|Home|End| )$/.test(event.key)) intent(event);
+            });
+            listenHere(t.main, 'load', schedule, true);
+            t.mutation = new MutationObserver(schedule);
+            t.mutation.observe(t.main, { childList: true, subtree: true, characterData: true });
+            if (typeof ResizeObserver === 'function') {
+                t.resize = new ResizeObserver(schedule);
+                t.resize.observe(t.port);
+                for (const node of new Set(messages(t.main).map(node => node.parentElement))) t.resize.observe(node);
+            }
+            t.port.setAttribute('data-cmu-keyboard-transcript', '1');
+            ownStyle(t, 'scroll-behavior', 'auto');
+            ownStyle(t, 'overflow-anchor', 'none');
+            if (!t.document && !t.nativeFit) {
+                const css = getComputedStyle(t.port);
+                if (/^(absolute|fixed)$/.test(css.position) && css.bottom !== 'auto') {
+                    // A bottom-anchored history would otherwise shrink upward from
+                    // its old bottom, leaving it underneath the moved composer.
+                    ownStyle(t, 'top', css.top === 'auto' ? `${t.port.offsetTop}px` : css.top);
+                    ownStyle(t, 'bottom', 'auto');
+                }
+            }
+        }
+        function syncTranscript(v) {
+            if (!S.host || !S.input) return;
+            let t = S.transcript;
+            if (t && (!t.port.isConnected || !t.main.contains(S.input))) { releaseTranscript(); t = null; }
+            if (!t) { startTranscript(S.input); t = S.transcript; }
+            if (!t) return;
+            const box = S.box.getBoundingClientRect(), host = S.host.getBoundingClientRect();
+            // Include native toolbars just above the painted input box.
+            const end = t.nativeFit || automatic() ? box.top - t.endGap : Math.min(box.top, host.top) - 8;
+            const rect = t.port.getBoundingClientRect(), scale = transcriptScale(t);
+            const anchor = !t.follow ? t.anchor || readAnchor(t) : null;
+            t.end = end;
+            const last = latestMessage(messages(t.main));
+            if (t.resize && last !== t.lastObserved) {
+                if (t.lastObserved) t.resize.unobserve(t.lastObserved);
+                if (last) t.resize.observe(last);
+                t.lastObserved = last;
+            }
+            if (t.nativeFit) {
+                // Moving upward needs real scroll room at the end of the history.
+                // Otherwise scrollTop is clamped and the last message stays hidden.
+                const extra = Math.max(0, -S.shift * nativeScale(S.host)) / scale;
+                if (extra > .5) {
+                    ownStyle(t, 'box-sizing', 'border-box');
+                    ownStyle(t, 'padding-bottom', `${t.padding + extra}px`);
+                } else {
+                    for (const prop of ['padding-bottom', 'box-sizing']) {
+                        const saved = t.styles.get(prop);
+                        if (saved) { restoreStyles({ host: t.host, styles: new Map([[prop, saved]]) }); t.styles.delete(prop); }
+                    }
+                }
+            } else if (t.document) {
+                ownStyle(t, 'padding-bottom', `${t.padding + Math.max(0, window.innerHeight - end)}px`);
+            } else {
+                const height = Math.max(48, (end - rect.top) / scale);
+                ownStyle(t, 'box-sizing', 'border-box');
+                ownStyle(t, 'min-height', '0px');
+                // Native bottom padding often reserves the old composer position.
+                // Its space is already excluded by the new conversation height.
+                ownStyle(t, 'padding-bottom', `${Math.min(t.padding, 8)}px`);
+                ownStyle(t, 'height', `${height}px`);
+                ownStyle(t, 'max-height', `${height}px`);
+                ownStyle(t, 'flex-grow', '0');
+                ownStyle(t, 'flex-shrink', '0');
+                ownStyle(t, 'flex-basis', 'auto');
+            }
+            if (t.follow) {
+                if (last) {
+                    // Align the actual last message, not a DOM spacer or the first
+                    // child of a reversed list. Never scroll the focused editor.
+                    const delta = last.getBoundingClientRect().bottom - end;
+                    if (Math.abs(delta) > 1) scrollTranscript(t, t.port.scrollTop + delta / scale);
+                }
+            } else preserveAnchor(t, anchor);
+            t.anchor = t.follow ? null : readAnchor(t);
+            t.written = t.port.scrollTop;
+        }
+        function findContext(input) {
+            const main = input.closest('main');
+            if (!main) return null;
+            const nodes = [];
+            const suggested = options.shell?.(input);
+            for (let node = input.parentElement, depth = 0; node && node !== main && depth < 12; node = node.parentElement, depth++) {
+                const rect = node.getBoundingClientRect();
+                if (node.querySelector('[data-message-group-id], .wrtn-markdown') ||
+                    rect.height > Math.max(500, S.height * .8)) break;
+                if (rect.width < 20 || rect.height < 20) continue;
+                const style = getComputedStyle(node);
+                nodes.push({ node, rect, style });
+            }
+            if (!nodes.length) return null;
+            const send = options.sendButton?.() || nodes[nodes.length - 1].node.querySelector('button[aria-label*="전송"], button[aria-label*="보내기"], button[aria-label*="Send"], button[aria-label*="send"]');
+            const eligible = nodes.filter(({ node }) => !send || node.contains(send));
+            const marked = '[data-cmu-theme-input-box], [data-sgb-input-box], [data-cmu-composer-expand-host]';
+            // A painted box contains the editor AND send controls. Do not align a tall
+            // form/keyboard spacer just because it is the outermost bottom-0 wrapper.
+            const visible = eligible.find(({ node, style }) => {
+                const painted = parseFloat(style.borderRadius) > 0 &&
+                    (style.backgroundImage !== 'none' || !['transparent', 'rgba(0, 0, 0, 0)'].includes(style.backgroundColor) || parseFloat(style.borderBottomWidth) > 0);
+                return painted || node.matches(marked);
+            }) || eligible.find(({ node }) => node === suggested || node.tagName === 'FORM') || eligible[0];
+            if (!visible) return null;
+            const box = visible.node;
+            let host = box;
+            for (const { node, rect, style } of nodes.slice(nodes.indexOf(visible))) {
+                // Moving an ancestor of a fixed composer would change that composer's
+                // containing block. Move the fixed element itself and stop there.
+                const anchored = /^(fixed|absolute|sticky)$/.test(style.position) && style.bottom !== 'auto';
+                if (anchored || (rect.height <= visible.rect.height + 96 &&
+                    (node === suggested || node.matches('form, [data-cmu-theme-input-host], [data-sgb-input-host]')))) host = node;
+                if (style.position === 'fixed') { host = node; break; }
+            }
+            return { host, box };
+        }
+        function dockStyle(prop, value) {
+            const dock = S.dock;
+            if (!dock) return;
+            const style = dock.host.style;
+            const current = style.getPropertyValue(prop), priority = style.getPropertyPriority(prop);
+            let saved = dock.styles.get(prop);
+            if (saved && saved.requested === value && current === saved.applied && priority === 'important') return;
+            if (!saved || (current !== saved.applied || priority !== 'important')) {
+                // Preserve a newer native value for restoration after the keyboard closes.
+                saved = { value: current, priority, applied: '' };
+                dock.styles.set(prop, saved);
+            }
+            if (current !== value || priority !== 'important') style.setProperty(prop, value, 'important');
+            saved.applied = style.getPropertyValue(prop);
+            saved.requested = value;
+        }
+        function releaseDock() {
+            const dock = S.dock;
+            if (!dock) return;
+            S.dock = null;
+            // Removing the attribute directly keeps the focused editor rendered. Do
+            // not hidePopover(), detach the React node, or replace/clone the editor.
+            if (dock.host.getAttribute('popover') === 'manual') dock.host.removeAttribute('popover');
+            for (const [prop, saved] of [...dock.styles].reverse()) {
+                if (dock.host.style.getPropertyValue(prop) !== saved.applied || dock.host.style.getPropertyPriority(prop) !== 'important') continue;
+                if (saved.value) dock.host.style.setProperty(prop, saved.value, saved.priority);
+                else dock.host.style.removeProperty(prop);
+            }
+            dock.host.removeAttribute('data-cmu-keyboard-dock');
+        }
+        function startDock(host, v) {
+            if (typeof host.showPopover !== 'function' || host.hasAttribute('popover') || host.tagName === 'DIALOG') return false;
+            const rect = host.getBoundingClientRect(), css = getComputedStyle(host);
+            if (!rect.width || !rect.height) return false;
+            const appearance = {};
+            for (const prop of ['display', 'background-color', 'color', 'overflow-x', 'overflow-y',
+                'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+                'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+                'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style',
+                'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color'])
+                appearance[prop] = css.getPropertyValue(prop);
+            S.dock = { host, styles: new Map(), leftGap: Math.max(0, rect.left - v.left),
+                rightGap: Math.max(0, v.left + v.width - rect.right), width: rect.width,
+                fluid: rect.width >= v.width * .8, top: rect.top };
+            try {
+                if (!S.dockCss) {
+                    S.dockCss = document.createElement('style');
+                    S.dockCss.textContent = '[data-cmu-keyboard-dock]::backdrop{background:transparent!important;pointer-events:none!important}';
+                    (document.head || document.documentElement).append(S.dockCss);
+                }
+                // Keep the native colors/borders/padding instead of the popover UA defaults.
+                for (const [prop, value] of Object.entries(appearance)) if (value) dockStyle(prop, value);
+                host.setAttribute('data-cmu-keyboard-dock', '1');
+                setDockPosition(v);
+                host.setAttribute('popover', 'manual');
+                host.showPopover();
+                if (!host.matches(':popover-open')) throw new Error('popover unavailable');
+                liftMotionSurface();
+                return true;
+            } catch (_) {
+                releaseDock();
+                return false;
+            }
+        }
+        function setDockPosition(v) {
+            const dock = S.dock;
+            if (!dock) return;
+            const width = Math.max(40, Math.min(v.width, dock.fluid ? v.width - dock.leftGap - dock.rightGap : dock.width));
+            const left = v.left + Math.max(0, Math.min(dock.leftGap, v.width - width));
+            for (const [prop, value] of Object.entries({
+                position: 'fixed', top: `${dock.top}px`, right: 'auto', bottom: 'auto', left: `${left}px`,
+                width: `${width}px`, 'max-width': 'none', 'min-width': '0px', 'box-sizing': 'border-box',
+                'margin-top': '0px', 'margin-right': '0px', 'margin-bottom': '0px', 'margin-left': '0px',
+                transform: 'none', translate: 'none', rotate: 'none', scale: 'none', transition: 'none', animation: 'none',
+                'position-anchor': 'none', 'position-area': 'none', 'z-index': '2147482990',
+            })) dockStyle(prop, value);
+        }
+        function placeDock(v) {
+            const dock = S.dock;
+            if (!dock) return;
+            if (dock.host.getAttribute('popover') !== 'manual') { restore(); return; }
+            if (!dock.host.matches(':popover-open')) {
+                try { dock.host.showPopover(); liftMotionSurface(); } catch (_) { restore(); return; }
+            }
+            setDockPosition(v);
+            let moved = false;
+            for (let pass = 0; pass < 2; pass++) {
+                const rect = S.box.getBoundingClientRect();
+                const editor = S.input.getBoundingClientRect();
+                const target = automatic() ? v.measuredBottom : v.bottom - 8;
+                const edge = rect.height <= v.height - 16 ? rect.bottom : editor.bottom;
+                const delta = target - edge;
+                if (!Number.isFinite(delta) || Math.abs(delta) <= 1) break;
+                dock.top = Math.round((dock.top + delta) * 100) / 100;
+                dockStyle('top', `${dock.top}px`);
+                moved = true;
+            }
+            if (moved) options.onMove?.();
+        }
+        function makesFixedBlock(node) {
+            const css = getComputedStyle(node);
+            return [css.transform, css.perspective, css.filter, css.backdropFilter, css.translate, css.rotate, css.scale]
+                .some(value => value && value !== 'none') || /(?:layout|paint|strict|content)/.test(css.contain) ||
+                /(?:transform|perspective|filter)/.test(css.willChange);
+        }
+        function bounds(host, v) {
+            let top = v.top + (automatic() ? 0 : 8), bottom = automatic() ? v.measuredBottom : v.bottom - 8;
+            let fixed = getComputedStyle(host).position === 'fixed';
+            for (let node = host.parentElement; node && node !== document.body; node = node.parentElement) {
+                // Plain overflow ancestors do not clip a viewport-fixed composer.
+                // Transformed/contained ancestors can establish a real clipping boundary.
+                if (fixed && makesFixedBlock(node)) fixed = false;
+                const css = getComputedStyle(node);
+                if (!fixed && /hidden|clip|auto|scroll/.test(css.overflowY)) {
+                    const rect = node.getBoundingClientRect();
+                    top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom);
+                }
+                if (css.position === 'fixed') fixed = true;
+            }
+            return { top, bottom };
+        }
+        function listen(target, name, fn, flags = { passive: true }) {
+            if (!target?.addEventListener) return;
+            target.addEventListener(name, fn, flags);
+            S.listeners.push(() => target.removeEventListener(name, fn, flags));
+        }
+        function nativeScale(host) {
+            const css = getComputedStyle(host);
+            let height = parseFloat(css.height) || host.offsetHeight;
+            if (css.boxSizing !== 'border-box') for (const key of ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth'])
+                height += parseFloat(css[key]) || 0;
+            const ratio = height ? host.getBoundingClientRect().height / height : 1;
+            return Math.abs(ratio - 1) < .001 ? 1 : Math.max(.25, Math.min(4, ratio));
+        }
+        function nativeAdjustment(v, context, requested = options.offset?.()) {
+            const { host, box } = context, rect = box.getBoundingClientRect(), scale = nativeScale(host);
+            // Always remove our own translation before measuring the available room.
+            // Measuring the shifted box would alternate between +16 and 0 every frame.
+            const applied = S.nativeFit && S.host === host ? S.shift * scale : 0;
+            const baseTop = rect.top - applied, baseBottom = rect.bottom - applied;
+            const foreign = !(S.nativeFit && S.saved) && !['none', '0px', '0px 0px'].includes(getComputedStyle(host).translate);
+            const auto = automatic();
+            const min = foreign ? 0 : auto ? v.top - baseTop : Math.min(0, Math.ceil(Math.max(-160, v.top + 8 - baseTop)));
+            const max = foreign ? 0 : auto ? v.measuredBottom - baseBottom : Math.max(0, Math.floor(Math.min(160, v.measuredBottom - baseBottom) + .001));
+            requested = auto ? v.measuredBottom - baseBottom : Math.round(Math.max(-160, Math.min(160, Number(requested) || 0)));
+            const effective = Math.max(min, Math.min(max, requested));
+            const room = auto ? bounds(host, v) : null;
+            return { reference: auto ? 'measured-bottom' : 'native-composer', baseTop, baseBottom, min, max, requested, effective,
+                applied: Math.round(applied * 100) / 100, limited: Math.abs(effective - requested) > .5, foreign,
+                eligible: v.resizedLayout && (auto
+                    ? rect.height <= v.measuredBottom - v.top && room.bottom >= v.measuredBottom - 1 && room.top <= v.top + 1
+                    : baseTop >= v.top - 1 && baseBottom <= v.measuredBottom + 1 && (S.nativeFit || v.measuredBottom - baseBottom <= 32)) };
+        }
+        function placeNative(v) {
+            const adjustment = nativeAdjustment(v, { host: S.host, box: S.box });
+            if (adjustment.foreign) return;
+            if (adjustment.effective === 0) {
+                if (S.saved && S.host.style.getPropertyValue('translate') === S.applied && S.host.style.getPropertyPriority('translate') === 'important') {
+                    if (S.saved.value) S.host.style.setProperty('translate', S.saved.value, S.saved.priority);
+                    else S.host.style.removeProperty('translate');
+                }
+                if (S.nativeStyles) { restoreStyles(S.nativeStyles); S.nativeStyles = null; }
+                S.saved = null; S.shift = 0; S.applied = '';
+                S.host.removeAttribute('data-cmu-keyboard-composer');
+                return;
+            }
+            if (!S.saved) S.saved = { value: S.host.style.getPropertyValue('translate'), priority: S.host.style.getPropertyPriority('translate') };
+            if (!S.nativeStyles) S.nativeStyles = { host: S.host, styles: new Map() };
+            ownStyle(S.nativeStyles, 'transition', 'none');
+            S.shift = Math.round(adjustment.effective / nativeScale(S.host) * 100000) / 100000;
+            S.applied = `0px ${S.shift}px`;
+            if (S.host.style.getPropertyValue('translate') !== S.applied || S.host.style.getPropertyPriority('translate') !== 'important') {
+                S.host.style.setProperty('translate', S.applied, 'important');
+                S.applied = S.host.style.getPropertyValue('translate');
+                options.onMove?.();
+            }
+            if (!S.host.hasAttribute('data-cmu-keyboard-composer')) S.host.setAttribute('data-cmu-keyboard-composer', '1');
+        }
+        function sync() {
+            if (S.disposed) return;
+            if (S.frame) cancelAnimationFrame(S.frame);
+            S.frame = 0;
+            const initialView = viewport(); remember(initialView);
+            updateMotion(viewport(false));
+            syncViewportPolicy();
+            options.onViewport?.();
+            if (!options.enabled?.() || options.suspended?.() || Math.abs(initialView.scale - 1) > .06) {
+                cancelOpening(); restore(); S.beforeKeyboard = null;
+                if (options.enabled?.() && Math.abs(initialView.scale - 1) <= .06) reconcileReturn();
+                else S.returning = null;
+                return;
+            }
+            const input = options.composer?.();
+            const focused = input instanceof HTMLElement && input.isConnected &&
+                (input === document.activeElement || input.contains(document.activeElement));
+            if (!focused) { cancelOpening(); restore(); reconcileReturn(); S.blockedHost = null; S.beforeKeyboard = null; return; }
+            const v = viewport();
+            recordDiagnostic('before-layout');
+            if (v.measuredBottom - v.top < 80) { cancelOpening(); restore(); return; }
+            // Focus by itself, address-bar movement and hardware keyboards do not move the input.
+            if (!v.keyboard) {
+                cancelOpening();
+                const returning = !!S.transcript;
+                restore();
+                reconcileReturn();
+                // Keep the position captured before keyboard animation. A layout
+                // resize can arrive before its viewport event without any user scroll.
+                if (returning || !S.beforeKeyboard) S.beforeKeyboard = captureTranscript(input);
+                return;
+            }
+            const context = S.input === input && S.host?.isConnected && S.box?.isConnected &&
+                S.host.contains(S.box) && S.box.contains(input) ? { host: S.host, box: S.box } : findContext(input);
+            if (!context || context.host === S.blockedHost) { restore(); return; }
+            const { host, box } = context;
+            if (S.nativeFit && S.saved && (host.style.getPropertyValue('translate') !== S.applied || host.style.getPropertyPriority('translate') !== 'important')) {
+                S.blockedHost = host; restore(); return;
+            }
+            // Native Android resize may already put the whole composer in view.
+            // Do not wait 360ms and then replace its native 16px inset with 8px.
+            const nativeFit = !S.dock && (!S.applied || S.nativeFit) && nativeAdjustment(v, context).eligible;
+            const continuingNative = S.nativeFit;
+            if (continuingNative && !nativeFit) {
+                // Preserve the current read/follow intent if fallback becomes necessary.
+                const t = S.transcript;
+                const seed = t && { ...t, reason: t.followReason, anchor: readAnchor(t) };
+                restore(); S.returning = null;
+                if (seed) S.beforeKeyboard = seed;
+            }
+            // Never expose an uncorrected frame while switching an owned composer.
+            // Auto mode follows the measured edge immediately; native keyboard
+            // animation is already moving that edge and must not get a second delay.
+            if (!nativeFit && !continuingNative && !automatic() && !openingReady(v)) { recordDiagnostic('keyboard-settling'); return; }
+            if (nativeFit) cancelOpening();
+            if (S.host !== host || S.box !== box || S.input !== input) {
+                restore();
+                // Respect a separate extension already translating this same container.
+                S.host = host; S.box = box; S.input = input; S.nativeFit = nativeFit;
+                startTranscript(input);
+                if (!nativeFit && !startDock(host, v)) {
+                    if (!['none', '0px', '0px 0px'].includes(getComputedStyle(host).translate)) { restore(); return; }
+                    S.saved = { value: host.style.getPropertyValue('translate'), priority: host.style.getPropertyPriority('translate') };
+                }
+                if (typeof ResizeObserver === 'function') {
+                    S.resize = new ResizeObserver(schedule);
+                    S.resize.observe(host); S.resize.observe(box); S.resize.observe(input);
+                }
+                S.mutation = new MutationObserver(() => {
+                    if (S.dock || S.nativeFit) { schedule(); return; }
+                    if (host.style.getPropertyValue('translate') !== S.applied || host.style.getPropertyPriority('translate') !== 'important') {
+                        S.blockedHost = host; restore();
+                    } else schedule();
+                });
+                for (let node = box; node && node !== document.body; node = node.parentElement)
+                    S.mutation.observe(node, { attributes: true, attributeFilter: ['style', 'class'] });
+            }
+            if (S.nativeFit) {
+                placeNative(v);
+                syncTranscript(v);
+                recordDiagnostic('after-layout');
+                return;
+            }
+            if (S.dock) {
+                placeDock(v);
+                syncTranscript(v);
+                if (S.host && host.getAttribute('data-cmu-keyboard-composer') !== '1') host.setAttribute('data-cmu-keyboard-composer', '1');
+                recordDiagnostic('after-layout');
+                return;
+            }
+            // Install the transform before measuring: it can itself change how a
+            // native absolute/fixed child is laid out. The rendered box is authoritative.
+            if (!S.applied) {
+                S.applied = '0px 0px';
+                host.style.setProperty('translate', S.applied, 'important');
+            }
+            const movedRect = box.getBoundingClientRect();
+            const inputRect = input.getBoundingClientRect();
+            const { top, bottom } = bounds(host, v);
+            if (bottom - top < 60) { restore(); return; }
+            let correction = bottom - movedRect.bottom;
+            if (movedRect.height > bottom - top) {
+                // With an unusually tall composer, keep the editable area visible.
+                correction = bottom - inputRect.bottom;
+                if (inputRect.height <= bottom - top)
+                    correction = Math.max(correction, top - inputRect.top);
+            }
+            const hostRect = host.getBoundingClientRect();
+            const scale = host.offsetHeight ? Math.max(.25, Math.min(4, hostRect.height / host.offsetHeight)) : 1;
+            // Correct the remaining measured error, so a native keyboard adjustment
+            // already applied by the site is not applied for a second time.
+            if (Math.abs(correction) > 2) S.shift = Math.round((S.shift + correction / scale) * 100) / 100;
+            const value = `0px ${S.shift}px`;
+            S.applied = value;
+            if (host.style.getPropertyValue('translate') !== value || host.style.getPropertyPriority('translate') !== 'important') {
+                host.style.setProperty('translate', value, 'important');
+                options.onMove?.();
+            }
+            if (host.getAttribute('data-cmu-keyboard-composer') !== '1') host.setAttribute('data-cmu-keyboard-composer', '1');
+            syncTranscript(v);
+            recordDiagnostic('after-layout');
+        }
+        function schedule() {
+            if (!S.disposed && !S.frame) S.frame = requestAnimationFrame(sync);
+        }
+        function settle() {
+            schedule();
+            for (const timer of S.timers) clearTimeout(timer);
+            // Mobile keyboard/toolbars may finish after the initial resize event.
+            // Keep this bounded; no permanent polling or programmatic refocusing.
+            S.timers = [60, 160, 320, 550, 900, 1400, 2000].map(delay => setTimeout(schedule, delay));
+        }
+        function focus(event) {
+            if (event.type === 'focusin') {
+                S.blockedHost = null;
+                const input = options.composer?.();
+                if (input?.contains(event.target)) armMotion(input);
+                if (!S.host && input?.contains(event.target)) {
+                    if (options.enabled?.()) S.beforeKeyboard = captureTranscript(input);
+                    recordDiagnostic('focus-before-keyboard', true);
+                }
+            }
+            if (event.type === 'focusout' && M.seed && !M.seed.input.contains(event.relatedTarget)) releaseMotion('blur');
+            settle();
+        }
+        function prepare(event) {
+            M.blockedClick = 0;
+            if (M.active) {
+                // The snapshot and live controls have different coordinates. A tap
+                // dismisses the snapshot without accidentally pressing a hidden Send.
+                M.blockedClick = performance.now() + 800;
+                releaseMotion('pointer');
+                event.preventDefault(); event.stopImmediatePropagation();
+                return;
+            }
+            cancelReturnForGesture(event);
+            const input = options.composer?.();
+            if (input?.contains(event.target)) {
+                armMotion(input);
+                if (!S.host) {
+                    if (options.enabled?.()) S.beforeKeyboard = captureTranscript(input);
+                    recordDiagnostic('tap-before-keyboard', true);
+                }
+                // Tapping an already focused contenteditable reopens the keyboard
+                // without focusin. It needs the same settling as the first focus.
+                settle();
+            }
+        }
+        remember(viewport());
+        listen(window, 'resize', motionResize);
+        listen(window, 'scroll', schedule);
+        listen(window.visualViewport, 'resize', motionResize);
+        listen(window.visualViewport, 'scroll', schedule);
+        listen(K.api, 'geometrychange', motionResize);
+        listen(document, 'focusin', focus, true);
+        listen(document, 'focusout', focus, true);
+        listen(document, 'pointerdown', prepare, true);
+        listen(document, 'click', event => {
+            const blocked = M.blockedClick; M.blockedClick = 0;
+            if (blocked > performance.now()) { event.preventDefault(); event.stopImmediatePropagation(); }
+        }, true);
+        listen(document, 'wheel', cancelReturnForGesture);
+        listen(document, 'touchmove', cancelReturnForGesture);
+        listen(document, 'input', () => { releaseMotion('typing'); if (S.host) schedule(); }, true);
+        listen(document, 'compositionstart', () => releaseMotion('typing'), true);
+        listen(document, 'wheel', () => releaseMotion('gesture'));
+        listen(document, 'touchmove', () => releaseMotion('gesture'));
+        listen(document, 'keydown', () => releaseMotion('key'), true);
+        listen(window, 'pagehide', reset);
+        listen(document, 'visibilitychange', () => { if (document.hidden) releaseMotion('hidden'); });
+        function calibration(requested = options.offset?.()) {
+            requested = Math.max(-160, Math.min(160, Math.round(Number(requested) || 0)));
+            const current = viewport(false), input = options.composer?.();
+            const live = current.keyboard && input?.contains(document.activeElement) && !options.suspended?.();
+            const context = live && (S.host ? { host: S.host, box: S.box } : findContext(input));
+            let native = context ? nativeAdjustment(current, context, requested) : D.lastKeyboard?.nativeAdjustment;
+            if (!automatic() && native?.reference === 'measured-bottom') {
+                const view = live ? current : D.lastKeyboard.viewport.used;
+                native = { ...native, reference: 'native-composer',
+                    min: Math.min(0, Math.ceil(Math.max(-160, view.top + 8 - native.baseTop))),
+                    max: Math.max(0, Math.floor(Math.min(160, view.measuredBottom - native.baseBottom) + .001)) };
+            }
+            if (native?.eligible) {
+                const effective = Math.max(native.min, Math.min(native.max, requested));
+                return { ...native, known: true, requested, effective, limited: effective !== requested,
+                    source: live ? 'current' : 'last-keyboard', mode: 'native-resize' };
+            }
+            const view = live ? current : D.lastKeyboard?.viewport.used;
+            if (!view) return { known: false, requested };
+            const min = Math.ceil(Math.max(-160, view.top + 1 - view.measuredBottom));
+            const max = Math.floor(Math.min(160, view.layoutLimit - view.measuredBottom));
+            const effective = Math.max(min, Math.min(max, requested));
+            return { known: true, requested, effective, min, max, limited: Math.abs(effective - requested) > .5,
+                reference: 'viewport', source: live ? 'current' : 'last-keyboard', mode: S.dock ? 'top-layer' : 'native' };
+        }
+        return { sync, schedule, reset, report, calibration, view: (calibrated = true) => viewport(calibrated && !!options.enabled?.()), dispose() {
+            if (S.disposed) return;
+            S.disposed = true; reset();
+            S.dockCss?.remove(); S.dockCss = null;
+            for (const stop of S.listeners) stop();
+            S.listeners = [];
+        } };
+    }
+    const CMU_KEYBOARD_COMPOSER = cmuCreateKeyboardComposer({
+        version: VERSION,
+        nativeResize: () => /Android/i.test(navigator.userAgent),
+        mode: () => settings.keyboardComposerMode === 'manual' ? 'manual' : 'auto',
+        stabilize: () => settings.keyboardComposerMotionGuard !== false,
+        enabled: () => shouldRun() && settings.enabled !== false && !!settings.keyboardComposerAssist && isMobileLike() && isChatRoomPath(),
+        suspended: () => cmuUserNoteGuardActive() || document.documentElement.classList.contains('cmu-panel-open') ||
+            !!document.querySelector('#ciw-settings-overlay, #cerc-panel:not([hidden])'),
+        offset: () => settings.keyboardComposerOffset,
+        composer: () => findChatInput(),
+        shell: input => findComposerShell(input),
+        sendButton: () => getSendButton(),
+        onMove: () => scheduleCmuMenuSwipeZonePosition(),
+        onViewport: () => cmuSyncSettingsViewport(),
+    });
+    CMU_RESOURCES.cleanups.push(() => CMU_KEYBOARD_COMPOSER.dispose());
+    CMU_KEYBOARD_COMPOSER.sync();
+    function cmuFocusSettingsPanel(panel) {
+        const active = document.activeElement;
+        if (!active || panel.contains(active)) return;
+        // Opening settings ends chat typing. Do not leave an editor focused behind
+        // the sheet: Android otherwise pans the entire page to its hidden caret.
+        if (active.matches?.('input, textarea, [contenteditable="true"]')) {
+            const selection = window.getSelection();
+            if (selection?.anchorNode && active.contains(selection.anchorNode)) selection.removeAllRanges();
+            active.blur();
+        }
+        panel.tabIndex = -1;
+        panel.focus({ preventScroll: true });
+    }
+    function cmuSyncSettingsViewport() {
+        const panel = document.getElementById('cmu-settings-panel');
+        if (!panel?.classList.contains('open')) return;
+        // A chat calibration must never push settings controls below the keyboard.
+        const v = CMU_KEYBOARD_COMPOSER.view(false);
+        const margin = Math.min(10, v.height / 10);
+        const height = Math.max(1, Math.min(800, v.keyboard ? v.height - margin * 2 : v.height * .9));
+        const width = Math.max(1, Math.min(620, v.width - 20));
+        const values = {
+            '--cmu-panel-view-top': `${v.top + v.height - margin - height}px`,
+            '--cmu-panel-view-height': `${height}px`,
+            '--cmu-panel-view-left': `${v.left + (v.width - width) / 2}px`,
+            '--cmu-panel-view-width': `${width}px`,
+        };
+        for (const [key, value] of Object.entries(values)) {
+            if (panel.style.getPropertyValue(key) !== value) panel.style.setProperty(key, value);
+        }
+        if (!panel.hasAttribute('data-cmu-viewport-fit')) panel.setAttribute('data-cmu-viewport-fit', '');
+        cmuUpdateKeyboardOffsetStatus(panel);
+        const compact = v.keyboard && v.height < 560;
+        panel.toggleAttribute('data-cmu-keyboard-visible', compact);
+        const active = document.activeElement;
+        const body = panel.querySelector('.cmu-panel-body');
+        if (body && body.contains(active) && active.matches?.('input, textarea, select, [contenteditable="true"]')) {
+            const area = body.getBoundingClientRect(), field = active.getBoundingClientRect();
+            let bottom = field.bottom;
+            // Keep Apply/Reset reachable with the number field when the card fits.
+            const card = active.closest('.qcard');
+            const cardRect = card?.getBoundingClientRect();
+            if (cardRect && cardRect.bottom - field.top < area.height - 20) bottom = cardRect.bottom;
+            if (bottom > area.bottom - 12) body.scrollTop += bottom - area.bottom + 12;
+            else if (field.top < area.top + 12) body.scrollTop -= area.top + 12 - field.top;
+        }
+    }
+    function cmuKeyboardOffsetCard() {
+        const value = Math.round(Math.max(-160, Math.min(160, Number(settings.keyboardComposerOffset) || 0)));
+        const auto = settings.keyboardComposerMode !== 'manual';
+        return qCard(`<div class="subrow" style="display:block">
+          <div class="lbl" style="margin-bottom:10px">채팅창 위치 맞추기</div>
+          <div style="display:flex;gap:8px" role="group" aria-label="채팅창 위치 조절 방식">
+          ${[['auto', '자동 맞춤'], ['manual', '직접 조절']].map(([mode, label]) => `<button type="button" class="step-btn" data-action="keyboard-mode" data-mode="${mode}" aria-pressed="${(mode === 'auto') === auto}" style="flex:1;width:auto;min-width:0;white-space:nowrap">${label}</button>`).join('')}</div>
+          <div class="note" data-cmu-keyboard-auto-status style="margin-top:10px">${auto ? cmuKeyboardAutoStatus() : '직접 조절한 값은 자동 맞춤으로 바꿔도 보관돼요.'}</div>
+          </div><div data-cmu-keyboard-manual${auto ? ' hidden style="display:none"' : ''}>
+          <div class="subrow" style="display:block"><label class="lbl" for="cmu-keyboard-offset" style="display:block;margin-bottom:10px">채팅창 추가 이동
+          <div class="note">0은 기본 위치 · 음수는 위로, 양수는 아래로 이동해요. 화면 안의 남은 공간까지만 조절돼요.</div></label>
+          <div style="display:flex;align-items:center;gap:8px">
+          <button type="button" class="step-btn" style="flex:1;min-width:0;width:auto;font-size:13px" data-action="keyboard-offset-step" data-delta="-10" aria-label="입력창 10픽셀 위로 조절">위로 −10</button>
+          <input id="cmu-keyboard-offset" data-cmu-keyboard-offset type="number" inputmode="decimal" enterkeyhint="done" min="-160" max="160" step="1" value="${value}"
+            style="width:76px;min-width:76px;height:38px;box-sizing:border-box;border:1px solid #7776;border-radius:8px;background:transparent;color:inherit;text-align:center;font:inherit" aria-label="입력창 추가 이동 픽셀">
+          <button type="button" class="step-btn" style="flex:1;min-width:0;width:auto;font-size:13px" data-action="keyboard-offset-step" data-delta="10" aria-label="입력창 10픽셀 아래로 조절">아래로 +10</button></div></div>
+          <div class="subrow" style="display:block">
+          <div class="note" data-cmu-keyboard-offset-status role="status" style="margin:0 0 10px">${cmuKeyboardOffsetStatus(value)}</div>
+          <div style="display:flex;gap:8px;width:100%">
+          <button type="button" class="step-btn" style="flex:1 1 0;width:auto;min-width:0;height:38px;padding:8px 12px;white-space:nowrap;font-size:14px;text-align:center" data-action="keyboard-offset-reset">초기화</button>
+          <button type="button" class="step-btn" style="flex:1 1 0;width:auto;min-width:0;height:38px;padding:8px 12px;white-space:nowrap;font-size:14px;text-align:center" data-action="keyboard-offset-save">저장</button></div></div></div>`);
+    }
+    function cmuKeyboardAutoStatus() {
+        return settings.keyboardComposerAssist
+            ? '자동 맞춤 사용 중 · 보이는 화면의 하단에 입력창과 대화를 함께 맞춰요. 숫자를 입력하지 않아도 돼요.'
+            : '위의 키보드 입력창 위치 보정을 켜면 자동 맞춤을 사용해요.';
+    }
+    function cmuSetKeyboardMode(panel, mode) {
+        if (!['auto', 'manual'].includes(mode) || settings.keyboardComposerMode === mode) return;
+        setSettingFromQ('keyboardComposerMode', mode);
+        const card = panel.querySelector('[data-action="keyboard-mode"]')?.closest('.qcard');
+        if (!card) return;
+        const oldHeight = card.getBoundingClientRect().height;
+        card.outerHTML = cmuKeyboardOffsetCard();
+        const replacement = panel.querySelector('[data-action="keyboard-mode"]')?.closest('.qcard');
+        replacement?.querySelector(`[data-mode="${mode}"]`)?.focus({ preventScroll: true });
+        panel.cmuOffsetNotice = null;
+        // Preserve the local scroll context when showing or hiding manual controls.
+        if (oldHeight && replacement) cmuSyncSettingsViewport();
+    }
+    function cmuKeyboardOffsetStatus(value, dirty = false) {
+        const saved = dirty ? `${value}px 변경됨 · 저장을 눌러 주세요.` : `${value}px 저장됨.`;
+        if (!settings.keyboardComposerAssist) return `${saved} 키보드 보정을 켜면 사용돼요.`;
+        const result = CMU_KEYBOARD_COMPOSER.calibration(value);
+        if (!result.known) return `${saved} 채팅창의 키보드를 열면 이동 가능 범위를 확인해요.`;
+        const range = `${result.source === 'last-keyboard' ? '최근 키보드 기준 · ' : ''}이동 가능 범위 ${result.min}~${result.max}px`;
+        if (result.foreign) return `${saved} 다른 기능이 입력창을 이동 중이라 추가 이동을 멈췄어요.`;
+        if (result.limited && value > result.effective && result.max <= 0)
+            return `${saved} ${range} · 아래로 더 이동할 수 없어요.`;
+        if (result.limited) return `${saved} ${range} · ${result.effective}px까지만 이동해요. 저장하면 가능한 값으로 맞춰요.`;
+        if (result.reference === 'native-composer') return `${saved} ${range} · 기본 위치에서 ${Math.abs(value)}px ${value < 0 ? '위로' : '아래로'} 이동해요.`;
+        return `${saved} ${range} · 설정을 닫고 채팅창에서 확인해 주세요.`;
+    }
+    function cmuUpdateKeyboardOffsetStatus(panel) {
+        if (settings.keyboardComposerMode !== 'manual') {
+            const status = panel?.querySelector('[data-cmu-keyboard-auto-status]');
+            const text = cmuKeyboardAutoStatus();
+            if (status && status.textContent !== text) status.textContent = text;
+            return;
+        }
+        const field = panel?.querySelector('[data-cmu-keyboard-offset]');
+        const status = panel?.querySelector('[data-cmu-keyboard-offset-status]');
+        if (!field || !status) return;
+        if (field.value === '' || !Number.isFinite(Number(field.value))) {
+            status.textContent = '숫자를 입력해 주세요. 저장 전에는 기존 값이 유지돼요.';
+            return;
+        }
+        const value = Number(field.value), dirty = value !== Number(settings.keyboardComposerOffset);
+        let text = (value < -160 || value > 160)
+            ? '입력 범위는 −160~160px예요. 저장하면 이 범위로 조정돼요.'
+            : cmuKeyboardOffsetStatus(value, dirty);
+        const notice = panel.cmuOffsetNotice;
+        if (notice && !dirty && notice.value === value && performance.now() < notice.until) text = `${notice.text} ${text}`;
+        if (status.textContent !== text) status.textContent = text;
+    }
+    function cmuStepKeyboardOffset(panel, delta) {
+        if (settings.keyboardComposerMode !== 'manual') return;
+        const field = panel.querySelector('[data-cmu-keyboard-offset]');
+        if (!field) return;
+        const range = CMU_KEYBOARD_COMPOSER.calibration(), known = settings.keyboardComposerAssist && range.known;
+        const min = known ? range.min : -160, max = known ? range.max : 160;
+        const base = Math.max(min, Math.min(max, Math.round(Number(field.value) || 0)));
+        field.value = String(Math.max(min, Math.min(max, base + delta)));
+        cmuUpdateKeyboardOffsetStatus(panel);
+    }
+    function cmuSaveKeyboardOffset(panel, reset = false) {
+        if (settings.keyboardComposerMode !== 'manual') return;
+        const field = panel.querySelector('[data-cmu-keyboard-offset]');
+        if (!field) return;
+        if (!reset && (field.value === '' || !Number.isFinite(Number(field.value)))) {
+            cmuUpdateKeyboardOffsetStatus(panel); return;
+        }
+        const rawValue = Number(field.value);
+        let value = Math.round(Math.max(-160, Math.min(160, rawValue || 0)));
+        const range = CMU_KEYBOARD_COMPOSER.calibration(value);
+        if (settings.keyboardComposerAssist && range.known && !reset) value = range.effective;
+        setSettingFromQ('keyboardComposerOffset', reset ? 0 : value);
+        field.value = String(settings.keyboardComposerOffset);
+        const status = panel.querySelector('[data-cmu-keyboard-offset-status]');
+        if (status) status.textContent = cmuKeyboardOffsetStatus(settings.keyboardComposerOffset);
+        const button = panel.querySelector(`[data-action="keyboard-offset-${reset ? 'reset' : 'save'}"]`);
+        if (button) {
+            clearTimeout(button.cmuAppliedTimer);
+            button.textContent = reset ? '✓ 초기화 완료' : '✓ 저장 완료';
+            button.setAttribute('data-cmu-applied', '');
+            button.cmuAppliedTimer = setTimeout(() => {
+                button.removeAttribute('data-cmu-applied');
+                button.textContent = reset ? '초기화' : '저장';
+            }, 1200);
+        }
+        cmuSyncSettingsViewport();
+        if (!reset && rawValue !== value && status) {
+            panel.cmuOffsetNotice = { value, text: `${rawValue}px은 이동 범위를 벗어나 ${value}px로 저장했어요.`, until: performance.now() + 5000 };
+            status.textContent = `${panel.cmuOffsetNotice.text} ${cmuKeyboardOffsetStatus(value)}`;
+        } else panel.cmuOffsetNotice = null;
+    }
+    cmuListen(document, 'input', event => {
+        if (event.target.matches?.('[data-cmu-keyboard-offset]'))
+            cmuUpdateKeyboardOffsetStatus(event.target.closest('#cmu-settings-panel'));
+    }, true);
+    function cmuKeyboardDiagnosticCard() {
+        return qCard(`<div class="subrow"><div class="lbl">키보드 문제 진단
+          <div class="note">문제가 보인 뒤 키보드를 닫고 복사해 주세요. 대화 내용·초안은 포함하지 않아요.</div></div>
+          <button type="button" class="step-btn" style="flex:0 0 auto;width:auto;min-width:72px;padding:8px;white-space:nowrap" data-action="keyboard-diagnostics" aria-label="키보드 진단 복사">진단 복사</button></div>
+          <div class="note" data-cmu-keyboard-diagnostic-status role="status" style="padding:0 12px 8px"></div>
+          <textarea data-cmu-keyboard-diagnostic-report readonly hidden aria-label="키보드 진단 정보"
+            style="width:calc(100% - 24px);box-sizing:border-box;height:112px;margin:0 12px 12px;padding:8px;border:1px solid #7776;border-radius:8px;background:transparent;color:inherit;font:11px/1.4 monospace;resize:vertical;user-select:text"></textarea>`);
+    }
+    function cmuCopyKeyboardDiagnostics(panel) {
+        const report = CMU_KEYBOARD_COMPOSER.report();
+        const output = panel.querySelector('[data-cmu-keyboard-diagnostic-report]');
+        const status = panel.querySelector('[data-cmu-keyboard-diagnostic-status]');
+        if (output) { output.value = report; output.hidden = false; }
+        copyTextToClipboard(report).then(ok => {
+            const text = ok ? '진단 정보 복사됨 · 문의하던 대화에 붙여 넣어 주세요.' : '자동 복사가 안 됐어요. 아래 진단 정보를 길게 눌러 복사해 주세요.';
+            if (status?.isConnected) status.textContent = text;
+            showToast(ok ? '키보드 진단 정보 복사됨' : '아래 진단 정보를 직접 복사해 주세요');
+        });
+    }
+    // Integrated from user-supplied charclockbadge.txt, 2026-09-27.
+    // Keep one CMU runtime, one badge cache, one native message menu and all
+    // existing conversation profile integrations. No upstream @requires.
+    const CMU_TEXT_TOOLS = {
+        cleaner: null, wrapper: null, counter: null,
+        sync() {
+            this.cleaner?.sync(); this.wrapper?.sync(); this.counter?.sync();
+            document.documentElement.classList.toggle('cmu-word-wrap', cmuTextToolEnabled('messageWordWrap'));
+        },
+        reset() { this.cleaner?.reset(); this.wrapper?.reset(); this.counter?.reset(); },
+    };
+    function cmuTextToolEnabled(key) {
+        return shouldRun() && settings.enabled !== false && settings[key] !== false && isChatRoomPath();
+    }
+    CMU_RESOURCES.cleanups.push(() => {
+        CMU_TEXT_TOOLS.reset(); document.documentElement.classList.remove('cmu-word-wrap');
+    });
+(() => {
+  'use strict';
+
+  const PREFIX = '[Crack Edit Paste Fix]';
+
+  function normalizeText(value) {
+    return String(value ?? '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/\u0000/g, '');
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[ch]));
+  }
+
+  function isVisible(el) {
+    if (!(el instanceof HTMLElement) || !el.isConnected) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function buttonText(el) {
+    return String(el?.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function hasEditDoneButton(root) {
+    if (!(root instanceof Element)) return false;
+    return Array.from(root.querySelectorAll('button, [role="button"]'))
+      .some(el => isVisible(el) && buttonText(el) === '수정 완료');
+  }
+
+  function findEditorFromEventTarget(target) {
+    if (!(target instanceof Element)) return null;
+
+    const direct = target.closest?.(
+      '.tiptap.ProseMirror[contenteditable="true"], .ProseMirror[contenteditable="true"]'
+    );
+    if (direct) return direct;
+
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      active.matches?.('.tiptap.ProseMirror[contenteditable="true"], .ProseMirror[contenteditable="true"]')
+    ) {
+      return active;
+    }
+
+    return null;
+  }
+
+  function isCrackEditEditor(editor) {
+    if (!(editor instanceof HTMLElement) || editor === findChatInput()) return false;
+
+    if (!editor.matches(
+      '.tiptap.ProseMirror[contenteditable="true"], .ProseMirror[contenteditable="true"]'
+    )) {
+      return false;
+    }
+
+    const dialog = editor.closest('[role="dialog"]');
+    if (dialog && hasEditDoneButton(dialog)) return true;
+
+    let node = editor.parentElement;
+    for (let depth = 0; node && node !== document.body && node.tagName !== 'MAIN' && depth < 10; depth++, node = node.parentElement) {
+      if (hasEditDoneButton(node)) return true;
+    }
+
+    const visibleEditors = Array.from(
+      document.querySelectorAll(
+        '.tiptap.ProseMirror[contenteditable="true"], .ProseMirror[contenteditable="true"]'
+      )
+    ).filter(isVisible);
+
+    const visibleDone = Array.from(
+      document.querySelectorAll('button, [role="button"]')
+    ).some(el => isVisible(el) && buttonText(el) === '수정 완료');
+
+    return visibleDone && visibleEditors.length === 1 && visibleEditors[0] === editor;
+  }
+
+  /*
+   * 핵심:
+   * 절대로 줄마다 <p>를 만들지 않는다.
+   *
+   * Crack 저장기가 ProseMirror의 paragraph 경계를 빈 줄로 직렬화하는 것으로 보여,
+   * 전문 전체를 하나의 <p> 안에 두고 원문의 모든 개행을 <br>로 표현한다.
+   *
+   * 원문:
+   * A
+   * B
+   *
+   * C
+   *
+   * DOM:
+   * <p>A<br>B<br><br>C</p>
+   */
+  function plainTextToSingleParagraphHtml(text) {
+    const value = normalizeText(text);
+
+    if (value === '') {
+      return '<p><br></p>';
+    }
+
+    return `<p>${value.split('\n').map(escapeHtml).join('<br>')}</p>`;
+  }
+
+  function insertHtmlAtSelection(editor, html, plainText) {
+    editor.focus();
+
+    try {
+      if (document.queryCommandSupported?.('insertHTML')) {
+        const ok = document.execCommand('insertHTML', false, html);
+        if (ok) return true;
+      }
+    } catch (error) {
+      console.warn(PREFIX, 'insertHTML 실패, fallback 사용', error);
+    }
+
+    try {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return false;
+
+      const range = selection.getRangeAt(0);
+      if (!editor.contains(range.commonAncestorContainer)) return false;
+
+      range.deleteContents();
+
+      const template = document.createElement('template');
+      template.innerHTML = html;
+
+      const fragment = template.content;
+      const lastNode = fragment.lastChild;
+      range.insertNode(fragment);
+
+      if (lastNode) {
+        range.setStartAfter(lastNode);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+
+      try {
+        editor.dispatchEvent(new InputEvent('input', {
+          bubbles: true,
+          composed: true,
+          inputType: 'insertFromPaste',
+          data: plainText,
+        }));
+      } catch (_) {
+        editor.dispatchEvent(new Event('input', {
+          bubbles: true,
+          composed: true,
+        }));
+      }
+
+      return true;
+    } catch (error) {
+      console.error(PREFIX, 'fallback 삽입 실패', error);
+      return false;
+    }
+  }
+
+  // 크랙 수정창은 tiptap 에디터다. execCommand는 글 중간에 붙여넣으면 첫 줄바꿈에서
+  // 문단을 쪼개 저장 시 빈 줄이 하나 더 생긴다. tiptap의 insertContent는 모든 줄바꿈을
+  // 현재 문단 안의 줄바꿈(hardBreak)으로 넣으므로 있으면 그쪽을 먼저 쓴다.
+  function insertWithTiptap(editor, plainText) {
+    const api = editor?.editor;
+    if (typeof api?.commands?.insertContent !== 'function') return false;
+
+    try {
+      const html = normalizeText(plainText).split('\n').map(escapeHtml).join('<br>');
+      return api.commands.insertContent(html, { parseOptions: { preserveWhitespace: 'full' } }) !== false;
+    } catch (error) {
+      console.warn(PREFIX, 'tiptap 삽입 실패, 기존 방식 사용', error);
+      return false;
+    }
+  }
+
+  function handlePaste(event) {
+    if (!cmuTextToolEnabled('editPasteFix')) return;
+    const editor = findEditorFromEventTarget(event.target);
+    if (!editor || !isCrackEditEditor(editor)) return;
+
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+
+    const plain = normalizeText(clipboard.getData('text/plain'));
+
+    // 이미지/파일 붙여넣기, 단일 한 줄 텍스트는 Crack 기본 동작 유지.
+    if (!plain || !plain.includes('\n')) return;
+
+    if (clipboard.files?.length) return;
+    const html = plainTextToSingleParagraphHtml(plain);
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    const ok = insertWithTiptap(editor, plain) || insertHtmlAtSelection(editor, html, plain);
+
+    if (ok) {
+      console.debug(PREFIX, 'v0.2.0 단일 문단 줄바꿈 보존 적용');
+    } else {
+      console.warn(PREFIX, '보정 붙여넣기 실패');
+    }
+  }
+
+  // ProseMirror의 기본 paste 처리보다 먼저 가로챈다.
+  cmuListen(document, 'paste', handlePaste, true);
+
+  console.debug(PREFIX, 'loaded v0.2.0');
+})();
+(function () {
+  'use strict';
+
+  const STYLE_ID = 'cerc-style';
+  const PANEL_ID = 'cerc-panel';
+  const TRIGGER_ATTR = 'data-cerc-trigger';
+  const knownDoneButtons = new Set();
+  const pendingDoneButtons = new Set();
+  const EDITOR_HINT = '[contenteditable="true"].ProseMirror, [contenteditable="true"][data-history-hooked="true"]';
+  const STORAGE_KEY = 'crack_edit_text_click_replacer_recent_terms_v1';
+  const PREVIEW_TAB_KEY = 'crack_edit_text_click_replacer_preview_tab_v1';
+  const MAX_CANDIDATES = 180;
+  const MAX_PREVIEW_CHARS = 16000;
+
+  let activeEditor = null;
+  let lastEditor = null;
+  let lastBeforeText = null;
+  let injectScheduled = false;
+  let syncScheduled = false;
+  let editorInputHandler = null;
+  let boundEditor = null;
+
+  const state = {
+    sourceText: '',
+    candidates: [],
+    rules: [],
+    excludedMatches: new Map(),
+    filter: '',
+    status: '',
+    previewTab: loadPreviewTab(),
+  };
+
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[ch]));
+  }
+
+  function escapeAttr(value) {
+    return escapeHtml(value).replace(/`/g, '&#96;');
+  }
+
+  function escapeRegExp(value) {
+    return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function makeId() {
+    return `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function uniqRules(rules) {
+    const seen = new Set();
+    return rules.filter((rule) => {
+      const key = String(rule.target || '');
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function loadRecentTerms() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter(Boolean).slice(0, 30) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveRecentTerms(terms) {
+    try {
+      const cleaned = Array.from(new Set((terms || []).map((v) => String(v || '').trim()).filter(Boolean))).slice(0, 30);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  function loadPreviewTab() {
+    try {
+      const value = localStorage.getItem(PREVIEW_TAB_KEY);
+      return value === 'after' ? 'after' : 'mark';
+    } catch (_) {
+      return 'mark';
+    }
+  }
+
+  function savePreviewTab(tab) {
+    try {
+      localStorage.setItem(PREVIEW_TAB_KEY, tab === 'after' ? 'after' : 'mark');
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  function purgeLegacyRecentTerms() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  function rememberTerm(term) {
+    // v0.2.7부터 직접 추가/드래그 추가 단어는 저장하지 않는다.
+    // 선택 항목은 현재 열린 정리창 안에서만 유지된다.
+    void term;
+  }
+
+  function ensureStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      .cerc-trigger-btn span { pointer-events: none !important; }
+
+      #${PANEL_ID} {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483646;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        box-sizing: border-box;
+        background: rgba(0, 0, 0, 0.36);
+      }
+
+      #${PANEL_ID}[hidden] { display: none !important; }
+
+      .cerc-modal {
+        width: min(980px, calc(100vw - 24px));
+        max-height: min(820px, calc(100vh - 24px));
+        overflow: hidden;
+        border: 1px solid rgba(127, 127, 127, 0.26);
+        border-radius: 20px;
+        background: color-mix(in srgb, var(--background, #101114) 94%, transparent);
+        color: var(--text_primary, var(--foreground, #f4f4f5));
+        box-shadow: 0 20px 72px rgba(0, 0, 0, 0.38);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        font-family: inherit;
+      }
+
+      .cerc-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px 11px;
+        border-bottom: 1px solid rgba(127, 127, 127, 0.18);
+      }
+
+      .cerc-title {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .cerc-title strong {
+        font-size: 15px;
+        line-height: 1.35;
+      }
+
+      .cerc-title small {
+        font-size: 12px;
+        line-height: 1.35;
+        opacity: 0.72;
+      }
+
+      .cerc-close {
+        flex: 0 0 auto;
+        width: 32px;
+        height: 32px;
+        border: 0;
+        border-radius: 999px;
+        cursor: pointer;
+        color: inherit;
+        background: rgba(127, 127, 127, 0.16);
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      .cerc-body {
+        display: grid;
+        grid-template-columns: minmax(240px, 0.85fr) minmax(290px, 1fr) minmax(320px, 1.25fr);
+        gap: 12px;
+        padding: 14px;
+        overflow: auto;
+        max-height: calc(min(820px, 100vh - 24px) - 58px);
+      }
+
+      .cerc-card {
+        min-width: 0;
+        border: 1px solid rgba(127, 127, 127, 0.18);
+        border-radius: 16px;
+        background: rgba(127, 127, 127, 0.09);
+        overflow: hidden;
+      }
+
+      .cerc-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 11px 12px 8px;
+        border-bottom: 1px solid rgba(127, 127, 127, 0.13);
+      }
+
+      .cerc-card-head strong {
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
+      .cerc-card-head small {
+        font-size: 11px;
+        line-height: 1.35;
+        opacity: 0.65;
+      }
+
+      .cerc-card-body {
+        padding: 10px 12px 12px;
+      }
+
+      .cerc-input,
+      .cerc-select,
+      .cerc-textarea {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid rgba(127, 127, 127, 0.24);
+        border-radius: 12px;
+        outline: none;
+        color: inherit;
+        background: rgba(0, 0, 0, 0.17);
+        font: inherit;
+        font-size: 12px;
+      }
+
+      /* 닫혀 있는 select 박스 디자인은 기존 톤을 유지하고,
+         펼쳐지는 option 목록의 가시성만 보정한다. */
+      .cerc-select option,
+      .cerc-select optgroup {
+        color: #f4f4f5 !important;
+        background-color: #26272d !important;
+      }
+
+      .cerc-select option:checked {
+        color: #ffffff !important;
+        background-color: #3f63c7 !important;
+      }
+
+      .cerc-select option:disabled {
+        color: #9ca3af !important;
+        background-color: #26272d !important;
+      }
+
+      .cerc-input,
+      .cerc-select {
+        height: 36px;
+        padding: 0 10px;
+      }
+
+      .cerc-textarea {
+        min-height: clamp(240px, 34vh, 380px);
+        resize: vertical;
+        padding: 10px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+      }
+
+      .cerc-input:focus,
+      .cerc-select:focus,
+      .cerc-textarea:focus {
+        border-color: color-mix(in srgb, var(--ring, #8ab4ff) 62%, transparent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring, #8ab4ff) 18%, transparent);
+      }
+
+      .cerc-row {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .cerc-row + .cerc-row { margin-top: 8px; }
+
+      .cerc-btn {
+        flex: 0 0 auto;
+        border: 1px solid rgba(127, 127, 127, 0.22);
+        border-radius: 12px;
+        padding: 9px 11px;
+        cursor: pointer;
+        color: inherit;
+        background: rgba(127, 127, 127, 0.14);
+        font: inherit;
+        font-size: 12px;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      .cerc-btn:hover { background: rgba(127, 127, 127, 0.23); }
+      .cerc-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+      .cerc-primary {
+        border-color: color-mix(in srgb, var(--brand, #7aa2ff) 50%, transparent);
+        background: color-mix(in srgb, var(--brand, #7aa2ff) 25%, transparent);
+      }
+
+      .cerc-danger { background: rgba(255, 80, 80, 0.13); }
+      .cerc-ghost { background: transparent; }
+
+      .cerc-chip-list {
+        display: flex;
+        flex-wrap: wrap;
+        align-content: flex-start;
+        gap: 7px;
+        max-height: 390px;
+        overflow: auto;
+        padding: 2px;
+      }
+
+      .cerc-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 100%;
+        border: 1px solid rgba(127, 127, 127, 0.22);
+        border-radius: 999px;
+        padding: 7px 9px;
+        cursor: pointer;
+        color: inherit;
+        background: rgba(127, 127, 127, 0.12);
+        font: inherit;
+        font-size: 12px;
+        line-height: 1;
+      }
+
+      .cerc-chip:hover { background: rgba(127, 127, 127, 0.22); }
+
+      .cerc-chip[data-selected="true"] {
+        border-color: color-mix(in srgb, var(--brand, #7aa2ff) 55%, transparent);
+        background: color-mix(in srgb, var(--brand, #7aa2ff) 22%, transparent);
+      }
+
+      .cerc-chip-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .cerc-chip-count {
+        opacity: 0.68;
+        font-size: 11px;
+      }
+
+      .cerc-rule-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: 420px;
+        overflow: auto;
+      }
+
+      .cerc-rule {
+        border: 1px solid rgba(127, 127, 127, 0.18);
+        border-radius: 14px;
+        padding: 9px;
+        background: rgba(0, 0, 0, 0.12);
+      }
+
+      .cerc-rule-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .cerc-target {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .cerc-count {
+        opacity: 0.7;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .cerc-rule-grid {
+        display: grid;
+        grid-template-columns: minmax(86px, 1fr) minmax(112px, 1fr) 34px;
+        gap: 7px;
+        align-items: center;
+      }
+
+      .cerc-rule-grid .cerc-input {
+        grid-column: 1 / 3;
+      }
+
+      .cerc-mini-btn {
+        width: 34px;
+        height: 36px;
+        border: 1px solid rgba(127, 127, 127, 0.22);
+        border-radius: 12px;
+        cursor: pointer;
+        color: inherit;
+        background: rgba(127, 127, 127, 0.14);
+        font: inherit;
+        font-size: 14px;
+        line-height: 1;
+      }
+
+      .cerc-preview-tabs {
+        display: flex;
+        gap: 6px;
+      }
+
+      .cerc-tab {
+        border: 1px solid rgba(127, 127, 127, 0.18);
+        border-radius: 999px;
+        padding: 7px 9px;
+        cursor: pointer;
+        color: inherit;
+        background: rgba(127, 127, 127, 0.10);
+        font: inherit;
+        font-size: 11px;
+        line-height: 1;
+      }
+
+      .cerc-tab[data-active="true"] {
+        background: color-mix(in srgb, var(--brand, #7aa2ff) 22%, transparent);
+        border-color: color-mix(in srgb, var(--brand, #7aa2ff) 45%, transparent);
+      }
+
+      .cerc-highlight-box {
+        height: clamp(240px, 34vh, 380px);
+        overflow: auto;
+        padding: 10px;
+        border: 1px solid rgba(127, 127, 127, 0.18);
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.15);
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .cerc-mark {
+        border: 0;
+        border-radius: 5px;
+        padding: 0 2px;
+        background: color-mix(in srgb, #ffd166 50%, transparent);
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        line-height: inherit;
+        transition: background 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+      }
+
+      .cerc-mark:hover {
+        box-shadow: 0 0 0 2px color-mix(in srgb, #ffd166 42%, transparent);
+      }
+
+      .cerc-mark[data-excluded="true"] {
+        background: rgba(127, 127, 127, 0.20);
+        opacity: 0.62;
+        text-decoration: line-through;
+        text-decoration-thickness: 1px;
+      }
+
+      .cerc-mark[data-excluded="true"]:hover {
+        box-shadow: 0 0 0 2px rgba(127, 127, 127, 0.28);
+      }
+
+      .cerc-preview-note {
+        margin-top: 8px;
+        min-height: 18px;
+        text-align: right;
+        font-size: 11px;
+        line-height: 1.4;
+        opacity: 0.72;
+      }
+
+      .cerc-footer {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .cerc-status {
+        flex: 1 1 220px;
+        min-height: 18px;
+        font-size: 12px;
+        line-height: 1.45;
+        opacity: 0.82;
+        text-align: left;
+      }
+
+      .cerc-empty {
+        padding: 16px 10px;
+        border: 1px dashed rgba(127, 127, 127, 0.28);
+        border-radius: 14px;
+        text-align: center;
+        font-size: 12px;
+        line-height: 1.55;
+        opacity: 0.72;
+      }
+
+      .cerc-muted {
+        opacity: 0.66;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      @media (max-width: 900px) {
+        #${PANEL_ID} {
+          align-items: center;
+          padding: 8px;
+        }
+
+        .cerc-modal {
+          width: 100%;
+          max-height: calc(100vh - 16px);
+          border-radius: 18px;
+        }
+
+        .cerc-body {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          max-height: calc(100vh - 78px);
+          gap: 10px;
+          padding: 10px;
+        }
+
+        .cerc-card:nth-child(3) {
+          grid-column: 1 / -1;
+        }
+
+        .cerc-chip-list,
+        .cerc-rule-list {
+          max-height: 180px;
+        }
+      }
+
+      @media (max-width: 640px) {
+        #${PANEL_ID} {
+          align-items: center;
+          padding: 6px;
+        }
+
+        .cerc-modal {
+          max-height: calc(100vh - 12px);
+          border-radius: 16px;
+        }
+
+        .cerc-head {
+          padding: 12px 14px 9px;
+        }
+
+        .cerc-title strong {
+          font-size: 14px;
+        }
+
+        .cerc-title small {
+          font-size: 11px;
+        }
+
+        .cerc-body {
+          grid-template-columns: 1fr;
+          max-height: calc(100vh - 70px);
+          gap: 9px;
+          padding: 9px;
+        }
+
+        .cerc-card-body {
+          padding: 8px 10px 10px;
+        }
+
+        .cerc-chip-list {
+          max-height: 126px;
+        }
+
+        .cerc-rule-list {
+          max-height: 150px;
+        }
+
+        .cerc-rule-grid {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px;
+        }
+
+        .cerc-highlight-box {
+          height: clamp(230px, 32vh, 310px);
+        }
+
+        .cerc-textarea {
+          min-height: clamp(230px, 32vh, 310px);
+        }
+
+        .cerc-row {
+          gap: 6px;
+        }
+
+        .cerc-btn {
+          padding: 8px 9px;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+    CMU_RESOURCES.styles.add(style);
+  }
+
+  function getEditorText(editor) {
+    return String(editor?.innerText ?? '').replace(/\n$/, '');
+  }
+
+  function buildPlainParagraphFragment(text) {
+    const fragment = document.createDocumentFragment();
+    const p = document.createElement('p');
+    const lines = String(text ?? '').split('\n');
+
+    if (lines.length === 0 || (lines.length === 1 && lines[0] === '')) {
+      p.appendChild(document.createElement('br'));
+    } else {
+      lines.forEach((line, index) => {
+        if (index > 0) p.appendChild(document.createElement('br'));
+        p.appendChild(document.createTextNode(line));
+      });
+    }
+
+    fragment.appendChild(p);
+    return fragment;
+  }
+
+  function notifyEditorChanged(editor, text) {
+    const value = String(text ?? '');
+
+    try {
+      editor.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertFromPaste',
+        data: value,
+      }));
+    } catch (_) {
+      // 일부 브라우저는 beforeinput 생성자를 막을 수 있음.
+    }
+
+    try {
+      editor.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertFromPaste',
+        data: value,
+      }));
+    } catch (_) {
+      editor.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+    }
+
+    editor.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function setEditorText(editor, text) {
+    if (!(editor instanceof HTMLElement)) return false;
+
+    const value = String(text ?? '');
+    editor.focus();
+
+    // execCommand('insertText')로 전체 텍스트를 밀어 넣으면
+    // ProseMirror/Tiptap의 마크다운 입력 규칙이 ```INFO 같은 코드펜스를
+    // 실제 code_block으로 자동 변환하면서 코드블록 내용이 세로로 깨지는 경우가 있다.
+    // 그래서 전체 적용은 항상 DOM을 plain paragraph + <br> 구조로 재구성해서
+    // 원래 수정창의 마크다운 텍스트 형태를 유지한다.
+    try {
+      editor.replaceChildren(buildPlainParagraphFragment(value));
+    } catch (_) {
+      editor.innerHTML = '';
+      editor.appendChild(buildPlainParagraphFragment(value));
+    }
+
+    notifyEditorChanged(editor, value);
+    return true;
+  }
+
+  function getSelectedPageText() {
+    try {
+      return String(window.getSelection?.().toString() || '').trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function cleanForCandidateText(text) {
+    return String(text || '')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+      .replace(/https?:\/\/\S+/g, ' ')
+      .replace(/```[\s\S]*?```/g, (block) => block.replace(/[\w가-힣ㄱ-ㅎㅏ-ㅣ]+/g, ' '));
+  }
+
+  function getCandidateCountMap(text) {
+    const source = cleanForCandidateText(text);
+    const map = new Map();
+    const tokenRe = /[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9_]{2,}/g;
+    let match;
+
+    while ((match = tokenRe.exec(source))) {
+      const token = match[0].trim();
+      if (!token) continue;
+      if (/^\d+$/.test(token)) continue;
+      if (/^[A-Za-z]{1,2}$/.test(token)) continue;
+      if (/^[A-Za-z0-9_]{25,}$/.test(token)) continue;
+
+      map.set(token, (map.get(token) || 0) + 1);
+    }
+
+    return map;
+  }
+
+  function extractCandidates(text) {
+    const countMap = getCandidateCountMap(text);
+
+    return Array.from(countMap.entries())
+      .map(([textValue, count]) => ({ text: textValue, count, source: 'auto' }))
+      .filter((item) => item.count >= 2)
+      .sort((a, b) => (b.count - a.count) || (b.text.length - a.text.length) || a.text.localeCompare(b.text, 'ko'))
+      .slice(0, MAX_CANDIDATES);
+  }
+
+  function countOccurrences(text, target) {
+    const needle = String(target || '');
+    if (!needle) return 0;
+    const re = new RegExp(escapeRegExp(needle), 'g');
+    let count = 0;
+    String(text || '').replace(re, () => {
+      count += 1;
+      return '';
+    });
+    return count;
+  }
+
+  function getRuleSpaceMode(rule) {
+    const value = String(rule?.spaceMode || '').trim();
+    if (['exact', 'smart', 'left', 'right', 'both'].includes(value)) return value;
+    return rule?.mode === 'delete' ? 'smart' : 'exact';
+  }
+
+  function makeRuleRegExp(rule) {
+    const target = String(rule?.target || '');
+    if (!target) return null;
+
+    const word = escapeRegExp(target);
+    const hSpace = '[ \t\u00A0　]';
+    const spaceMode = getRuleSpaceMode(rule);
+
+    if (spaceMode === 'smart' || spaceMode === 'both') return new RegExp(`(${hSpace}*)${word}(${hSpace}*)`, 'g');
+    if (spaceMode === 'left') return new RegExp(`(${hSpace}+)${word}`, 'g');
+    if (spaceMode === 'right') return new RegExp(`${word}(${hSpace}+)`, 'g');
+    return new RegExp(word, 'g');
+  }
+
+  function getRuleReplacement(rule, replacement, captures) {
+    const spaceMode = getRuleSpaceMode(rule);
+
+    if (spaceMode === 'smart') {
+      const left = String(captures?.[0] || '');
+      const right = String(captures?.[1] || '');
+      if (rule.mode === 'delete') return left && right ? ' ' : '';
+      return `${left}${replacement}${right}`;
+    }
+
+    return replacement;
+  }
+
+  function getExcludedMatchSet(ruleId, create = false) {
+    const id = String(ruleId || '');
+    if (!id) return null;
+
+    let set = state.excludedMatches.get(id);
+    if (!set && create) {
+      set = new Set();
+      state.excludedMatches.set(id, set);
+    }
+    return set || null;
+  }
+
+  function isMatchExcluded(ruleId, matchIndex) {
+    const set = getExcludedMatchSet(ruleId, false);
+    return Boolean(set?.has(Number(matchIndex)));
+  }
+
+  function clearRuleExcludedMatches(ruleId) {
+    state.excludedMatches.delete(String(ruleId || ''));
+  }
+
+  function clearAllExcludedMatches() {
+    state.excludedMatches.clear();
+  }
+
+  function getRuleMatchStats(text, rule) {
+    const re = makeRuleRegExp(rule);
+    if (!re) return { total: 0, included: 0, excluded: 0 };
+
+    let total = 0;
+    let excluded = 0;
+    String(text || '').replace(re, (match) => {
+      if (!match) return match;
+      if (isMatchExcluded(rule.id, total)) excluded += 1;
+      total += 1;
+      return match;
+    });
+
+    return { total, included: Math.max(0, total - excluded), excluded };
+  }
+
+  function getExcludedMatchCount(text, rules) {
+    return uniqRules(rules).reduce((sum, rule) => sum + getRuleMatchStats(text, rule).excluded, 0);
+  }
+
+  function toggleExcludedMatch(ruleId, matchIndex) {
+    const rule = findRule(ruleId);
+    const index = Number(matchIndex);
+    if (!rule || !Number.isInteger(index) || index < 0) return;
+
+    const set = getExcludedMatchSet(rule.id, true);
+    if (set.has(index)) {
+      set.delete(index);
+      if (!set.size) clearRuleExcludedMatches(rule.id);
+      state.status = `“${rule.target}”의 이 위치를 다시 적용 대상에 넣었어.`;
+    } else {
+      set.add(index);
+      state.status = `“${rule.target}”의 이 위치 1개만 적용에서 제외했어. 회색 표시를 다시 누르면 복구돼.`;
+    }
+
+    renderRules();
+    renderPreview();
+    renderStatus();
+  }
+
+  function applyRulesToText(text, rules) {
+    let next = String(text ?? '');
+    let total = 0;
+    let skipped = 0;
+    const details = [];
+
+    for (const rule of uniqRules(rules)) {
+      const target = String(rule.target || '');
+      if (!target) continue;
+      const replacement = rule.mode === 'replace' ? String(rule.replacement ?? '') : '';
+      const re = makeRuleRegExp(rule);
+      if (!re) continue;
+      let count = 0;
+      let skippedCount = 0;
+      let matchIndex = 0;
+
+      next = next.replace(re, (...args) => {
+        const match = args[0];
+        const captures = args.slice(1, -2);
+        if (!match) return match;
+
+        const currentIndex = matchIndex;
+        matchIndex += 1;
+        if (isMatchExcluded(rule.id, currentIndex)) {
+          skippedCount += 1;
+          return match;
+        }
+
+        count += 1;
+        return getRuleReplacement(rule, replacement, captures);
+      });
+
+      if (count || skippedCount) {
+        details.push({
+          target,
+          count,
+          skipped: skippedCount,
+          replacement,
+          mode: rule.mode,
+          spaceMode: getRuleSpaceMode(rule),
+        });
+      }
+      total += count;
+      skipped += skippedCount;
+    }
+
+    return { text: next, total, skipped, details };
+  }
+
+  function findEditorForButton(doneButton) {
+    let node = doneButton?.parentElement;
+
+    for (let depth = 0; node && node !== document.body && node.tagName !== 'MAIN' && depth < 10; depth += 1, node = node.parentElement) {
+      const editor = node.querySelector?.(
+        '[contenteditable="true"][data-history-hooked="true"], .tiptap.ProseMirror[contenteditable="true"], [contenteditable="true"].ProseMirror'
+      );
+
+      if (editor instanceof HTMLElement && editor !== findChatInput() && editor.getClientRects().length) return editor;
+    }
+
+    return null;
+  }
+
+  function findDoneButtons(root = document) {
+    const candidates = [];
+    if (root instanceof HTMLButtonElement) candidates.push(root);
+    root.querySelectorAll?.('button').forEach(button => candidates.push(button));
+    return candidates.filter(button => {
+      if (!(button instanceof HTMLButtonElement) || button.hasAttribute(TRIGGER_ATTR)) return false;
+      if (button.closest(`#${PANEL_ID}`)) return false;
+      return (button.textContent || '').replace(/\s+/g, ' ').trim().includes('수정 완료');
+    });
+  }
+
+  function queueDoneButtons(root) {
+    if (!cmuTextToolEnabled('editTextCleaner')) return;
+    if (!root) return;
+    const el = root.nodeType === Node.TEXT_NODE ? root.parentElement : root;
+    if (!el || el.closest?.(`#${PANEL_ID}, [${TRIGGER_ATTR}]`)) return;
+    for (const button of findDoneButtons(el)) {
+      knownDoneButtons.add(button);
+      pendingDoneButtons.add(button);
+    }
+    if (pendingDoneButtons.size) scheduleInject();
+  }
+
+  function handleCleanerMutations(records) {
+    if (!cmuTextToolEnabled('editTextCleaner')) return;
+    const touchedTargets = new Set();
+    let editorAdded = false;
+    for (const record of records) {
+      const target = record.target.nodeType === Node.ELEMENT_NODE ? record.target : record.target.parentElement;
+      if (target?.closest?.(`#${PANEL_ID}, [${TRIGGER_ATTR}]`)) continue;
+      const added = Array.from(record.addedNodes);
+      if (!record.removedNodes.length && added.length && added.every(node =>
+          node instanceof Element && node.matches(`[${TRIGGER_ATTR}]`))) continue;
+      touchedTargets.add(target);
+      const button = target?.closest?.('button');
+      if (button) queueDoneButtons(button);
+      for (const node of added) {
+        if (!(node instanceof Element)) continue;
+        queueDoneButtons(node);
+        // The editor can be mounted after its footer; retry already discovered buttons.
+        if (node.matches(EDITOR_HINT) || node.querySelector(EDITOR_HINT)) {
+          editorAdded = true;
+        }
+      }
+    }
+    // React can emit many records for one commit; inspect each known edit button once.
+    if (!touchedTargets.size) return;
+    for (const known of knownDoneButtons) {
+      if (!known.isConnected) { knownDoneButtons.delete(known); pendingDoneButtons.delete(known); }
+      else if (editorAdded || touchedTargets.has(known.parentElement)) pendingDoneButtons.add(known);
+    }
+    if (pendingDoneButtons.size) scheduleInject();
+  }
+
+  function makeTriggerButton(doneButton) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute(TRIGGER_ATTR, 'true');
+    button.className = `${doneButton.className || ''} cerc-trigger-btn`.trim();
+    button.title = '수정창 텍스트를 보고 클릭으로 치환/삭제';
+    button.innerHTML = `
+      <span aria-hidden="true" style="font-size:15px;line-height:1;">🧹</span>
+      <span class="typo-text-sm_leading-none_medium text-text_secondary">단어 정리</span>
+    `;
+
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const editor = findEditorForButton(doneButton);
+      if (!editor) {
+        openPanel(null, '수정창을 못 찾았어. 수정창이 열린 상태에서 다시 눌러줘.');
+        return;
+      }
+
+      openPanel(editor);
+    }, true);
+
+    return button;
+  }
+
+  function injectButtons() {
+    injectScheduled = false;
+    if (!cmuTextToolEnabled('editTextCleaner')) { clearUi(); return; }
+    ensureStyle();
+
+    const buttons = Array.from(pendingDoneButtons);
+    pendingDoneButtons.clear();
+    for (const doneButton of buttons) {
+      if (!doneButton.isConnected || !findDoneButtons(doneButton).includes(doneButton)) continue;
+      const row = doneButton.parentElement;
+      if (!row) continue;
+      if (row.querySelector(`[${TRIGGER_ATTR}="true"]`)) continue;
+
+      const editor = findEditorForButton(doneButton);
+      if (!editor) continue;
+
+      const trigger = makeTriggerButton(doneButton);
+      row.insertBefore(trigger, doneButton);
+    }
+  }
+
+  function scheduleInject() {
+    if (injectScheduled) return;
+    injectScheduled = true;
+    requestAnimationFrame(injectButtons);
+  }
+
+  function openPanel(editor, initialStatus = '') {
+    if (!cmuTextToolEnabled('editTextCleaner')) return;
+    ensureStyle();
+    activeEditor = editor || activeEditor;
+    bindEditorInput(activeEditor);
+
+    state.sourceText = activeEditor ? getEditorText(activeEditor) : '';
+    state.candidates = extractCandidates(state.sourceText);
+    clearAllExcludedMatches();
+    state.filter = '';
+    state.status = initialStatus || '후보를 누르면 삭제 대상으로 들어가. 치환하려면 선택 목록에서 모드를 바꾸면 돼.';
+
+    let panel = document.getElementById(PANEL_ID);
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = PANEL_ID;
+      panel.innerHTML = getPanelHtml();
+      document.body.appendChild(panel);
+      bindPanelEvents(panel);
+    }
+
+    setPanelOpen(panel, true);
+    renderPanel();
+  }
+
+  // 닫힌 창에 role="dialog"가 남아 있으면 "대화상자가 열렸나"를 첫 [role="dialog"]로
+  // 판단하는 다른 스크립트(예: 요약 메모리 창 새로고침)가 이 숨은 창을 잡는다.
+  function setPanelOpen(panel, open) {
+    panel.hidden = !open;
+    CMU_KEYBOARD_COMPOSER.schedule();
+    const modal = panel.querySelector('.cerc-modal');
+    if (open) modal?.setAttribute('role', 'dialog');
+    else modal?.removeAttribute('role');
+  }
+
+  function resetPanelSession() {
+    state.rules = [];
+    clearAllExcludedMatches();
+    state.filter = '';
+    state.status = '';
+  }
+  function closePanel() {
+    if (boundEditor && editorInputHandler) cmuUnlisten(boundEditor, 'input', editorInputHandler, true);
+    boundEditor = null; editorInputHandler = null;
+    const panel = document.getElementById(PANEL_ID);
+    if (panel) setPanelOpen(panel, false);
+    resetPanelSession();
+  }
+
+  function getPanelHtml() {
+    return `
+      <div class="cerc-modal" role="dialog" aria-modal="true" aria-label="단어 정리">
+        <div class="cerc-head">
+          <div class="cerc-title">
+            <strong>🧹 수정창 클릭 정리기</strong>
+            <small>자동 후보 클릭 → 삭제/치환 선택 → 미리보기 확인 → 적용</small>
+          </div>
+          <button type="button" class="cerc-close" aria-label="닫기">×</button>
+        </div>
+        <div class="cerc-body">
+          <section class="cerc-card">
+            <div class="cerc-card-head">
+              <strong>자동 후보</strong>
+              <small data-role="candidate-count"></small>
+            </div>
+            <div class="cerc-card-body">
+              <div class="cerc-row">
+                <input class="cerc-input" data-role="filter" placeholder="후보 검색" autocomplete="off">
+              </div>
+              <div class="cerc-row">
+                <input class="cerc-input" data-role="direct" placeholder="직접 찾을 말 입력" autocomplete="off">
+                <button type="button" class="cerc-btn" data-action="add-direct">추가</button>
+              </div>
+              <div class="cerc-row">
+                <button type="button" class="cerc-btn cerc-ghost" data-action="add-selection">드래그한 글자 추가</button>
+                <button type="button" class="cerc-btn cerc-ghost" data-action="refresh">새로고침</button>
+              </div>
+              <p class="cerc-muted">반복해서 나온 단어를 자동으로 보여줘. 누르면 선택 목록에 들어감. 삭제는 기본적으로 주변 공백을 자동 정리해.</p>
+              <div class="cerc-chip-list" data-role="candidates"></div>
+            </div>
+          </section>
+
+          <section class="cerc-card">
+            <div class="cerc-card-head">
+              <strong>선택한 단어</strong>
+              <small data-role="rule-count"></small>
+            </div>
+            <div class="cerc-card-body">
+              <div class="cerc-rule-list" data-role="rules"></div>
+              <div class="cerc-footer">
+                <button type="button" class="cerc-btn cerc-danger" data-action="clear-rules">선택 비우기</button>
+                <button type="button" class="cerc-btn" data-action="undo">방금 적용 취소</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="cerc-card">
+            <div class="cerc-card-head">
+              <strong>실시간 미리보기</strong>
+              <div class="cerc-preview-tabs">
+                <button type="button" class="cerc-tab" data-preview-tab="mark" data-active="true">위치 보기</button>
+                <button type="button" class="cerc-tab" data-preview-tab="after">적용 후</button>
+              </div>
+            </div>
+            <div class="cerc-card-body">
+              <div class="cerc-highlight-box" data-role="mark-preview"></div>
+              <textarea class="cerc-textarea" data-role="after-preview" readonly hidden></textarea>
+              <div class="cerc-preview-note" data-role="preview-note"></div>
+              <div class="cerc-footer">
+                <div class="cerc-status" data-role="status"></div>
+                <button type="button" class="cerc-btn" data-action="copy-after">미리보기 복사</button>
+                <button type="button" class="cerc-btn cerc-primary" data-action="apply">수정창에 적용</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    `;
+  }
+
+  function bindPanelEvents(panel) {
+    panel.addEventListener('click', (event) => {
+      const target = event.target;
+      if (target === panel) {
+        closePanel();
+        return;
+      }
+
+      const close = target.closest?.('.cerc-close');
+      if (close) {
+        closePanel();
+        return;
+      }
+
+      const chip = target.closest?.('.cerc-chip[data-term]');
+      if (chip) {
+        toggleRule(chip.dataset.term || '');
+        return;
+      }
+
+      const previewMark = target.closest?.('.cerc-mark[data-rule-id][data-match-index]');
+      if (previewMark) {
+        toggleExcludedMatch(previewMark.dataset.ruleId || '', previewMark.dataset.matchIndex || '');
+        return;
+      }
+
+      const remove = target.closest?.('[data-remove-rule]');
+      if (remove) {
+        removeRule(remove.dataset.removeRule || '');
+        return;
+      }
+
+      const previewTab = target.closest?.('[data-preview-tab]');
+      if (previewTab) {
+        setPreviewTab(previewTab.dataset.previewTab || 'mark');
+        return;
+      }
+
+      const actionButton = target.closest?.('[data-action]');
+      if (!actionButton) return;
+
+      const action = actionButton.dataset.action;
+      if (action === 'add-direct') addDirectTerm();
+      if (action === 'add-selection') addSelectionTerm();
+      if (action === 'refresh') refreshFromEditor('수정창 내용을 다시 읽었어.');
+      if (action === 'clear-rules') clearRules();
+      if (action === 'undo') undoLastApply();
+      if (action === 'apply') applyToActiveEditor();
+      if (action === 'copy-after') copyAfterPreview();
+    }, true);
+
+    panel.addEventListener('input', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+
+      if (target.matches('[data-role="filter"]')) {
+        state.filter = target.value || '';
+        renderCandidates();
+        return;
+      }
+
+      if (target.matches('[data-rule-mode]')) {
+        const rule = findRule(target.dataset.ruleMode || '');
+        if (rule) {
+          rule.mode = target.value === 'replace' ? 'replace' : 'delete';
+          if (!rule.spaceMode) rule.spaceMode = rule.mode === 'delete' ? 'smart' : 'exact';
+          clearRuleExcludedMatches(rule.id);
+          state.status = '작업 방식을 바꿔서 이 단어의 개별 제외 기록을 초기화했어.';
+          renderRules();
+          renderPreview();
+          renderStatus();
+        }
+        return;
+      }
+
+      if (target.matches('[data-rule-space]')) {
+        const rule = findRule(target.dataset.ruleSpace || '');
+        if (rule) {
+          rule.spaceMode = ['exact', 'smart', 'left', 'right', 'both'].includes(target.value) ? target.value : 'exact';
+          clearRuleExcludedMatches(rule.id);
+          state.status = '공백 처리 범위를 바꿔서 이 단어의 개별 제외 기록을 초기화했어.';
+          renderRules();
+          renderPreview();
+          renderStatus();
+        }
+        return;
+      }
+
+      if (target.matches('[data-rule-replacement]')) {
+        const rule = findRule(target.dataset.ruleReplacement || '');
+        if (rule) {
+          rule.replacement = target.value || '';
+          renderPreview();
+        }
+      }
+    }, true);
+
+    panel.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        closePanel();
+        return;
+      }
+
+      if (event.key === 'Enter' && event.target?.matches?.('[data-role="direct"]')) {
+        event.preventDefault();
+        addDirectTerm();
+      }
+    }, true);
+  }
+
+  function bindEditorInput(editor) {
+    if (!(editor instanceof HTMLElement)) return;
+
+    if (boundEditor && editorInputHandler) {
+      cmuUnlisten(boundEditor, 'input', editorInputHandler, true);
+    }
+
+    editorInputHandler = () => scheduleEditorSync();
+    boundEditor = editor;
+    cmuListen(editor, 'input', editorInputHandler, true);
+  }
+
+  function scheduleEditorSync() {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel || panel.hidden) return;
+    if (syncScheduled) return;
+
+    syncScheduled = true;
+    setTimeout(() => {
+      syncScheduled = false;
+      refreshFromEditor('수정창 변경 감지됨. 미리보기를 갱신했어.');
+    }, 120);
+  }
+
+  function refreshFromEditor(message) {
+    if (activeEditor && document.contains(activeEditor)) {
+      const nextSourceText = getEditorText(activeEditor);
+      const sourceChanged = nextSourceText !== state.sourceText;
+      state.sourceText = nextSourceText;
+      state.candidates = extractCandidates(state.sourceText);
+
+      if (sourceChanged && state.excludedMatches.size) {
+        clearAllExcludedMatches();
+        state.status = `${message || '수정창 내용을 다시 읽었어.'} 원문 위치가 바뀌어서 개별 제외 기록은 초기화했어.`;
+      } else {
+        state.status = message || state.status;
+      }
+      renderPanel();
+    }
+  }
+  function addRule(term) {
+    const target = String(term || '').trim();
+    if (!target) return false;
+    if (state.rules.some((rule) => rule.target === target)) return false;
+
+    state.rules.push({
+      id: makeId(),
+      target,
+      mode: 'delete',
+      spaceMode: 'smart',
+      replacement: '',
+    });
+    rememberTerm(target);
+    state.status = `“${target}” 선택됨. 기본은 삭제, 치환하려면 가운데 옵션을 바꿔줘. 창을 닫으면 선택 목록은 초기화돼.`;
+    renderPanel();
+    return true;
+  }
+
+  function toggleRule(term) {
+    const target = String(term || '').trim();
+    if (!target) return;
+    const found = state.rules.find((rule) => rule.target === target);
+    if (found) removeRule(found.id);
+    else addRule(target);
+  }
+
+  function findRule(id) {
+    return state.rules.find((rule) => rule.id === id);
+  }
+
+  function removeRule(id) {
+    const before = state.rules.length;
+    state.rules = state.rules.filter((rule) => rule.id !== id);
+    clearRuleExcludedMatches(id);
+    if (state.rules.length !== before) state.status = '선택 목록에서 뺐어.';
+    renderPanel();
+  }
+  function clearRules() {
+    state.rules = [];
+    clearAllExcludedMatches();
+    state.status = '선택 목록을 비웠어.';
+    renderPanel();
+  }
+  function addDirectTerm() {
+    const panel = document.getElementById(PANEL_ID);
+    const input = panel?.querySelector('[data-role="direct"]');
+    const value = input?.value || '';
+
+    if (!value.trim()) {
+      state.status = '직접 추가할 단어를 입력해줘.';
+      renderStatus();
+      return;
+    }
+
+    addRule(value.trim());
+    if (input) input.value = '';
+  }
+
+  function addSelectionTerm() {
+    const selected = getSelectedPageText();
+    if (!selected) {
+      state.status = '먼저 수정창이나 페이지에서 글자를 드래그해줘.';
+      renderStatus();
+      return;
+    }
+
+    addRule(selected);
+  }
+
+  function undoLastApply() {
+    if (!lastEditor || lastBeforeText === null || !document.contains(lastEditor)) {
+      state.status = '되돌릴 적용 기록이 없어.';
+      renderStatus();
+      return;
+    }
+
+    setEditorText(lastEditor, lastBeforeText);
+    activeEditor = lastEditor;
+    refreshFromEditor('방금 적용 전 텍스트로 되돌렸어.');
+  }
+
+  function applyToActiveEditor() {
+    if (!(activeEditor instanceof HTMLElement) || !document.contains(activeEditor)) {
+      state.status = '수정창을 찾지 못했어. 창을 닫고 다시 “단어 정리”를 눌러줘.';
+      renderStatus();
+      return;
+    }
+
+    if (!state.rules.length) {
+      state.status = '선택한 단어가 없어. 왼쪽 후보를 먼저 눌러줘.';
+      renderStatus();
+      return;
+    }
+
+    const before = getEditorText(activeEditor);
+    if (before !== state.sourceText) {
+      refreshFromEditor('원문이 바뀌어 미리보기를 갱신했어요. 확인 후 다시 적용해 주세요.');
+      return;
+    }
+    const result = applyRulesToText(before, state.rules);
+
+    if (!result.total || result.text === before) {
+      state.status = '바뀐 내용이 없어. 선택 단어가 현재 수정창에 있는지 확인해줘.';
+      renderStatus();
+      return;
+    }
+
+    lastEditor = activeEditor;
+    lastBeforeText = before;
+
+    const ok = setEditorText(activeEditor, result.text);
+    if (!ok) {
+      state.status = '적용 실패. 수정창을 다시 열고 시도해줘.';
+      renderStatus();
+      return;
+    }
+
+    state.status = `${result.total}개 적용 완료. 저장하려면 크랙의 “수정 완료”를 눌러줘.`;
+    refreshFromEditor(state.status);
+  }
+
+  function copyAfterPreview() {
+    const result = applyRulesToText(state.sourceText, state.rules);
+    const text = result.text;
+
+    const fallback = () => {
+      const panel = document.getElementById(PANEL_ID);
+      const textarea = panel?.querySelector('[data-role="after-preview"]');
+      if (textarea) {
+        textarea.hidden = false;
+        textarea.focus();
+        textarea.select();
+      }
+    };
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        state.status = '적용 후 미리보기를 복사했어.';
+        renderStatus();
+      }).catch(() => {
+        state.status = '복사 권한이 막혀서 미리보기 칸을 선택해뒀어.';
+        renderStatus();
+        fallback();
+      });
+    } else {
+      state.status = '복사 기능을 못 써서 미리보기 칸을 선택해뒀어.';
+      renderStatus();
+      fallback();
+    }
+  }
+
+  function setPreviewTab(tab) {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+
+    const normalized = tab === 'after' ? 'after' : 'mark';
+    state.previewTab = normalized;
+    savePreviewTab(normalized);
+
+    const useAfter = normalized === 'after';
+    panel.querySelectorAll('[data-preview-tab]').forEach((button) => {
+      button.dataset.active = button.dataset.previewTab === normalized ? 'true' : 'false';
+    });
+
+    const mark = panel.querySelector('[data-role="mark-preview"]');
+    const after = panel.querySelector('[data-role="after-preview"]');
+    if (mark) mark.hidden = useAfter;
+    if (after) after.hidden = !useAfter;
+  }
+
+  function renderPanel() {
+    renderHeaderCounts();
+    renderCandidates();
+    renderRules();
+    renderPreview();
+    renderStatus();
+    setPreviewTab(state.previewTab || 'mark');
+
+    const panel = document.getElementById(PANEL_ID);
+    const filter = panel?.querySelector('[data-role="filter"]');
+    if (filter && filter.value !== state.filter) filter.value = state.filter;
+  }
+
+  function renderHeaderCounts() {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+
+    const candidateCount = panel.querySelector('[data-role="candidate-count"]');
+    const ruleCount = panel.querySelector('[data-role="rule-count"]');
+    if (candidateCount) candidateCount.textContent = `${state.candidates.length}개`;
+    if (ruleCount) ruleCount.textContent = `${state.rules.length}개 선택`;
+  }
+
+  function renderCandidates() {
+    const panel = document.getElementById(PANEL_ID);
+    const box = panel?.querySelector('[data-role="candidates"]');
+    if (!box) return;
+
+    const filter = String(state.filter || '').trim().toLowerCase();
+    const selected = new Set(state.rules.map((rule) => rule.target));
+    const shown = state.candidates
+      .filter((item) => !filter || item.text.toLowerCase().includes(filter))
+      .slice(0, MAX_CANDIDATES);
+
+    if (!shown.length) {
+      box.innerHTML = `<div class="cerc-empty">후보가 없어. 직접 찾을 말을 추가해줘.</div>`;
+      return;
+    }
+
+    box.innerHTML = shown.map((item) => `
+      <button type="button" class="cerc-chip" data-term="${escapeAttr(item.text)}" data-selected="${selected.has(item.text) ? 'true' : 'false'}" title="${escapeAttr(item.text)}">
+        <span class="cerc-chip-text">${escapeHtml(item.text)}</span>
+        <span class="cerc-chip-count">${item.count}</span>
+      </button>
+    `).join('');
+  }
+
+  function renderRules() {
+    const panel = document.getElementById(PANEL_ID);
+    const box = panel?.querySelector('[data-role="rules"]');
+    if (!box) return;
+
+    if (!state.rules.length) {
+      box.innerHTML = `<div class="cerc-empty">왼쪽 후보를 누르면 여기에 들어와.<br>기본은 삭제, 필요하면 치환으로 변경.</div>`;
+      return;
+    }
+
+    box.innerHTML = state.rules.map((rule) => {
+      const stats = getRuleMatchStats(state.sourceText, rule);
+      const countText = stats.excluded
+        ? `적용 ${stats.included}개 · 제외 ${stats.excluded}개`
+        : `현재 ${stats.total}개`;
+      const disabled = rule.mode === 'delete' ? 'disabled' : '';
+      return `
+        <div class="cerc-rule" data-rule-id="${escapeAttr(rule.id)}">
+          <div class="cerc-rule-top">
+            <div class="cerc-target" title="${escapeAttr(rule.target)}">${escapeHtml(rule.target)}</div>
+            <div class="cerc-count">${countText}</div>
+          </div>
+          <div class="cerc-rule-grid">
+            <select class="cerc-select" data-rule-mode="${escapeAttr(rule.id)}" title="작업">
+              <option value="delete" ${rule.mode === 'delete' ? 'selected' : ''}>삭제</option>
+              <option value="replace" ${rule.mode === 'replace' ? 'selected' : ''}>치환</option>
+            </select>
+            <select class="cerc-select" data-rule-space="${escapeAttr(rule.id)}" title="공백 처리">
+              <option value="smart" ${getRuleSpaceMode(rule) === 'smart' ? 'selected' : ''}>공백 자동</option>
+              <option value="exact" ${getRuleSpaceMode(rule) === 'exact' ? 'selected' : ''}>단어만</option>
+              <option value="left" ${getRuleSpaceMode(rule) === 'left' ? 'selected' : ''}>앞공백</option>
+              <option value="right" ${getRuleSpaceMode(rule) === 'right' ? 'selected' : ''}>뒤공백</option>
+              <option value="both" ${getRuleSpaceMode(rule) === 'both' ? 'selected' : ''}>양쪽공백</option>
+            </select>
+            <input class="cerc-input" data-rule-replacement="${escapeAttr(rule.id)}" value="${escapeAttr(rule.replacement || '')}" placeholder="바꿀 말" ${disabled}>
+            <button type="button" class="cerc-mini-btn" data-remove-rule="${escapeAttr(rule.id)}" title="빼기">×</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderPreview() {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+
+    const markPreview = panel.querySelector('[data-role="mark-preview"]');
+    const afterPreview = panel.querySelector('[data-role="after-preview"]');
+    const note = panel.querySelector('[data-role="preview-note"]');
+
+    const result = applyRulesToText(state.sourceText, state.rules);
+    const excludedCount = getExcludedMatchCount(state.sourceText, state.rules);
+    const clippedSource = clipText(state.sourceText, MAX_PREVIEW_CHARS);
+    const clippedAfter = clipText(result.text, MAX_PREVIEW_CHARS);
+
+    if (markPreview) markPreview.innerHTML = renderHighlighted(clippedSource.text, state.rules) + (clippedSource.clipped ? '\n\n…미리보기 길이 때문에 일부 생략됨' : '');
+    if (afterPreview) afterPreview.value = clippedAfter.text + (clippedAfter.clipped ? '\n\n…미리보기 길이 때문에 일부 생략됨' : '');
+
+    if (note) {
+      if (!state.rules.length) note.textContent = '선택한 단어가 없어서 원문 그대로 보여줘.';
+      else if (excludedCount) note.textContent = `예상 변경 ${result.total}개 · 개별 제외 ${excludedCount}개 · 적용 후 글자수 ${result.text.length.toLocaleString()}자`;
+      else note.textContent = `노란 표시를 누르면 그 위치만 제외 · 예상 변경 ${result.total}개 · 적용 후 글자수 ${result.text.length.toLocaleString()}자`;
+    }
+  }
+  function renderStatus() {
+    const panel = document.getElementById(PANEL_ID);
+    const status = panel?.querySelector('[data-role="status"]');
+    if (status) status.textContent = state.status || '';
+  }
+
+  function clipText(text, max) {
+    const value = String(text || '');
+    if (value.length <= max) return { text: value, clipped: false };
+    return { text: value.slice(0, max), clipped: true };
+  }
+
+  function renderHighlighted(text, rules) {
+    const value = String(text || '');
+    const ranges = [];
+
+    uniqRules(rules).forEach((rule, ruleOrder) => {
+      const re = makeRuleRegExp(rule);
+      if (!re) return;
+
+      let match;
+      let matchIndex = 0;
+      while ((match = re.exec(value))) {
+        if (!match[0]) {
+          re.lastIndex += 1;
+          continue;
+        }
+
+        ranges.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          ruleId: rule.id,
+          ruleOrder,
+          matchIndex,
+          excluded: isMatchExcluded(rule.id, matchIndex),
+        });
+        matchIndex += 1;
+      }
+    });
+
+    if (!ranges.length) return escapeHtml(value);
+
+    ranges.sort((a, b) => a.start - b.start || a.ruleOrder - b.ruleOrder || b.end - a.end);
+
+    // 서로 겹치는 규칙은 HTML에서 동시에 표시할 수 없으므로,
+    // 먼저 선택된 규칙의 개별 표시를 우선한다. 기존처럼 범위를 합치지는 않는다.
+    const visibleRanges = [];
+    let occupiedUntil = -1;
+    for (const range of ranges) {
+      if (range.start < occupiedUntil) continue;
+      visibleRanges.push(range);
+      occupiedUntil = range.end;
+    }
+
+    let html = '';
+    let cursor = 0;
+    for (const range of visibleRanges) {
+      html += escapeHtml(value.slice(cursor, range.start));
+      const excluded = range.excluded ? 'true' : 'false';
+      const title = range.excluded
+        ? '개별 제외됨 · 클릭하면 다시 적용'
+        : '클릭하면 이 위치만 적용에서 제외';
+      html += `<mark class="cerc-mark" data-rule-id="${escapeAttr(range.ruleId)}" data-match-index="${range.matchIndex}" data-excluded="${excluded}" title="${title}">${escapeHtml(value.slice(range.start, range.end))}</mark>`;
+      cursor = range.end;
+    }
+    html += escapeHtml(value.slice(cursor));
+    return html;
+  }
+  function clearUi() {
+    closePanel();
+    document.getElementById(PANEL_ID)?.remove();
+    document.querySelectorAll(`[${TRIGGER_ATTR}]`).forEach(node => node.remove());
+    knownDoneButtons.clear(); pendingDoneButtons.clear();
+    activeEditor = lastEditor = null; lastBeforeText = null;
+  }
+  CMU_TEXT_TOOLS.cleaner = { reset: clearUi, sync() {
+    if (!cmuTextToolEnabled('editTextCleaner')) clearUi();
+    else queueDoneButtons(document);
+  }};
+  CMU_RESOURCES.cleanups.push(() => { clearUi(); document.getElementById(STYLE_ID)?.remove(); });
+  function boot() {
+    purgeLegacyRecentTerms();
+    ensureStyle();
+    queueDoneButtons(document);
+
+    const observer = new MutationObserver(handleCleanerMutations);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+
+    cmuListen(document, 'focusin', event => {
+      const editor = event.target?.closest?.(EDITOR_HINT);
+      if (!editor) return;
+      queueDoneButtons(editor.closest('[data-message-group-id], [role="dialog"]') || editor.parentElement);
+      for (const known of knownDoneButtons) if (known.isConnected) pendingDoneButtons.add(known);
+      if (pendingDoneButtons.size) scheduleInject();
+    }, true);
+
+    // 후보를 누르면 목록이 다시 그려져 포커스가 body로 빠지고, 그때는 창의 keydown이
+    // 불리지 않아 Esc로 닫히지 않았다. 창이 열려 있으면 문서에서 받아 닫고,
+    // 이 Esc가 크랙의 Esc 단축키로 넘어가지 않게 한다.
+    cmuListen(document, 'keydown', event => {
+      if (event.key !== 'Escape') return;
+      const panel = document.getElementById(PANEL_ID);
+      if (!panel || panel.hidden) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closePanel();
+    }, true);
+  }
+
+  if (document.readyState === 'loading') {
+    cmuListen(document, 'DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
+  }
+})();
+(function () {
+    'use strict';
+
+    const SCRIPT_NS = 'crack-selection-text-counter';
+    const POPUP_ID = `${SCRIPT_NS}-popup`;
+
+    const DEBOUNCE_MS = 70;
+    const HIDE_DELAY_MS = 160;
+    const MIN_CHARS_TO_SHOW = 1;
+
+    // true로 바꾸면 팝업에 "공백 제외"도 같이 표시합니다.
+    // 기본은 아주 작게 보이도록 false.
+    const SHOW_WITHOUT_SPACE = false;
+
+    let debounceTimer = null;
+    let hideTimer = null;
+    let lastText = '';
+
+    function normalizeSelectedText(text = '') {
+        return String(text || '')
+            .replace(/\r\n/g, '\n')
+            .replace(/\u00A0/g, ' ')
+            .trim();
+    }
+
+    function countChars(text = '') {
+        // JS의 [...문자열]은 이모지/복합문자도 비교적 자연스럽게 1글자 단위로 셉니다.
+        return [...String(text || '')].length;
+    }
+
+    function countCharsWithoutSpace(text = '') {
+        return [...String(text || '').replace(/\s+/g, '')].length;
+    }
+
+    function getActiveInputSelection() {
+        const el = document.activeElement;
+
+        if (!el) return null;
+
+        const tag = String(el.tagName || '').toLowerCase();
+        const isTextInput =
+            tag === 'textarea' ||
+            (tag === 'input' && /^(text|search|url|tel|email|password)?$/i.test(el.type || 'text'));
+
+        if (!isTextInput) return null;
+
+        const start = el.selectionStart;
+        const end = el.selectionEnd;
+
+        if (typeof start !== 'number' || typeof end !== 'number' || start === end) return null;
+
+        const text = normalizeSelectedText(String(el.value || '').slice(start, end));
+        if (!text) return null;
+
+        const rect = el.getBoundingClientRect();
+
+        return {
+            text,
+            rect: {
+                left: rect.left + Math.min(rect.width * 0.5, Math.max(24, rect.width - 24)),
+                right: rect.right,
+                top: rect.top,
+                bottom: rect.bottom,
+                width: rect.width,
+                height: rect.height
+            },
+            source: 'input'
+        };
+    }
+
+    function getWindowSelectionInfo() {
+        const selection = window.getSelection?.();
+
+        if (!selection || selection.rangeCount <= 0 || selection.isCollapsed) return null;
+
+        const text = normalizeSelectedText(selection.toString());
+        if (!text) return null;
+
+        let rect = null;
+
+        try {
+            const range = selection.getRangeAt(0);
+            rect = range.getBoundingClientRect();
+
+            if (!rect || (!rect.width && !rect.height)) {
+                const rects = Array.from(range.getClientRects());
+                rect = rects[rects.length - 1] || rects[0] || null;
+            }
+        } catch (e) {
+            rect = null;
+        }
+
+        if (!rect) return null;
+
+        return { text, rect, source: 'selection' };
+    }
+
+    function getSelectionInfo() {
+        if (!cmuTextToolEnabled('selectionTextCounter') || document.activeElement?.closest?.('#cmu-settings-panel, #ciw-settings-overlay, #cerc-panel')) return null;
+        if (document.activeElement?.matches?.('input[type=password]')) return null;
+        return getActiveInputSelection() || getWindowSelectionInfo();
+    }
+
+    function ensurePopup() {
+        let popup = document.getElementById(POPUP_ID);
+
+        if (!popup) {
+            popup = document.createElement('div');
+            popup.id = POPUP_ID;
+            popup.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(popup);
+        }
+
+        return popup;
+    }
+
+    function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    function positionPopup(popup, rect) {
+        // v1.0.1: 선택 영역 근처가 아니라 화면 오른쪽 아래 고정 표시.
+        // rect 인자는 이전 버전 호환용으로만 유지합니다.
+        popup.style.left = '';
+        popup.style.top = '';
+        const view = window.visualViewport;
+        popup.style.bottom = `${Math.max(12, window.innerHeight - ((view?.offsetTop || 0) + (view?.height || window.innerHeight)) + 12)}px`;
+    }
+
+    function showPopup(info) {
+        const text = normalizeSelectedText(info?.text || '');
+        const total = countChars(text);
+
+        if (total < MIN_CHARS_TO_SHOW) {
+            hidePopup();
+            return;
+        }
+
+        const noSpace = countCharsWithoutSpace(text);
+        const popup = ensurePopup();
+
+        popup.innerHTML = SHOW_WITHOUT_SPACE
+            ? `<b>${total.toLocaleString()}자</b><span>공백 제외 ${noSpace.toLocaleString()}</span>`
+            : `<b>${total.toLocaleString()}자</b>`;
+
+        popup.title = `공백 포함: ${total.toLocaleString()}자\n공백 제외: ${noSpace.toLocaleString()}자`;
+        popup.dataset.visible = 'true';
+
+        // 내용 반영 후 실제 크기로 위치 계산
+        requestAnimationFrame(() => positionPopup(popup, info.rect));
+
+        lastText = text;
+    }
+
+    function hidePopup() {
+        const popup = document.getElementById(POPUP_ID);
+        if (popup) popup.dataset.visible = 'false';
+        lastText = '';
+    }
+
+    function scheduleHide() {
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => {
+            const info = getSelectionInfo();
+            if (!info?.text) hidePopup();
+        }, HIDE_DELAY_MS);
+    }
+
+    function updateCounter() {
+        if (!cmuTextToolEnabled('selectionTextCounter')) { hidePopup(); return; }
+        clearTimeout(debounceTimer);
+
+        debounceTimer = setTimeout(() => {
+            const info = getSelectionInfo();
+
+            if (!info?.text) {
+                scheduleHide();
+                return;
+            }
+
+            const text = normalizeSelectedText(info.text);
+
+            // 같은 선택 텍스트여도 스크롤/화면 위치가 바뀔 수 있으니 위치는 다시 잡습니다.
+            showPopup({ ...info, text });
+        }, DEBOUNCE_MS);
+    }
+
+    function injectStyles() {
+        addStyle(`
+            #${POPUP_ID} {
+                position: fixed;
+                right: max(16px, env(safe-area-inset-right));
+                bottom: max(22px, calc(env(safe-area-inset-bottom) + 22px));
+                z-index: 2147483003;
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                max-width: min(220px, calc(100vw - 16px));
+                min-height: 24px;
+                padding: 4px 8px;
+                border: 1px solid var(--stc-border, rgba(0, 0, 0, .08));
+                border-radius: 999px;
+                background: var(--stc-bg, rgba(255, 255, 255, .94));
+                color: var(--stc-text, #242321);
+                box-shadow: 0 6px 20px rgba(0, 0, 0, .14);
+                font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                font-size: 12px;
+                line-height: 1;
+                pointer-events: none;
+                user-select: none;
+                opacity: 0;
+                transform: translateY(2px) scale(.98);
+                transition: opacity .12s ease, transform .12s ease;
+                backdrop-filter: blur(10px);
+                box-sizing: border-box;
+            }
+
+            #${POPUP_ID}[data-visible="true"] {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+
+            #${POPUP_ID} b {
+                display: inline-flex;
+                align-items: center;
+                color: inherit;
+                font-size: 12px;
+                font-weight: 850;
+                white-space: nowrap;
+            }
+
+            #${POPUP_ID} span {
+                color: var(--stc-muted, rgba(36, 35, 33, .62));
+                font-size: 11px;
+                font-weight: 750;
+                white-space: nowrap;
+            }
+
+            body[data-theme="dark"] #${POPUP_ID},
+            [data-theme="dark"] #${POPUP_ID} {
+                --stc-bg: rgba(36, 35, 33, .94);
+                --stc-border: rgba(255, 255, 255, .12);
+                --stc-text: #F0EFEB;
+                --stc-muted: rgba(240, 239, 235, .62);
+            }
+
+            @media (prefers-color-scheme: dark) {
+                body:not([data-theme="light"]) #${POPUP_ID} {
+                    --stc-bg: rgba(36, 35, 33, .94);
+                    --stc-border: rgba(255, 255, 255, .12);
+                    --stc-text: #F0EFEB;
+                    --stc-muted: rgba(240, 239, 235, .62);
+                }
+            }
+
+            @media (max-width: 720px) {
+                #${POPUP_ID} {
+                    min-height: 23px;
+                    padding: 4px 7px;
+                    font-size: 11px;
+                }
+
+                #${POPUP_ID} b {
+                    font-size: 11px;
+                }
+            }
+        `);
+    }
+
+    CMU_TEXT_TOOLS.counter = { reset: hidePopup, sync: updateCounter };
+    CMU_RESOURCES.cleanups.push(() => document.getElementById(POPUP_ID)?.remove());
+    function init() {
+        injectStyles();
+
+        const ready = () => {
+            if (!document.body) return;
+
+            cmuListen(document, 'selectionchange', updateCounter, { passive: true });
+            cmuListen(document, 'mouseup', updateCounter, { passive: true });
+            cmuListen(document, 'keyup', updateCounter, { passive: true });
+            cmuListen(document, 'touchend', updateCounter, { passive: true });
+            cmuListen(window, 'blur', hidePopup);
+            cmuListen(window, 'resize', updateCounter, { passive: true });
+            cmuListen(document, 'keydown', e => {
+                if (e.key === 'Escape') hidePopup();
+            });
+        };
+
+        if (document.readyState === 'loading') {
+            cmuListen(document, 'DOMContentLoaded', ready, { once: true });
+        } else {
+            ready();
+        }
+    }
+
+    init();
+})();
+(() => {
+  'use strict';
+
+  const NS = 'ciw';
+  const TOOLBAR_WRAPPER_ID = 'ciw-toolbar-wrapper';
+  const TOOLBAR_BUTTON_ID = 'ciw-toolbar-button';
+  const SELECTION_BAR_ID = 'ciw-selection-bar';
+  const SETTINGS_ID = 'ciw-settings-overlay';
+  const TOAST_ID = 'ciw-toast';
+
+  const TOOLS_KEY = 'CrackInputWrapperPopup_Tools_v1';
+  const SETTINGS_KEY = 'CrackInputWrapperPopup_Settings_v1';
+
+  const DEFAULT_TOOLS = [
+    { id: 'double', label: '쌍따옴표', icon: '“”', pre: '"', suf: '"', enabled: true },
+    { id: 'single', label: '작은따옴표', icon: '‘’', pre: "'", suf: "'", enabled: true },
+    { id: 'jp-double', label: '『 』', icon: '『』', pre: '『', suf: '』', enabled: true },
+    { id: 'jp-single', label: '「 」', icon: '「」', pre: '「', suf: '」', enabled: true },
+    { id: 'paren', label: '소괄호', icon: '()', pre: '(', suf: ')', enabled: true },
+    { id: 'bold', label: '굵게', icon: '**', pre: '**', suf: '**', enabled: true },
+    { id: 'strike', label: '취소선', icon: '~~', pre: '~~', suf: '~~', enabled: true },
+    { id: 'codeblock', label: '코드블럭', icon: '⋮', pre: '```\n', suf: '\n```', enabled: true }
+  ];
+
+  const DEFAULT_SETTINGS = {
+    showOnSelection: true,
+    keepInnerSelected: false
+  };
+
+  let tools = loadTools();
+  let settings = loadSettings();
+
+  let savedRange = null;
+  let savedEditor = null;
+  let savedText = '';
+  let hideTimer = 0;
+  let scanTimer = 0;
+  let routeKey = location.href;
+
+  function isChatRoomPage() {
+    if (!cmuTextToolEnabled('inputWrapper')) return false;
+    const path = location.pathname || '';
+    return (
+      /\/stories\/[^/]+\/episodes\/[^/]+/.test(path) ||
+      /\/characters\/[^/]+\/chats\/[^/]+/.test(path) ||
+      /\/u\/[^/]+\/c\/[^/]+/.test(path) ||
+      /\/(?:episodes|chats?)\/[a-zA-Z0-9_-]{8,}/.test(path)
+    );
+  }
+
+  function safeJsonParse(text, fallback) {
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function loadTools() {
+    const saved = safeJsonParse(localStorage.getItem(TOOLS_KEY), null);
+    if (!Array.isArray(saved)) return cloneTools(DEFAULT_TOOLS);
+
+    return saved
+      .filter(item => item && typeof item === 'object')
+      .map((item, index) => ({
+        id: String(item.id || `custom-${index}-${Date.now()}`),
+        label: String(item.label || '도구'),
+        icon: String(item.icon || item.label || '?').slice(0, 8),
+        pre: String(item.pre ?? ''),
+        suf: String(item.suf ?? ''),
+        enabled: item.enabled !== false
+      }));
+  }
+
+  function saveTools() {
+    localStorage.setItem(TOOLS_KEY, JSON.stringify(tools));
+    renderSelectionBar();
+  }
+
+  function cloneTools(list) {
+    return JSON.parse(JSON.stringify(list));
+  }
+
+  function loadSettings() {
+    return Object.assign({}, DEFAULT_SETTINGS, safeJsonParse(localStorage.getItem(SETTINGS_KEY), {}) || {});
+  }
+
+  function saveSettings() {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }
+
+  function escapedValue(value) {
+    return String(value ?? '').replace(/\n/g, '\\n');
+  }
+
+  function unescapedValue(value) {
+    return String(value ?? '').replace(/\\n/g, '\n');
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function getSelectionBar() {
+    return document.getElementById(SELECTION_BAR_ID);
+  }
+
+  function getToast() {
+    let toast = document.getElementById(TOAST_ID);
+
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = TOAST_ID;
+      document.documentElement.appendChild(toast);
+    }
+
+    return toast;
+  }
+
+  function toast(text) {
+    const el = getToast();
+    el.textContent = text;
+    el.dataset.show = 'true';
+
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => {
+      el.dataset.show = 'false';
+    }, 1200);
+  }
+
+  function isOwnUiNode(node) {
+    const el = node && (node.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement);
+    return !!el?.closest?.(`#${SELECTION_BAR_ID}, #${SETTINGS_ID}, #${TOAST_ID}, #${TOOLBAR_WRAPPER_ID}`);
+  }
+
+  function closestElement(node) {
+    if (!node) return null;
+    return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+  }
+
+  function closestEditableFromNode(node) {
+    const el = closestElement(node);
+    if (!el) return null;
+
+    return el.closest?.('div.ProseMirror[contenteditable="true"], [contenteditable="true"].ProseMirror, textarea, input[type="text"]') || null;
+  }
+
+  function isVisible(el) {
+    if (!el || !el.isConnected) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function isAllowedEditor(editor) {
+    if (!cmuTextToolEnabled('inputWrapper') || editor?.closest?.('#cmu-settings-panel, #cerc-panel, #cmu-message-select-copy, [data-cmu-memory-kind]')) return false;
+    if (!editor || !editor.isConnected || !isVisible(editor)) return false;
+    if (isOwnUiNode(editor)) return false;
+
+    if (editor.matches?.('textarea, input[type="text"]')) {
+      return !!editor.closest?.('[data-ciw-allow="true"]');
+    }
+
+    if (!editor.matches?.('div.ProseMirror[contenteditable="true"], [contenteditable="true"].ProseMirror')) return false;
+    if (editor.getAttribute('contenteditable') === 'false') return false;
+    if (editor.closest?.('.wrtn-markdown, [data-ciw-block="true"]')) return false;
+
+    // 메인 채팅 입력창: 사용자가 보내준 현재 구조 기준.
+    if (editor.classList.contains('__chat_input_textarea')) return true;
+
+    // 수정창(AI 메시지 편집): 크랙은 tiptap ProseMirror 에디터를 사용.
+    // __chat_input_textarea가 없고 .wrtn-markdown(본문) 밖에 위치(위 가드에서 이미 제외됨).
+    // 기존 광범위 셀렉터(.fixed/form/[data-state]/[role=dialog])는 오탐만 키워 tiptap 단독으로 좁힘.
+    if (editor.classList.contains('tiptap')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function getSelectedRangeInfo() {
+    const sel = window.getSelection?.();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+
+    const text = sel.toString();
+    if (!text || !text.trim()) return null;
+
+    const range = sel.getRangeAt(0);
+    const editorA = closestEditableFromNode(range.commonAncestorContainer);
+    const editorB = closestEditableFromNode(sel.anchorNode);
+    const editorC = closestEditableFromNode(sel.focusNode);
+    const editor = editorA || editorB || editorC;
+
+    if (!editor || !editor.contains(range.startContainer) || !editor.contains(range.endContainer)) return null;
+    if (!isAllowedEditor(editor)) return null;
+
+    return { sel, range, editor, text };
+  }
+
+  function saveCurrentSelection() {
+    const info = getSelectedRangeInfo();
+
+    if (!info) {
+      savedRange = null;
+      savedEditor = null;
+      savedText = '';
+      return null;
+    }
+
+    savedRange = info.range.cloneRange();
+    savedEditor = info.editor;
+    savedText = info.text;
+
+    return info;
+  }
+
+  function restoreSelection() {
+    if (!savedRange || !savedEditor || !savedEditor.isConnected) return false;
+
+    try {
+      savedEditor.focus?.({ preventScroll: true });
+
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedRange);
+
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function dispatchEditorInput(editor) {
+    if (!editor) return;
+
+    try {
+      editor.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertText',
+        data: ''
+      }));
+    } catch (_) {
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
+  function insertPlainTextFallback(text) {
+    const sel = window.getSelection?.();
+    if (!sel || !sel.rangeCount) return false;
+
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+
+    const node = document.createTextNode(text);
+    range.insertNode(node);
+
+    const after = document.createRange();
+    after.setStartAfter(node);
+    after.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(after);
+
+    return true;
+  }
+
+  function wrapSelection(tool) {
+    if (!tool) return;
+
+    const selectedBefore = savedText;
+
+    if (!selectedBefore || !restoreSelection()) {
+      hideSelectionBar();
+      return;
+    }
+
+    const editor = savedEditor;
+    const wrapped = `${tool.pre}${selectedBefore}${tool.suf}`;
+
+    let ok = false;
+
+    try {
+      ok = document.execCommand && document.execCommand('insertText', false, wrapped);
+    } catch (_) {
+      ok = false;
+    }
+
+    if (!ok) {
+      try {
+        ok = insertPlainTextFallback(wrapped);
+      } catch (_) {
+        ok = false;
+      }
+    }
+
+    if (ok) {
+      dispatchEditorInput(editor);
+
+      if (settings.keepInnerSelected) {
+        trySelectInnerText(editor, tool.pre.length, selectedBefore.length);
+      }
+
+      hideSelectionBar();
+    } else {
+      toast('감싸기 실패');
+    }
+  }
+
+  function trySelectInnerText(editor, prefixLen, innerLen) {
+    // execCommand 이후에는 커서가 삽입문 뒤로 가는 경우가 많습니다.
+    // ProseMirror 내부 상태를 과하게 건드리지 않기 위해 기본값은 꺼둔 옵션입니다.
+    if (!editor || !innerLen) return;
+
+    try {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount) return;
+
+      const current = sel.getRangeAt(0);
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+      let target = null;
+
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (node.nodeValue && node.nodeValue.includes(savedText)) {
+          target = node;
+          break;
+        }
+      }
+
+      if (!target) return;
+
+      const start = target.nodeValue.indexOf(savedText);
+      if (start < 0) return;
+
+      const range = document.createRange();
+      range.setStart(target, start);
+      range.setEnd(target, start + innerLen);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (_) {}
+  }
+
+  function positionSelectionBar(info) {
+    const bar = getSelectionBar();
+    if (!bar || !info?.range) return;
+
+    const rect = getRangeRect(info.range);
+    if (!rect) {
+      hideSelectionBar();
+      return;
+    }
+
+    // 키보드가 올라온 모바일에서 layout viewport는 키보드를 포함하므로,
+    // 실제 보이는 영역인 visualViewport를 우선 사용한다.
+    const vv = window.visualViewport;
+    const vw = vv ? vv.width : window.innerWidth;
+    const vh = vv ? vv.height : window.innerHeight;
+    const offX = vv ? vv.offsetLeft : 0;
+    const offY = vv ? vv.offsetTop : 0;
+
+    bar.style.display = 'flex';
+    if (typeof bar.showPopover === 'function' && !bar.matches(':popover-open')) {
+      try { bar.setAttribute('popover', 'manual'); bar.showPopover(); } catch (_) {}
+    }
+    bar.style.visibility = 'hidden';
+
+    const bw = bar.offsetWidth || 220;
+    const bh = bar.offsetHeight || 36;
+
+    // rect는 viewport 좌표. 선택 영역 위쪽에 두되 공간 없으면 아래로.
+    let left = rect.left + rect.width / 2 - bw / 2;
+    let top = rect.top - bh - 8;
+    if (top < offY + 8) top = rect.bottom + 8;
+
+    // 보이는 영역(visualViewport) 안으로 clamp
+    left = Math.max(offX + 8, Math.min(left, offX + vw - bw - 8));
+    top = Math.max(offY + 8, Math.min(top, offY + vh - bh - 8));
+
+    // absolute 기준이므로 document 좌표로 변환(스크롤 보정 유지)
+    bar.style.left = `${left}px`;
+    bar.style.top = `${top}px`;
+    bar.style.visibility = 'visible';
+  }
+
+  function getRangeRect(range) {
+    if (!range) return null;
+
+    const rects = Array.from(range.getClientRects?.() || []).filter(r => r.width || r.height);
+    if (rects.length) return rects[0];
+
+    const rect = range.getBoundingClientRect?.();
+    if (rect && (rect.width || rect.height)) return rect;
+
+    return null;
+  }
+
+  function showSelectionBarForCurrentSelection() {
+    if (!settings.showOnSelection || !isChatRoomPage()) {
+      hideSelectionBar();
+      return;
+    }
+
+    const info = saveCurrentSelection();
+
+    if (!info) {
+      hideSelectionBar();
+      return;
+    }
+
+    renderSelectionBar();
+    positionSelectionBar(info);
+  }
+
+  function hideSelectionBar(delay = 0) {
+    clearTimeout(hideTimer);
+
+    hideTimer = setTimeout(() => {
+      const bar = getSelectionBar();
+      if (bar) { bar.removeAttribute('popover'); bar.style.display = 'none'; }
+    }, delay);
+  }
+
+  function renderSelectionBar() {
+    let bar = getSelectionBar();
+
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = SELECTION_BAR_ID;
+      document.body.appendChild(bar);
+
+      bar.addEventListener('mousedown', e => e.preventDefault());
+      bar.addEventListener('pointerdown', e => e.preventDefault());
+      // Pointerdown preserves the editor selection; allow touch-generated clicks.
+    }
+
+    const enabledTools = tools.filter(tool => tool.enabled !== false);
+    const signature = JSON.stringify(enabledTools);
+    if (bar.dataset.toolsSignature === signature) return;
+    bar.dataset.toolsSignature = signature;
+
+    bar.innerHTML = '';
+
+    enabledTools.forEach((tool, index) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `${NS}-sel-btn`;
+      btn.title = tool.label;
+      btn.dataset.toolId = tool.id || '';
+      btn.textContent = tool.icon || tool.label || '?';
+      btn.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        wrapSelection(tool);
+      });
+      bar.appendChild(btn);
+    });
+
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = `${NS}-sel-btn ${NS}-sel-settings`;
+    edit.title = '감싸기 도구 설정';
+    edit.textContent = '⚙';
+    edit.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      openSettingsModal();
+    });
+    bar.appendChild(edit);
+  }
+
+  function syncSidebarLauncher() {
+    document.getElementById(TOOLBAR_WRAPPER_ID)?.remove();
+    applySideVisible();
+  }
+
+  function removeUiOutsideChat() {
+    if (isChatRoomPage()) return false;
+
+    document.getElementById(TOOLBAR_WRAPPER_ID)?.remove();
+    hideSelectionBar();
+
+    const modal = document.getElementById(SETTINGS_ID);
+    if (modal) modal.remove();
+
+    savedRange = null;
+    savedEditor = null;
+    savedText = '';
+
+    return true;
+  }
+
+  function openSettingsModal() {
+    if (!cmuTextToolEnabled('inputWrapper')) return;
+    let overlay = document.getElementById(SETTINGS_ID);
+    if (overlay) return;
+
+    const draft = cloneTools(tools);
+
+    overlay = document.createElement('div');
+    overlay.id = SETTINGS_ID;
+
+    overlay.innerHTML = `
+      <div class="ciw-modal">
+        <div class="ciw-modal-head">
+          <div class="ciw-modal-title">
+            <strong>✍️ 입력 감싸기 도구</strong>
+            <span>드래그한 텍스트를 기호로 감쌉니다</span>
+          </div>
+          <button type="button" class="ciw-close" data-ciw-action="close">✕</button>
+        </div>
+
+        <div class="ciw-options">
+          <label class="ciw-chip"><input type="checkbox" id="ciw-opt-toolbar"> 미니 사이드바 아이콘</label>
+          <label class="ciw-chip"><input type="checkbox" id="ciw-opt-selection"> 드래그 선택 팝업</label>
+          <label class="ciw-chip"><input type="checkbox" id="ciw-opt-keep-selected"> 감싼 뒤 내부 텍스트 다시 선택</label>
+        </div>
+
+        <div class="ciw-tool-head">
+          <span>도구 목록</span>
+          <button type="button" class="ciw-small-btn" data-ciw-action="add">＋ 추가</button>
+        </div>
+
+        <div class="ciw-col-head">
+          <span>표시</span><span>이름</span><span>아이콘</span><span>앞 기호</span><span>뒤 기호</span><span></span>
+        </div>
+
+        <div class="ciw-tool-list" id="ciw-tool-list"></div>
+
+        <div class="ciw-modal-foot">
+          <button type="button" class="ciw-text-btn" data-ciw-action="reset">기본값으로 되돌리기</button>
+          <div class="ciw-foot-actions">
+            <button type="button" class="ciw-sec-btn" data-ciw-action="close">취소</button>
+            <button type="button" class="ciw-main-btn" data-ciw-action="save">저장</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    CMU_KEYBOARD_COMPOSER.schedule();
+
+    const optToolbar = overlay.querySelector('#ciw-opt-toolbar');
+    const optSelection = overlay.querySelector('#ciw-opt-selection');
+    const optKeepSelected = overlay.querySelector('#ciw-opt-keep-selected');
+
+    optToolbar.checked = sideLoadVisible().inputWrapperButton !== false;
+    optSelection.checked = settings.showOnSelection !== false;
+    optKeepSelected.checked = settings.keepInnerSelected === true;
+
+    function renderToolRows() {
+      const list = overlay.querySelector('#ciw-tool-list');
+      list.innerHTML = '';
+
+      draft.forEach((tool, index) => {
+        const row = document.createElement('div');
+        row.className = 'ciw-tool-row';
+        row.dataset.index = String(index);
+
+        row.innerHTML = `
+          <label class="ciw-enable" title="팝업에 표시">
+            <input type="checkbox" class="ciw-enabled" ${tool.enabled !== false ? 'checked' : ''}>
+          </label>
+          <input class="ciw-label" type="text" value="${escapeHtml(tool.label)}" placeholder="이름">
+          <input class="ciw-icon" type="text" value="${escapeHtml(tool.icon)}" placeholder="아이콘">
+          <input class="ciw-pre" type="text" value="${escapeHtml(escapedValue(tool.pre))}" placeholder="앞">
+          <input class="ciw-suf" type="text" value="${escapeHtml(escapedValue(tool.suf))}" placeholder="뒤">
+          <div class="ciw-row-actions">
+            <button type="button" data-row-action="up" title="위로">↑</button>
+            <button type="button" data-row-action="down" title="아래로">↓</button>
+            <button type="button" data-row-action="delete" title="삭제">×</button>
+          </div>
+        `;
+
+        list.appendChild(row);
+      });
+    }
+
+    function syncDraftFromInputs() {
+      overlay.querySelectorAll('.ciw-tool-row').forEach(row => {
+        const index = Number(row.dataset.index);
+        const tool = draft[index];
+        if (!tool) return;
+
+        tool.enabled = row.querySelector('.ciw-enabled')?.checked !== false;
+        tool.label = row.querySelector('.ciw-label')?.value || '도구';
+        tool.icon = row.querySelector('.ciw-icon')?.value || tool.label.slice(0, 2);
+        tool.pre = unescapedValue(row.querySelector('.ciw-pre')?.value || '');
+        tool.suf = unescapedValue(row.querySelector('.ciw-suf')?.value || '');
+      });
+    }
+
+    renderToolRows();
+
+    overlay.addEventListener('click', e => {
+      const action = e.target?.closest?.('[data-ciw-action]')?.dataset?.ciwAction;
+      const rowAction = e.target?.closest?.('[data-row-action]')?.dataset?.rowAction;
+
+      if (rowAction) {
+        e.preventDefault();
+        const row = e.target.closest('.ciw-tool-row');
+        const index = Number(row?.dataset.index);
+        if (!Number.isFinite(index)) return;
+
+        syncDraftFromInputs();
+
+        if (rowAction === 'up' && index > 0) {
+          [draft[index - 1], draft[index]] = [draft[index], draft[index - 1]];
+          renderToolRows();
+        } else if (rowAction === 'down' && index < draft.length - 1) {
+          [draft[index + 1], draft[index]] = [draft[index], draft[index + 1]];
+          renderToolRows();
+        } else if (rowAction === 'delete') {
+          draft.splice(index, 1);
+          renderToolRows();
+        }
+        return;
+      }
+
+      if (!action) return;
+
+      e.preventDefault();
+
+      if (action === 'close') {
+        overlay.remove();
+        return;
+      }
+
+      if (action === 'add') {
+        syncDraftFromInputs();
+        draft.push({
+          id: `custom-${Date.now()}`,
+          label: '새 도구',
+          icon: '＋',
+          pre: '',
+          suf: '',
+          enabled: true
+        });
+        renderToolRows();
+        return;
+      }
+
+      if (action === 'reset') {
+        draft.splice(0, draft.length, ...cloneTools(DEFAULT_TOOLS));
+        renderToolRows();
+        return;
+      }
+
+      if (action === 'save') {
+        syncDraftFromInputs();
+
+        tools = draft
+          .filter(tool => tool.pre || tool.suf || tool.label || tool.icon)
+          .map((tool, index) => ({
+            id: tool.id || `tool-${index}-${Date.now()}`,
+            label: String(tool.label || '도구'),
+            icon: String(tool.icon || tool.label || '?').slice(0, 8),
+            pre: String(tool.pre ?? ''),
+            suf: String(tool.suf ?? ''),
+            enabled: tool.enabled !== false
+          }));
+
+        sideLoadVisible().inputWrapperButton = optToolbar.checked;
+        sideSaveVisible();
+        settings.showOnSelection = optSelection.checked;
+        settings.keepInnerSelected = optKeepSelected.checked;
+
+        saveTools();
+        saveSettings();
+        syncSidebarLauncher();
+        overlay.remove();
+        toast('저장했어');
+      }
+    });
+
+    overlay.addEventListener('mousedown', e => {
+      if (e.target === overlay) overlay.remove();
+    });
+  }
+
+  function handleSelectionEvent() {
+    clearTimeout(handleSelectionEvent._timer);
+    handleSelectionEvent._timer = setTimeout(showSelectionBarForCurrentSelection, 80);
+  }
+
+  function handleRouteChange() {
+    if (routeKey === location.href) return;
+
+    routeKey = location.href;
+    savedRange = null;
+    savedEditor = null;
+    savedText = '';
+
+    hideSelectionBar();
+    setTimeout(syncSidebarLauncher, 250);
+    setTimeout(syncSidebarLauncher, 900);
+  }
+
+  function installEventListeners() {
+    cmuListen(document, 'selectionchange', () => {
+      if (isOwnUiNode(document.activeElement)) return;
+      handleSelectionEvent();
+    }, true);
+
+    cmuListen(document, 'mouseup', handleSelectionEvent, true);
+    cmuListen(document, 'keyup', event => {
+      if (event.key === 'Escape') {
+        hideSelectionBar();
+        return;
+      }
+      handleSelectionEvent();
+    }, true);
+    cmuListen(document, 'touchend', () => {
+      setTimeout(handleSelectionEvent, 80);
+    }, true);
+
+    cmuListen(document, 'mousedown', event => {
+      const bar = getSelectionBar();
+      if (!bar || bar.style.display === 'none') return;
+
+      // bar 자체(버튼/설정) 클릭은 유지 — savedRange 복원으로 감싸기 동작.
+      if (isOwnUiNode(event.target)) return;
+
+      // 그 외 어디든(에디터 내부 재클릭 포함) 누르면 기존 선택을 즉시 해제.
+      // 선택을 안 지우면 80ms 뒤 handleSelectionEvent가 bar를 되살려 '깜빡임 + 미해제'가 생김.
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed) sel.removeAllRanges();
+
+      bar.removeAttribute('popover');
+      bar.style.display = 'none';
+    }, true);
+
+    cmuListen(document, 'keydown', event => {
+      if (!event.altKey || event.ctrlKey || event.metaKey) return;
+
+      const editor = closestEditableFromNode(document.activeElement);
+      if (!isAllowedEditor(editor)) return;
+
+      const idx = shortcutIndexFromEvent(event);
+      if (idx < 0) return;
+
+      const enabled = tools.filter(tool => tool.enabled !== false);
+      const tool = enabled[idx];
+      if (!tool) return;
+
+      const info = saveCurrentSelection();
+      if (!info) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      wrapSelection(tool);
+    }, true);
+  }
+
+  function shortcutIndexFromEvent(event) {
+    const key = event.key;
+    const code = event.code;
+
+    if (code === 'Backquote' || key === '`' || key === '~') return 0;
+    if (/^Digit\d$/.test(code)) {
+      const n = Number(code.replace('Digit', ''));
+      return n === 0 ? 10 : n;
+    }
+    if (/^\d$/.test(key)) {
+      const n = Number(key);
+      return n === 0 ? 10 : n;
+    }
+
+    return -1;
+  }
+
+  function installObserver() {
+    const observer = new MutationObserver(mutations => {
+      let shouldScan = false;
+
+      for (const mutation of mutations) {
+        if (mutation.type !== 'childList') continue;
+
+        for (const node of mutation.addedNodes || []) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+
+          const el = node;
+          if (
+            el.matches?.('.__chat_input_textarea, div.ProseMirror[contenteditable="true"]') ||
+            el.querySelector?.('.__chat_input_textarea, div.ProseMirror[contenteditable="true"], .flex.items-center.space-x-2')
+          ) {
+            shouldScan = true;
+            break;
+          }
+        }
+
+        if (shouldScan) break;
+      }
+
+      handleRouteChange();
+
+      if (shouldScan) {
+        clearTimeout(scanTimer);
+        scanTimer = setTimeout(() => {
+          removeUiOutsideChat();
+          syncSidebarLauncher();
+        }, 120);
+      }
+    });
+
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true
+    });
+
+
+  }
+
+  function injectStyles() {
+    const css = `
+      #${SELECTION_BAR_ID} {
+        position: fixed;
+        inset: auto;
+        margin: 0;
+        display: none;
+        align-items: center;
+        gap: 4px;
+        padding: 5px;
+        border: 1px solid rgba(255,255,255,.12);
+        border-radius: 999px;
+        background: linear-gradient(180deg, rgba(34,34,38,.92), rgba(20,20,23,.90));
+        color: #fff;
+        box-shadow: 0 10px 28px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.08);
+        z-index: 2147483643 !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        backdrop-filter: blur(14px) saturate(1.15);
+        -webkit-backdrop-filter: blur(14px) saturate(1.15);
+      }
+
+      .${NS}-sel-btn {
+        min-width: 30px;
+        height: 30px;
+        padding: 0 8px;
+        border: 1px solid transparent;
+        border-radius: 999px;
+        background: transparent;
+        color: rgba(255,255,255,.92);
+        font: 800 13px/1 ui-serif, "Times New Roman", "Noto Serif KR", serif;
+        letter-spacing: -.03em;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background .12s ease, border-color .12s ease, transform .12s ease, color .12s ease;
+      }
+
+      .${NS}-sel-btn[data-tool-id="bold"],
+      .${NS}-sel-btn[data-tool-id="strike"],
+      .${NS}-sel-btn[data-tool-id="codeblock"] {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        letter-spacing: -.05em;
+      }
+
+      .${NS}-sel-btn[data-tool-id="paren"] {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .${NS}-sel-btn:hover {
+        background: rgba(255,255,255,.10);
+        border-color: rgba(255,255,255,.10);
+        color: #fff;
+      }
+
+      .${NS}-sel-btn:active {
+        transform: scale(.94);
+      }
+
+      .${NS}-sel-settings {
+        min-width: 30px;
+        margin-left: 2px;
+        color: rgba(255,255,255,.62);
+        border-left: 1px solid rgba(255,255,255,.12);
+        border-radius: 999px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 13px;
+      }
+
+      #${TOOLBAR_WRAPPER_ID} {
+        display: flex;
+        align-items: center;
+      }
+
+      #${TOOLBAR_BUTTON_ID} .ciw-toolbar-icon {
+        width: 16px;
+        height: 16px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+      }
+
+      #${TOOLBAR_BUTTON_ID} .ciw-toolbar-icon svg {
+        width: 16px;
+        height: 16px;
+        display: block;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2.35;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+
+
+      #${SETTINGS_ID} {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647 !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,.48);
+        backdrop-filter: blur(2px);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", sans-serif;
+      }
+
+      .ciw-modal {
+        width: min(680px, calc(100vw - 28px));
+        max-height: min(760px, calc(100vh - 28px));
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border: 1px solid rgba(255,255,255,.14);
+        border-radius: 18px;
+        background: #1c1c21;
+        color: #f2f2f5;
+        box-shadow: 0 24px 64px rgba(0,0,0,.5);
+      }
+
+      .ciw-modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 18px 14px;
+      }
+
+      .ciw-modal-title {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .ciw-modal-title strong { font-size: 15px; letter-spacing: -.01em; }
+
+      .ciw-modal-title span {
+        font-size: 11.5px;
+        color: rgba(255,255,255,.42);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .ciw-close {
+        width: 28px;
+        height: 28px;
+        border: 0;
+        border-radius: 8px;
+        background: rgba(255,255,255,.06);
+        color: rgba(255,255,255,.64);
+        font-size: 15px;
+        cursor: pointer;
+        transition: background .12s, color .12s;
+      }
+
+      .ciw-close:hover { background: rgba(255,255,255,.12); color: #fff; }
+
+      .ciw-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 0 18px 16px;
+        border-bottom: 1px solid rgba(255,255,255,.08);
+      }
+
+      .ciw-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 12px 7px 9px;
+        border: 1px solid rgba(255,255,255,.08);
+        border-radius: 999px;
+        background: rgba(255,255,255,.03);
+        font-size: 12px;
+        color: rgba(255,255,255,.64);
+        cursor: pointer;
+        user-select: none;
+        transition: all .14s;
+      }
+
+      .ciw-chip input[type="checkbox"] {
+        appearance: none;
+        -webkit-appearance: none;
+        margin: 0;
+        width: 15px;
+        height: 15px;
+        border-radius: 50%;
+        border: 1.5px solid rgba(255,255,255,.28);
+        background: transparent;
+        cursor: pointer;
+        transition: all .14s;
+        flex: none;
+      }
+
+      .ciw-chip input[type="checkbox"]:checked {
+        border-color: #ffa600;
+        background: #ffa600 url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M5 13l4 4 10-10' fill='none' stroke='%23111' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'/></svg>") center/9px no-repeat;
+      }
+
+      .ciw-chip:has(input:checked) {
+        border-color: rgba(255,166,0,.5);
+        background: rgba(255,166,0,.14);
+        color: #f2f2f5;
+      }
+
+      .ciw-tool-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 18px 0;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .ciw-small-btn {
+        border: 1px dashed rgba(255,166,0,.45);
+        border-radius: 8px;
+        background: transparent;
+        color: #ffa600;
+        padding: 6px 11px;
+        font: 700 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        cursor: pointer;
+        transition: background .12s;
+      }
+
+      .ciw-small-btn:hover { background: rgba(255,166,0,.14); }
+
+      .ciw-col-head {
+        display: grid;
+        grid-template-columns: 28px minmax(90px, .9fr) 56px minmax(78px, 1fr) minmax(78px, 1fr) 76px;
+        gap: 8px;
+        padding: 12px 26px 6px;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: .06em;
+        color: rgba(255,255,255,.42);
+        text-transform: uppercase;
+      }
+
+      .ciw-tool-list {
+        flex: 1;
+        overflow: auto;
+        padding: 0 18px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .ciw-tool-row {
+        display: grid;
+        grid-template-columns: 28px minmax(90px, .9fr) 56px minmax(78px, 1fr) minmax(78px, 1fr) 76px;
+        gap: 8px;
+        align-items: center;
+        padding: 7px 8px;
+        border: 1px solid transparent;
+        border-radius: 10px;
+        background: rgba(255,255,255,.028);
+        transition: background .12s, border-color .12s, opacity .12s;
+      }
+
+      .ciw-tool-row:hover {
+        background: rgba(255,255,255,.05);
+        border-color: rgba(255,255,255,.08);
+      }
+
+      .ciw-tool-row:has(.ciw-enabled:not(:checked)) { opacity: .45; }
+
+      .ciw-enable {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .ciw-enabled {
+        appearance: none;
+        -webkit-appearance: none;
+        margin: 0;
+        width: 17px;
+        height: 17px;
+        border-radius: 5px;
+        border: 1.5px solid rgba(255,255,255,.25);
+        background: transparent;
+        cursor: pointer;
+        transition: all .13s;
+      }
+
+      .ciw-enabled:checked {
+        border-color: #ffa600;
+        background: #ffa600 url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M5 13l4 4 10-10' fill='none' stroke='%23111' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'/></svg>") center/10px no-repeat;
+      }
+
+      .ciw-tool-row input[type="text"] {
+        min-width: 0;
+        height: 30px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        background: rgba(0,0,0,.22);
+        color: #fff;
+        padding: 0 9px;
+        font-size: 12.5px;
+        outline: none;
+        transition: border-color .12s, background .12s;
+      }
+
+      .ciw-tool-row input[type="text"]:hover { border-color: rgba(255,255,255,.08); }
+
+      .ciw-tool-row input[type="text"]:focus {
+        border-color: rgba(255,166,0,.65);
+        background: rgba(0,0,0,.32);
+      }
+
+      .ciw-tool-row .ciw-icon { text-align: center; }
+
+      .ciw-tool-row .ciw-pre,
+      .ciw-tool-row .ciw-suf {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        color: #ffd28a;
+      }
+
+      .ciw-row-actions {
+        display: flex;
+        gap: 3px;
+        justify-content: flex-end;
+      }
+
+      .ciw-row-actions button {
+        width: 23px;
+        height: 25px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: rgba(255,255,255,.42);
+        font-size: 12px;
+        cursor: pointer;
+        transition: background .12s, color .12s;
+      }
+
+      .ciw-row-actions button:hover {
+        background: rgba(255,255,255,.1);
+        color: #fff;
+      }
+
+      .ciw-row-actions [data-row-action="delete"]:hover {
+        background: rgba(255,105,97,.16);
+        color: #ff6961;
+      }
+
+      .ciw-modal-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 13px 18px;
+        border-top: 1px solid rgba(255,255,255,.08);
+        background: rgba(0,0,0,.14);
+      }
+
+      .ciw-foot-actions { display: flex; gap: 8px; }
+
+      .ciw-text-btn {
+        border: 0;
+        background: transparent;
+        color: rgba(255,255,255,.42);
+        font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        padding: 8px 4px;
+        cursor: pointer;
+        transition: color .12s;
+      }
+
+      .ciw-text-btn:hover { color: #ff6961; }
+
+      .ciw-sec-btn {
+        border: 1px solid rgba(255,255,255,.14);
+        border-radius: 9px;
+        background: transparent;
+        color: rgba(255,255,255,.64);
+        padding: 9px 15px;
+        font: 700 12.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        cursor: pointer;
+        transition: all .12s;
+      }
+
+      .ciw-sec-btn:hover { background: rgba(255,255,255,.06); color: #fff; }
+
+      .ciw-main-btn {
+        border: 0;
+        border-radius: 9px;
+        background: #ffa600;
+        color: #16130a;
+        padding: 9px 18px;
+        font: 800 12.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        cursor: pointer;
+        box-shadow: 0 2px 10px rgba(255,166,0,.25);
+        transition: filter .12s, transform .1s;
+      }
+
+      .ciw-main-btn:hover { filter: brightness(1.08); }
+      .ciw-main-btn:active { transform: scale(.97); }
+
+      #${TOAST_ID} {
+        position: fixed;
+        left: 50%;
+        bottom: 24px;
+        transform: translateX(-50%) translateY(8px);
+        z-index: 2147483647 !important;
+        opacity: 0;
+        pointer-events: none;
+        transition: .16s ease;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(20,20,22,.94);
+        color: #fff;
+        font: 700 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        box-shadow: 0 8px 24px rgba(0,0,0,.3);
+      }
+
+      #${TOAST_ID}[data-show="true"] {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+
+      @media (max-width: 640px) {
+        .ciw-modal {
+          width: calc(100vw - 16px);
+          max-height: calc(100vh - 16px);
+        }
+
+        .ciw-col-head { display: none; }
+
+        .ciw-tool-row {
+          grid-template-columns: 24px 1fr 50px;
+          row-gap: 6px;
+        }
+
+        .ciw-tool-row .ciw-pre,
+        .ciw-tool-row .ciw-suf { grid-column: span 1; }
+
+        .ciw-row-actions {
+          grid-column: 1 / -1;
+          justify-content: flex-end;
+        }
+
+        #${SELECTION_BAR_ID} {
+          max-width: calc(100vw - 16px);
+          overflow-x: auto;
+        }
+      }
+    `;
+
+    addStyle(css);
+  }
+
+  function clearUi() {
+    clearTimeout(hideTimer); clearTimeout(scanTimer);
+    for (const id of [TOOLBAR_WRAPPER_ID, SELECTION_BAR_ID, SETTINGS_ID, TOAST_ID]) document.getElementById(id)?.remove();
+    savedRange = savedEditor = null; savedText = '';
+  }
+  CMU_TEXT_TOOLS.wrapper = { reset: clearUi, open: openSettingsModal, sync() {
+    if (!isChatRoomPage()) clearUi();
+    else handleRouteChange();
+    syncSidebarLauncher();
+  }};
+  CMU_RESOURCES.cleanups.push(clearUi);
+  function init() {
+    injectStyles();
+    renderSelectionBar();
+    installEventListeners();
+    installObserver();
+
+    setTimeout(syncSidebarLauncher, 250);
+    setTimeout(syncSidebarLauncher, 1000);
+  }
+
+  if (document.readyState === 'loading') {
+    cmuListen(document, 'DOMContentLoaded', init, { once: true });
+  } else {
+    init();
+  }
+})();
+    CMU_TEXT_TOOLS.sync();
+
+    // Reuse CMU's native message activation rather than adding a second menu.
+    cmuListen(document, 'dblclick', async event => {
+        if (!cmuTextToolEnabled('messageDoubleClickEdit') || event.button !== 0 || CMU_MESSAGE_ACTIONS.opening) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target || target.closest('button,a,input,textarea,[contenteditable="true"],[role="dialog"],pre,code,#cmu-settings-panel,#cerc-panel,#ciw-settings-overlay')) return;
+        const root = target.closest('[data-message-group-id]');
+        if (!root || !target.closest('.wrtn-markdown') || root.querySelector('[contenteditable="true"]')) return;
+        try {
+            if (Date.now() < Number(unsafeWindow?.rrSuppressBubbleMenuUntil || 0)) return;
+        } catch (_) {}
+        const trigger = cmuMessageActionsFindTrigger(root);
+        if (!trigger) return;
+        event.preventDefault(); event.stopPropagation();
+        cmuMessageActionsClearGesture();
+        CMU_MESSAGE_ACTIONS.opening = true;
+        const room = getChatId();
+        document.body.dataset.cmuQuickEditing = '1';
+        try {
+            cmuMessageActionsActivate(trigger, event.clientX, event.clientY);
+            const menu = await cmuMessageActionsWaitForMenu(trigger, 850);
+            if (!cmuTextToolEnabled('messageDoubleClickEdit') || !root.isConnected || room !== getChatId()) return;
+            const edit = menu && [...menu.querySelectorAll('[role="menuitem"],button')].find(item =>
+                /^(?:메시지\s*)?수정(?:하기)?$/.test((item.textContent || '').trim()) &&
+                !item.hasAttribute('data-disabled') && item.getAttribute('aria-disabled') !== 'true');
+            if (edit) edit.click();
+            else showToast('이 메시지에서 수정 메뉴를 찾지 못했어요.');
+        } finally {
+            delete document.body.dataset.cmuQuickEditing;
+            CMU_MESSAGE_ACTIONS.opening = false;
+        }
+    }, true);
+    addStyle(`
+      html.cmu-word-wrap [data-message-group-id] div.break-all { word-break: keep-all !important; }
+      html.cmu-word-wrap [data-message-group-id] .wrtn-markdown { word-break: keep-all !important; overflow-wrap: anywhere !important; }
+      html.cmu-word-wrap [data-message-group-id] .wrtn-markdown :is(p,em,strong,span,a):not(pre *,code *) { white-space: pre-wrap !important; overflow-wrap: anywhere !important; word-break: keep-all !important; }
+      body[data-cmu-quick-editing="1"] [data-radix-popper-content-wrapper] { opacity: 0 !important; animation: none !important; }
+      #ciw-selection-bar::backdrop { background: transparent; pointer-events: none; }
+      #ciw-selection-bar { max-width: calc(100vw - 16px); overflow-x: auto; box-sizing: border-box; }
+      #ciw-selection-bar .ciw-sel-btn { flex: 0 0 auto; min-width: 38px; min-height: 38px; }
+    `);
+
+    // ChatHub 1.1.6: AI writer launcher. Keep the original profile launchers.
+    function cmuAiWriterTrigger() {
+        return document.getElementById('crack-pure-settings-btn') ||
+            [...document.querySelectorAll('button.crack-pure-settings')].find(button => !isOwnElement(button)) || null;
+    }
+    function cmuAiWriterInstalled() {
+        return !!(cmuAiWriterTrigger() || document.getElementById('crack-ai-panel') || document.getElementById('crack-pure-magic-btn'));
+    }
+    function cmuOpenAiWriter() {
+        const button = cmuAiWriterTrigger();
+        if (button) { button.click(); return; }
+        const panel = document.getElementById('crack-ai-panel');
+        if (panel) { panel.style.display = 'flex'; return; }
+        showToast('AI 답변 확장의 설정 버튼을 찾지 못했어요.');
+    }
+
+    function cmuApplySettingsPalette(panel) {
+        const palette = ['light', 'dark'].includes(settings.settingsPalette) ? settings.settingsPalette : detectCmuTheme();
+        const mode = palette === 'dark' ? 'dark' : 'light';
+        document.documentElement.dataset.cmuSettingsPalette = mode;
+        if (panel) panel.dataset.cmuSettingsPalette = mode;
+    }
+    cmuApplySettingsPalette(document.getElementById(ID.panel));
+    addStyle(`
+      html #cmu-settings-panel[data-cmu-settings-palette] {
+        --bg:#f2f7f7; --pbg:#f2f7f7; --card:#fff; --cardh:#eef8f5;
+        --tx:#213d42; --sub:#50696e; --bd:#d9e5e5; --icobg:#e8f0f0;
+        --ac:#0b8075; --acf:#07685f; --acbg:#e0f4ee; --chip:#f3f7f7;
+        --hbtn:#e7eeee; --hbtn2:#d8e8e4; --indbg:#d7f1e8; --indsh:none;
+        --pshadow:0 16px 52px #071d2a30; --cmu-spring:cubic-bezier(.2,.8,.2,1);
+        --cmu-sheet:cubic-bezier(.2,.8,.2,1);
+        color-scheme:light;
+        background:var(--pbg); color:var(--tx); border:1px solid var(--bd);
+        border-radius:22px; height:min(90dvh,800px); max-width:620px;
+        font-size:14px; line-height:1.5; letter-spacing:-.15px;
+      }
+      html #cmu-settings-panel[data-cmu-settings-palette="dark"] {
+        --bg:#17292e; --pbg:#17292e; --card:#21383e; --cardh:#29454b;
+        --tx:#edf8f6; --sub:#b2cbd0; --bd:#365259; --icobg:#304a50;
+        --ac:#67d7bb; --acf:#9df0d7; --acbg:#284f49; --chip:#29434a;
+        --hbtn:#2b454b; --hbtn2:#385a60; --indbg:#284f49;
+        --pshadow:0 16px 52px #0005; color-scheme:dark;
+      }
+      html #cmu-settings-panel.open:not(.cmu-dragging) { animation:cmuPanelAppear .18s ease-out both; }
+      html #cmu-settings-panel.cmu-closing { animation:cmuPanelDisappear .16s ease-in both; }
+      @keyframes cmuPanelAppear { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+      @keyframes cmuPanelDisappear { to { opacity:0; transform:translateY(6px); } }
+      html #cmu-settings-panel[data-cmu-viewport-fit] {
+        top:var(--cmu-panel-view-top) !important; bottom:auto !important;
+        left:var(--cmu-panel-view-left) !important; right:auto !important;
+        width:var(--cmu-panel-view-width) !important; max-width:none !important;
+        height:var(--cmu-panel-view-height) !important; max-height:var(--cmu-panel-view-height) !important;
+        margin:0 !important;
+      }
+      html #cmu-settings-panel .cmu-panel-body { min-height:0; flex:1 1 auto; overflow-y:auto; overscroll-behavior:contain; scroll-padding-block:12px; }
+      html #cmu-settings-panel[data-cmu-keyboard-visible] .cmu-panel-grab { display:none; }
+      html #cmu-settings-panel[data-cmu-keyboard-visible] .cmu-panel-eyebrow { display:none; }
+      html #cmu-settings-panel[data-cmu-keyboard-visible] .cmu-panel-head { padding:8px 12px; }
+      html #cmu-settings-panel[data-cmu-keyboard-visible] .cmu-panel-title { font-size:16px; }
+      html #cmu-settings-panel[data-cmu-keyboard-visible] .cmu-panel-icon-btn,
+      html #cmu-settings-panel[data-cmu-keyboard-visible] .cmu-panel-close { height:36px; }
+      html #cmu-settings-panel[data-cmu-keyboard-visible] .cmu-panel-nav { padding:0 10px 6px; }
+      html #cmu-settings-panel[data-cmu-keyboard-visible] .cmu-tabs { display:flex; gap:4px; overflow-x:auto; scrollbar-width:none; }
+      html #cmu-settings-panel[data-cmu-keyboard-visible] .cmu-tab { flex:0 0 auto; height:34px; }
+      html #cmu-settings-panel[data-cmu-keyboard-visible] .cmu-panel-body { padding-inline:10px; }
+      html #cmu-settings-panel [data-cmu-keyboard-offset] { font-size:16px !important; }
+      #cmu-settings-panel .cmu-panel-grab { width:32px; height:4px; margin-top:9px; background:var(--sub); opacity:.35; }
+      #cmu-settings-panel .cmu-panel-head { padding:10px 14px 14px 18px; gap:12px; }
+      #cmu-settings-panel .cmu-panel-title { font-size:18px; font-weight:750; line-height:1.4; }
+      #cmu-settings-panel .cmu-panel-eyebrow { display:block; font-size:10px; line-height:1.6; font-weight:650; letter-spacing:1px; color:var(--sub); }
+      #cmu-settings-panel .cmu-panel-actions { gap:7px; }
+      #cmu-settings-panel .cmu-panel-icon-btn,#cmu-settings-panel .cmu-panel-close { width:38px; height:40px; border-radius:12px; }
+      #cmu-settings-panel .cmu-panel-close { background:var(--card); border:1px solid var(--bd); font-size:23px; }
+      #cmu-settings-panel .cmu-panel-nav { padding:0 14px 12px; border-bottom:1px solid var(--bd); }
+      #cmu-settings-panel .cmu-tabs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; padding:0; overflow:visible; background:transparent; border-radius:0; }
+      #cmu-settings-panel .cmu-tab { justify-content:flex-start; min-width:0; height:36px; padding:0 9px; gap:6px; border:1px solid transparent; border-radius:10px; font-size:12px; font-weight:650; color:var(--sub); }
+      #cmu-settings-panel .cmu-tab span { max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+      #cmu-settings-panel .cmu-tab.on { color:var(--acf); background:var(--indbg); border-color:var(--ac); }
+      #cmu-settings-panel .cmu-tab svg { width:16px; height:16px; }
+      #cmu-settings-panel .cmu-tab-dot { display:none; }
+      #cmu-settings-panel .cmu-tabs.icon-only { grid-template-columns:repeat(9,minmax(0,1fr)); }
+      #cmu-settings-panel .cmu-tabs.icon-only .cmu-tab { padding:0; justify-content:center; }
+      #cmu-settings-panel .cmu-panel-body { padding:4px 14px max(22px,env(safe-area-inset-bottom)); scrollbar-width:thin; scrollbar-color:var(--bd) transparent; }
+      #cmu-settings-panel .qputil .sec { margin:20px 3px 8px; font-size:12px; line-height:1.4; font-weight:700; color:var(--sub); }
+      #cmu-settings-panel .qputil .cmu-page > .sec:first-child { margin-top:14px; }
+      #cmu-settings-panel .qputil .qcard { border:1px solid var(--bd); border-radius:16px; margin-bottom:8px; background:var(--card); }
+      #cmu-settings-panel .qputil .subrow { min-height:60px; padding:13px 12px; gap:12px; }
+      #cmu-settings-panel .qputil .lbl { font-size:14px; font-weight:650; line-height:1.45; word-break:keep-all; overflow-wrap:anywhere; }
+      #cmu-settings-panel .qputil .note { font-size:12px; line-height:1.55; margin-top:4px; word-break:keep-all; overflow-wrap:anywhere; color:var(--sub); }
+      #cmu-settings-panel .qputil .sw { background:var(--bd); height:30px; }
+      #cmu-settings-panel .qputil .sw.on { background:var(--ac); }
+      #cmu-settings-panel .qputil .sw.on::after { background:#fff; }
+      #cmu-settings-panel .qputil .sw:not(:disabled):active::after { width:22px; }
+      #cmu-settings-panel .qputil .sw.on:not(:disabled):active::after { transform:translateX(18px); }
+      #cmu-settings-panel .qputil .step { gap:8px; }
+      #cmu-settings-panel .qputil .step-btn,#cmu-settings-panel .cmu-action-btn {
+        min-height:38px; border:1px solid var(--bd); border-radius:10px; background:var(--chip); color:var(--tx);
+        display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; white-space:nowrap;
+      }
+      #cmu-settings-panel .cmu-action-btn { font-family:inherit; font-size:12px; font-weight:650; line-height:1.3; padding:9px 11px; cursor:pointer; }
+      html #cmu-settings-panel .qputil .step-btn[data-action="keyboard-offset-save"] {
+        background:var(--ac) !important; color:#fff !important; border-color:var(--ac) !important;
+        font-weight:700; opacity:1;
+      }
+      html #cmu-settings-panel[data-cmu-settings-palette="dark"] .qputil .step-btn[data-action="keyboard-offset-save"] { color:#123b32 !important; }
+      #cmu-settings-panel [data-cmu-applied] { box-shadow:0 0 0 3px var(--acbg); }
+      #cmu-settings-panel .qputil .step-btn[data-action="keyboard-mode"][aria-pressed="true"] {
+        color:var(--acf) !important; border-color:var(--ac) !important; background:var(--acbg) !important; font-weight:700;
+      }
+      #cmu-settings-panel .qputil .chip { min-height:36px; border-radius:10px; color:var(--sub); }
+      #cmu-settings-panel .qputil .chip.ck { color:var(--acf); border-color:var(--ac); background:var(--acbg); }
+      #cmu-settings-panel .cmu-choice-row { flex-wrap:wrap; }
+      #cmu-settings-panel .cmu-choice-row > .lbl { flex-basis:100%; }
+      #cmu-settings-panel .cmu-choice-row > .chips { width:100%; padding:0; display:flex; gap:6px; }
+      #cmu-settings-panel .cmu-choice-row > .chips > .chip { flex:1 1 0; justify-content:center; padding:8px 5px; font-size:11px; }
+      #cmu-settings-panel .cmu-choice-row .ci { display:none; }
+      #cmu-settings-panel .cmu-page.cmu-in-r > *,#cmu-settings-panel .cmu-page.cmu-in-l > * { animation:none; }
+      #cmu-settings-panel :is(button,input,select,textarea):focus-visible { outline:2px solid var(--ac); outline-offset:2px; }
+      #cmu-settings-panel .cmu-search { border:1px solid var(--bd); border-radius:12px; background:var(--card); }
+      #cmu-settings-panel .cmu-search input { font-size:14px; color:var(--tx); }
+      #cmu-settings-panel .qputil .direct .tx span { white-space:normal; font-size:12px; line-height:1.55; }
+      @media(max-width:359px) {
+        #cmu-settings-panel .cmu-panel-title { font-size:16px; }
+        #cmu-settings-panel .cmu-panel-head { padding-inline:12px; gap:6px; }
+        #cmu-settings-panel .cmu-panel-icon-btn,#cmu-settings-panel .cmu-panel-close { min-width:34px; width:34px; }
+        #cmu-settings-panel .cmu-tab { font-size:11px; padding-inline:5px; gap:4px; }
+        #cmu-settings-panel .qputil .subrow { gap:8px; padding:12px 10px; }
+      }
+      #cerc-panel,#ciw-settings-overlay {
+        --cmu-tool-bg:#f2f7f7; --cmu-tool-card:#fff; --cmu-tool-text:#213d42; --cmu-tool-sub:#50696e;
+        --cmu-tool-border:#d9e5e5; --cmu-tool-ac:#0b8075; --cmu-tool-tint:#e0f4ee; color-scheme:light;
+      }
+      html[data-cmu-settings-palette="dark"] :is(#cerc-panel,#ciw-settings-overlay) {
+        --cmu-tool-bg:#17292e; --cmu-tool-card:#21383e; --cmu-tool-text:#edf8f6; --cmu-tool-sub:#b2cbd0;
+        --cmu-tool-border:#365259; --cmu-tool-ac:#67d7bb; --cmu-tool-tint:#284f49; color-scheme:dark;
+      }
+      #cerc-panel .cerc-modal,#ciw-settings-overlay .ciw-modal { background:var(--cmu-tool-bg); color:var(--cmu-tool-text); border-color:var(--cmu-tool-border); backdrop-filter:none; max-height:calc(100dvh - 24px); }
+      #cerc-panel .cerc-card,#ciw-settings-overlay .ciw-tool-row { background:var(--cmu-tool-card); border:1px solid var(--cmu-tool-border); }
+      #cerc-panel :is(.cerc-input,.cerc-select,.cerc-textarea,.cerc-highlight-box),#ciw-settings-overlay input[type="text"] { background:var(--cmu-tool-card); color:var(--cmu-tool-text); border-color:var(--cmu-tool-border); font-size:13px; }
+      #cerc-panel .cerc-select option { color:var(--cmu-tool-text) !important; background:var(--cmu-tool-card) !important; }
+      #cerc-panel :is(.cerc-btn,.cerc-mini-btn,.cerc-chip),#ciw-settings-overlay :is(.ciw-chip,.ciw-small-btn,.ciw-text-btn,.ciw-sec-btn,.ciw-close,.ciw-row-actions button) { color:var(--cmu-tool-text); background:var(--cmu-tool-card); border-color:var(--cmu-tool-border); min-height:36px; }
+      #cerc-panel :is(.cerc-primary,.cerc-chip[data-selected="true"]),#ciw-settings-overlay .ciw-main-btn { background:var(--cmu-tool-tint); color:var(--cmu-tool-text); border-color:var(--cmu-tool-ac); }
+      #ciw-settings-overlay :is(.ciw-modal-title span,.ciw-col-head,.ciw-tool-row .ciw-pre,.ciw-tool-row .ciw-suf) { color:var(--cmu-tool-sub); }
+      #ciw-settings-overlay .ciw-modal-foot { background:var(--cmu-tool-bg); border-color:var(--cmu-tool-border); }
+      #cerc-panel .cerc-body { max-height:calc(100dvh - 90px); }
+      #ciw-settings-overlay .ciw-close { min-width:38px; min-height:38px; }
+      @media(max-width:640px) {
+        #ciw-settings-overlay .ciw-tool-row { grid-template-columns:28px minmax(0,1fr) 60px; }
+        #ciw-settings-overlay .ciw-tool-row .ciw-pre { grid-column:2; }
+        #ciw-settings-overlay .ciw-tool-row .ciw-suf { grid-column:2; }
+        #ciw-settings-overlay .ciw-row-actions { grid-column:3; grid-row:2 / 4; flex-direction:column; }
+        #ciw-settings-overlay .ciw-row-actions button { min-width:38px; }
+        #ciw-settings-overlay .ciw-modal-title span { display:none; }
+      }
+      @media(prefers-reduced-motion:reduce) {
+        html #cmu-settings-panel,html #cmu-settings-panel *,html #cmu-settings-scrim { animation:none !important; transition:none !important; }
+      }
+    `);
+
+    // Local button feedback only: never animate the composer or transcript.
+    (() => {
+        const selector = '#chud-sidebar .chud-action-btn, #cmu-settings-panel button, #ciw-settings-overlay button, #cerc-panel button';
+        const presses = new Map(), pulses = new Map();
+        const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+        const control = target => {
+            const button = target?.closest?.(selector);
+            return button && !button.disabled && button.getAttribute('aria-disabled') !== 'true' ? button : null;
+        };
+        function release(id) {
+            const press = presses.get(id);
+            press?.button.removeAttribute('data-cmu-pressed');
+            presses.delete(id);
+        }
+        function clearFeedback() {
+            for (const id of presses.keys()) release(id);
+            for (const [button, timer] of pulses) {
+                clearTimeout(timer);
+                button.classList.remove('cmu-control-tap');
+            }
+            pulses.clear();
+        }
+        cmuListen(document, 'pointerdown', event => {
+            if (event.isPrimary === false || event.button !== 0) return;
+            const button = control(event.target);
+            if (!button) return;
+            release(event.pointerId);
+            presses.set(event.pointerId, { button, x: event.clientX, y: event.clientY });
+            button.setAttribute('data-cmu-pressed', '');
+        }, { capture: true, passive: true });
+        cmuListen(document, 'pointermove', event => {
+            const press = presses.get(event.pointerId);
+            if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 10) release(event.pointerId);
+        }, { capture: true, passive: true });
+        for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+            cmuListen(document, type, event => release(event.pointerId), { capture: true, passive: true });
+        }
+        cmuListen(document, 'click', event => {
+            const button = control(event.target);
+            if (!button || reduced.matches) return;
+            clearTimeout(pulses.get(button));
+            button.classList.remove('cmu-control-tap');
+            // Restart feedback for a deliberate second tap, without delaying its action.
+            void button.offsetWidth;
+            button.classList.add('cmu-control-tap');
+            pulses.set(button, setTimeout(() => {
+                button.classList.remove('cmu-control-tap');
+                pulses.delete(button);
+            }, 260));
+        }, { capture: true, passive: true });
+        cmuListen(window, 'blur', clearFeedback);
+        cmuListen(reduced, 'change', clearFeedback);
+        CMU_RESOURCES.cleanups.push(clearFeedback);
+    })();
+    addStyle(`
+      #chud-sidebar .chud-action-btn { border-radius:7px; }
+      #chud-sidebar .chud-action-btn::before {
+        content:""; position:absolute; inset:-3px; border-radius:8px;
+        background:currentColor; opacity:0; pointer-events:none;
+        transition:opacity 140ms ease;
+      }
+      :is(#chud-sidebar .chud-action-btn, #cmu-settings-panel button, #ciw-settings-overlay button, #cerc-panel button) {
+        transform-origin:center;
+        transition:scale 140ms ease, color 160ms ease, background-color 160ms ease, border-color 160ms ease, opacity 160ms ease;
+        -webkit-tap-highlight-color:transparent;
+      }
+      :is(#chud-sidebar .chud-action-btn, #cmu-settings-panel button, #ciw-settings-overlay button, #cerc-panel button)[data-cmu-pressed] { scale:.94; }
+      #chud-sidebar .chud-action-btn[data-cmu-pressed]::before { opacity:.18; }
+      #cmu-settings-panel button:not(:disabled):active { transform:none; }
+      :is(#cmu-settings-panel, #ciw-settings-overlay, #cerc-panel) button[data-cmu-pressed] { filter:brightness(.94); }
+      :is(#chud-sidebar, #cmu-settings-panel, #ciw-settings-overlay, #cerc-panel) button.cmu-control-tap { animation:cmuControlTap 220ms cubic-bezier(.2,.8,.2,1); }
+      #chud-sidebar button.cmu-control-tap::before { animation:cmuControlGlow 240ms ease-out; }
+      @keyframes cmuControlTap { from { scale:.94; } to { scale:1; } }
+      @keyframes cmuControlGlow { from { opacity:.22; } to { opacity:0; } }
+      /* One page fades in as a unit; no staggered cards, horizontal sweep or layout resize. */
+      #cmu-settings-panel .cmu-page:is(.cmu-in-r,.cmu-in-l) { animation:cmuSettingsPageIn 180ms cubic-bezier(.2,.8,.2,1) both; }
+      @keyframes cmuSettingsPageIn { from { opacity:.35; transform:translateY(4px); } to { opacity:1; transform:none; } }
+      @media(prefers-reduced-motion:reduce) {
+        #chud-sidebar .chud-action-btn::before,
+        :is(#chud-sidebar .chud-action-btn, #cmu-settings-panel button, #ciw-settings-overlay button, #cerc-panel button) { animation:none !important; transition:none !important; scale:1 !important; }
+        #cmu-settings-panel .cmu-page { animation:none !important; transform:none !important; }
+      }
+    `);
+
     if (settings.logCapture)
         installLogCaptureHandlers();
     hookHistory();
