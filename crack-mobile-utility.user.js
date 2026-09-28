@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.5.25
-// @description  선택 통합 4.5.5.25: 검은 숨김 제거·키보드 전환 중 직전 화면 유지, 실측 자동 하단 맞춤·보정 전환 끊김 제거·직접 조절 선택, 입력창 아래 남은 공간 안에서 실제 이동·저장 범위 반영, 정상 입력창의 지연 이동 제거·보정값 저장/이동 범위 안내·위아래 조절 버튼, Android 키보드 페이지 리사이즈·설정창 잘림·닫힘 뒤 대화 위치 복원 수정, 키보드 보정값 잘림·설정창 화면 범위·적용 버튼 대비와 완료 표시 수정, 글 감싸기 미니 사이드바 이동·아이콘 눌림 효과·설정 페이지 전환, 키보드 열림 안정화·편집 도구 통합·설정창 새 디자인, 첫 터치 키보드 보정 안정화·초기화 버튼 배치 수정, 대화 끝 감지·자동 스크롤 판정 보완, 휴대폰 키보드 진단 복사, 키보드 입력창 위치 보정 ON/OFF(기본 OFF), 단축어 일괄 삭제 연속 처리·새 목록 결과 확인, 설명 중복 체크박스 제거, 단축어 팝업 감지 보완, 라이트/다크·소설/채팅·입력창 전환, 설정 내 메모리/노트 UI, 코드 줄바꿈·라이트 가독성·반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
+// @version      4.5.5.27
+// @description  선택 통합 4.5.5.27: 단축어 창 높이 자동 조절·라존데 겹침 방지·입력창 보정 유지, 입력창 바깥 틀의 화면 초과 방지·기본 하단 여백 보존·키보드 닫힘 뒤 정책 복원·진단 시점 일치, 검은 숨김 제거·키보드 전환 중 직전 화면 유지, 실측 자동 하단 맞춤·보정 전환 끊김 제거·직접 조절 선택, 입력창 아래 남은 공간 안에서 실제 이동·저장 범위 반영, 정상 입력창의 지연 이동 제거·보정값 저장/이동 범위 안내·위아래 조절 버튼, Android 키보드 페이지 리사이즈·설정창 잘림·닫힘 뒤 대화 위치 복원 수정, 키보드 보정값 잘림·설정창 화면 범위·적용 버튼 대비와 완료 표시 수정, 글 감싸기 미니 사이드바 이동·아이콘 눌림 효과·설정 페이지 전환, 키보드 열림 안정화·편집 도구 통합·설정창 새 디자인, 첫 터치 키보드 보정 안정화·초기화 버튼 배치 수정, 대화 끝 감지·자동 스크롤 판정 보완, 휴대폰 키보드 진단 복사, 키보드 입력창 위치 보정 ON/OFF(기본 OFF), 단축어 일괄 삭제 연속 처리·새 목록 결과 확인, 설명 중복 체크박스 제거, 단축어 팝업 감지 보완, 라이트/다크·소설/채팅·입력창 전환, 설정 내 메모리/노트 UI, 코드 줄바꿈·라이트 가독성·반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL   none
@@ -34,6 +34,17 @@
 // ==/UserScript==
 
 /*
+ * 4.5.5.27 변경: 단축어 팝업을 실제 화면과 입력창/라존데 위 공간 안에 배치.
+ * 원본 입력창·초안·커서·키보드 좌표를 변경하지 않고 팝업 높이와 위치만 조절.
+ * 일반 화면은 목록 내부 스크롤, 매우 좁은 화면은 팝업 전체 스크롤로 편집 버튼 접근.
+ * 작은 목록도 전체 선택 탐색 지원. 키보드/창 크기/목록 재생성 시 재측정.
+ * 팝업 닫힘·기능 OFF 때 자체 스타일/관찰만 복원. 기존 대화 프로필 보존.
+ * 4.5.5.26 변경: 입력창 내부 여백을 없애려 바깥 틀까지 아래로 밀던 보정 제한.
+ * 바깥 틀 하단도 측정해 조상/페이지에 추가 스크롤 공간이 생기는 문제 수정.
+ * 자동 모드에서 기본 하단 여백 유지, 수동 양수 범위도 바깥 틀 경계 적용.
+ * 1px 미만 치수 반올림 차이에는 이동하지 않음. 대화 끝/초안/커서 유지.
+ * 보정 OFF 시 키보드가 닫힌 뒤 viewport 정책 복원, 닫힘 도중 정책 전환 방지.
+ * 진단의 기준 화면과 키보드 측정/열림 기록을 동일한 열림 시점으로 묶음.
  * 4.5.5.25 변경: opacity로 대화/입력창을 검게 비우던 방식 완전 제거.
  * 보이는 대화와 입력창의 비활성 복제 화면을 짧게 유지하고 정착 뒤 제거.
  * 원본 DOM·초안·커서·투명도 변경 없음. 키보드 여백/자동·수동 좌표 유지.
@@ -161,7 +172,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.5.25';
+    const VERSION = '4.5.5.27';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
@@ -20764,7 +20775,8 @@
         if (!insidePanel && !insideButton && !recentPanelAction)
             toggleSettingsPanel(false);
     }, true);
-    // 4.5.5.9 — one selector per native row; resume native deletion across popup remounts.
+    // 4.5.5.27 — fit the native slash popup above the composer without moving the editor.
+    // Retains 4.5.5.9 row selection and verified native deletion across popup remounts.
     // No guessed API endpoints, tokens, local hiding, or message deletion. All writes
     // go through the selected shortcut's own native menu, after explicit confirmation.
     function cmuCreateShortcutEditor(options) {
@@ -20775,6 +20787,9 @@
             editing: false, busy: false, stop: false, nativeAction: false, epoch: 0, route: '', timer: 0,
             observer: null, records: new Map(), selected: new Set(), rows: new Map(),
             tab: '', full: false, message: '', style: null, pending: new Map(), listeners: [], discoverUntil: 0, batchInput: null };
+        // Fit the native popup, never the editor: a tall slash list must not resize
+        // or move the composer that the keyboard controller has already aligned.
+        const L = { frame: 0, resize: null, observed: [], styles: new Map(), shift: null, list: null, compact: false };
         const norm = text => String(text || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
         const compact = text => norm(text).replace(/\s/g, '');
         const elOf = node => node instanceof Element ? node : node?.parentElement;
@@ -21094,6 +21109,10 @@
             S.bar.append(head, actions, status); S.entry.before(S.bar);
         }
         function locateScroller() {
+            if (L.styles.size) {
+                const fitted = L.compact ? S.root : L.list;
+                if (fitted?.isConnected && fitted.clientHeight > 0 && fitted.scrollHeight > fitted.clientHeight + 3) return fitted;
+            }
             const entries = readRows();
             let el = entries[0]?.row?.parentElement;
             while (el && el !== S.root) {
@@ -21104,6 +21123,128 @@
             return [...(S.root?.querySelectorAll('div,ul,[role="listbox"]') || [])].find(el =>
                 !own(el) && /auto|scroll|overlay/.test(getComputedStyle(el).overflowY) && el.clientHeight > 40 && el.scrollHeight > el.clientHeight + 3 &&
                 entries.some(e => el.contains(e.row))) || null;
+        }
+        function fitStyle(el, prop, value) {
+            // Save longhands separately so cleanup also preserves native inline
+            // flex-grow/overflow-x declarations, not just shorthand declarations.
+            if (prop === 'flex') {
+                const [grow, shrink, basis] = value.split(' ');
+                fitStyle(el, 'flex-grow', grow); fitStyle(el, 'flex-shrink', shrink); fitStyle(el, 'flex-basis', basis); return;
+            }
+            if (prop === 'overflow') {
+                const [x, y = x] = value.split(' ');
+                fitStyle(el, 'overflow-x', x); fitStyle(el, 'overflow-y', y); return;
+            }
+            let saved = L.styles.get(el);
+            if (!saved) L.styles.set(el, saved = new Map());
+            const current = el.style.getPropertyValue(prop), priority = el.style.getPropertyPriority(prop);
+            let entry = saved.get(prop);
+            if (!entry || current !== entry.applied || priority !== 'important') {
+                entry = { value: current, priority, applied: '' }; saved.set(prop, entry);
+            }
+            if (current !== value || priority !== 'important') el.style.setProperty(prop, value, 'important');
+            entry.applied = el.style.getPropertyValue(prop);
+        }
+        function releaseFit() {
+            if (L.frame) cancelAnimationFrame(L.frame); L.frame = 0;
+            L.resize?.disconnect(); L.resize = null; L.observed = [];
+            for (const [el, props] of L.styles) for (const [prop, saved] of props) {
+                if (el.style.getPropertyValue(prop) !== saved.applied || el.style.getPropertyPriority(prop) !== 'important') continue;
+                if (saved.value) el.style.setProperty(prop, saved.value, saved.priority);
+                else el.style.removeProperty(prop);
+            }
+            L.styles.clear(); L.shift = null; L.list = null; L.compact = false;
+        }
+        function fitList() {
+            if (visible(L.list) && S.root.contains(L.list)) return L.list;
+            const tabs = popupLabels(S.root, TABS);
+            const candidate = el => visible(el) && el !== S.root && !own(el) && !el.contains(S.footer) &&
+                !tabs.some(tab => el.contains(tab));
+            const entries = readRows();
+            for (let el = entries[0]?.row?.parentElement; el && el !== S.root; el = el.parentElement) {
+                if (candidate(el) && /auto|scroll|overlay/.test(getComputedStyle(el).overflowY)) return el;
+            }
+            return [...S.root.querySelectorAll('div,ul,[role="listbox"]')].find(el => candidate(el) &&
+                /auto|scroll|overlay/.test(getComputedStyle(el).overflowY)) ||
+                (entries[0]?.row?.parentElement && candidate(entries[0].row.parentElement) ? entries[0].row.parentElement : null);
+        }
+        function queueFit() {
+            if (allowed() && !L.frame) L.frame = requestAnimationFrame(fitPopup);
+        }
+        function fitPopup() {
+            L.frame = 0;
+            if (!allowed() || !visible(S.root)) { releaseFit(); return; }
+            // Missing geometry is not a reason to guess an editor height or keyboard offset.
+            const placement = options.placement?.();
+            if (!placement?.box?.isConnected) { releaseFit(); return; }
+            const { box, host, viewport: v } = placement;
+            if (!v || Math.abs(v.scale - 1) > .06 || S.root.contains(box)) { releaseFit(); return; }
+            const boxRect = box.getBoundingClientRect(), hostRect = host?.getBoundingClientRect();
+            let edge = boxRect.top;
+            if (hostRect && hostRect.top <= edge && edge - hostRect.top <= 96) edge = hostRect.top;
+            const radio = document.getElementById('igx-live-popup');
+            if (visible(radio) && !S.root.contains(radio)) {
+                const rect = radio.getBoundingClientRect();
+                if (rect.right > boxRect.left && rect.left < boxRect.right && rect.top <= boxRect.top && boxRect.top - rect.top <= 96)
+                    edge = Math.min(edge, rect.top);
+            }
+            const top = v.top + 8, bottom = Math.min(v.measuredBottom ?? v.bottom, edge) - 6;
+            const available = Math.floor(bottom - top);
+            if (available < 40 || boxRect.width < 100) { releaseFit(); return; }
+            const list = fitList();
+            const branch = list && (() => { let el = list; while (el.parentElement !== S.root && S.root.contains(el.parentElement)) el = el.parentElement; return el; })();
+            if (L.list !== list) { releaseFit(); L.list = list; }
+            const children = [...S.root.children].filter(el => visible(el) && el !== branch);
+            const chrome = children.reduce((sum, el) => sum + el.getBoundingClientRect().height, 0);
+            const compactLayout = !list || available < chrome + 44;
+            if (L.styles.size && compactLayout !== L.compact) { releaseFit(); L.list = list; }
+            L.compact = compactLayout;
+            fitStyle(S.root, 'box-sizing', 'border-box');
+            fitStyle(S.root, 'min-height', '0px');
+            fitStyle(S.root, 'max-height', `${available}px`);
+            fitStyle(S.root, 'max-width', `${Math.max(100, v.width - 16)}px`);
+            fitStyle(S.root, 'display', 'flex');
+            fitStyle(S.root, 'flex-direction', 'column');
+            fitStyle(S.root, 'overflow-x', 'hidden');
+            fitStyle(S.root, 'overflow-y', compactLayout ? 'auto' : 'hidden');
+            fitStyle(S.root, 'overscroll-behavior', 'contain');
+            // Layout changes are immediate; a position transition would chase the
+            // keyboard and produce another visible bounce on every slash input.
+            fitStyle(S.root, 'transition-property', 'none');
+            for (const el of children) fitStyle(el, 'flex', '0 0 auto');
+            if (list) {
+                for (let el = list; el && el !== S.root; el = el.parentElement) {
+                    fitStyle(el, 'min-height', '0px');
+                    fitStyle(el, 'flex', compactLayout ? '0 0 auto' : '1 1 auto');
+                    if (el !== list) {
+                        fitStyle(el, 'display', 'flex'); fitStyle(el, 'flex-direction', 'column');
+                        fitStyle(el, 'overflow', compactLayout ? 'visible' : 'hidden');
+                    }
+                }
+                fitStyle(list, 'overflow', compactLayout ? 'visible' : 'hidden auto');
+                if (compactLayout) { fitStyle(list, 'max-height', 'none'); fitStyle(list, 'height', 'auto'); }
+                fitStyle(list, 'overscroll-behavior', 'contain');
+            }
+            const saved = L.styles.get(S.root)?.get('translate');
+            if (L.shift && saved && (S.root.style.getPropertyValue('translate') !== saved.applied || S.root.style.getPropertyPriority('translate') !== 'important')) L.shift = null;
+            if (!L.shift) {
+                const parts = getComputedStyle(S.root).translate.split(/\s+/);
+                L.shift = { x: 0, y: 0, baseX: parts[0] === 'none' ? '0px' : parts[0], baseY: parts[1] || '0px', baseZ: parts[2] || '' };
+            }
+            const rect = S.root.getBoundingClientRect();
+            const dx = rect.left < v.left + 8 ? v.left + 8 - rect.left : Math.min(0, v.left + v.width - 8 - rect.right);
+            const dy = bottom - rect.bottom;
+            if (Math.abs(dx) > .75 || Math.abs(dy) > .75) {
+                const scaleX = S.root.offsetWidth ? rect.width / S.root.offsetWidth : 1;
+                const scaleY = S.root.offsetHeight ? rect.height / S.root.offsetHeight : 1;
+                L.shift.x += dx / Math.max(.25, scaleX); L.shift.y += dy / Math.max(.25, scaleY);
+                fitStyle(S.root, 'translate', `calc(${L.shift.baseX} + ${L.shift.x.toFixed(2)}px) calc(${L.shift.baseY} + ${L.shift.y.toFixed(2)}px) ${L.shift.baseZ}`.trim());
+            }
+            const observed = [S.root, list, box, host, radio, ...children].filter(el => el?.isConnected);
+            if (typeof ResizeObserver === 'function' && (observed.length !== L.observed.length || observed.some((el, i) => el !== L.observed[i]))) {
+                L.resize?.disconnect(); L.resize = new ResizeObserver(queueFit); L.observed = observed;
+                for (const el of new Set(observed)) L.resize.observe(el);
+            }
         }
         function nativeLoading() {
             return [...(S.root?.querySelectorAll('[aria-busy="true"], [role="progressbar"]') || [])].some(el => !own(el) && visible(el));
@@ -21453,6 +21594,7 @@
             }
             if (S.editing && (!S.bar?.isConnected || !S.root.contains(S.bar))) mountBar();
             if (S.editing) decorateRows();
+            queueFit();
         }
         function onKey(e) {
             if (e.key === 'Escape' && S.editing && !S.busy) {
@@ -21460,6 +21602,7 @@
             }
         }
         function detachRoot() {
+            releaseFit();
             removeDecorations();
             if (S.root) {
                 for (const event of ['pointerdown','mousedown','click']) S.root.removeEventListener(event, handleEvent, true);
@@ -21483,12 +21626,13 @@
                     if (tab && tab !== S.tab) { S.tab = tab; S.selected.clear(); S.records.clear(); S.message = ''; }
                     decorateRows();
                 }
+                queueFit();
                 return;
             }
             if (S.busy) return;
             const found = findRoot();
             if (found) installAt(found);
-            else if (S.root) { leave(); if (!S.root.isConnected) detachRoot(); }
+            else if (S.root) { leave(); releaseFit(); if (!S.root.isConnected) detachRoot(); }
             if (!found && Date.now() < S.discoverUntil) queueScan(120);
         }
         function queueScan(ms = 70) {
@@ -21498,6 +21642,7 @@
         function onMutations(mutations) {
             if (!allowed()) return;
             for (const m of mutations) {
+                if (m.type === 'attributes' && L.observed.includes(m.target) && !S.root?.contains(m.target)) queueFit();
                 if (S.root && (!S.entry?.isConnected || (S.editing && !S.bar?.isConnected))) { queueScan(); return; }
                 if (own(m.target)) continue;
                 if (m.type === 'attributes' && /^(class|style)$/.test(m.attributeName) &&
@@ -21570,6 +21715,12 @@
             const discover = () => { S.discoverUntil = Date.now() + 3500; queueScan(0); };
             const isEditor = target => !!target?.closest('textarea,input,[contenteditable]:not([contenteditable="false"])');
             listen(document, 'input', e => { if (isEditor(elOf(e.target))) discover(); }, true);
+            listen(window, 'resize', queueFit);
+            if (window.visualViewport) {
+                listen(window.visualViewport, 'resize', queueFit);
+                listen(window.visualViewport, 'scroll', queueFit);
+            }
+            listen(document, 'scroll', e => { if (!S.root?.contains(elOf(e.target))) queueFit(); }, true);
             listen(document, 'keyup', e => { if (e.key === '/' && isEditor(elOf(e.target))) discover(); }, true);
             listen(document, 'click', e => {
                 const el = elOf(e.target)?.closest('button,[role="button"]');
@@ -21577,23 +21728,25 @@
             }, true);
             queueScan(0);
         }
-        return { sync, dispose: disable };
+        return { sync, layout: queueFit, dispose: disable };
     }
 
     const CMU_SHORTCUT_EDITOR = cmuCreateShortcutEditor({
         enabled: () => shouldRun() && settings.enabled !== false && !!settings.shortcutEditor,
         composer: () => findChatInput(),
+        placement: () => CMU_KEYBOARD_COMPOSER.placement(),
         notify: text => showToast(text),
     });
     CMU_RESOURCES.cleanups.push(() => CMU_SHORTCUT_EDITOR.dispose());
     CMU_SHORTCUT_EDITOR.sync();
-    // 4.5.5.25: preserve the visible chat during the brief keyboard resize transition.
+    // 4.5.5.26: keep the whole native composer inside the viewport without adding scroll overflow.
     function cmuCreateKeyboardComposer(options = {}) {
         const S = { disposed: false, frame: 0, timers: [], host: null, shift: 0,
             saved: null, applied: '', blockedHost: null, resize: null, mutation: null,
             box: null, input: null, dock: null, dockCss: null, transcript: null, beforeKeyboard: null,
             width: 0, height: 0, screenHeight: 0, listeners: [], opening: null, openingTimer: 0, returning: null, nativeFit: false, nativeStyles: null };
-        const D = { baseline: null, lastFocus: null, lastKeyboard: null, trace: [], openingTrace: [], baselineTime: 0, at: 0, stage: '' };
+        const D = { baseline: null, lastFocus: null, lastKeyboard: null, keyboardSession: null,
+            trace: [], openingTrace: [], baselineTime: 0, at: 0, stage: '' };
         const K = { api: null };
         const P = { node: null, original: null, applied: '', created: false };
         const M = { seed: null, active: null, timer: 0, last: null, blockedClick: 0 };
@@ -21774,7 +21927,12 @@
         }
         function syncViewportPolicy() {
             const enabled = !!options.nativeResize?.() && !!options.enabled?.();
-            if (!enabled) { releaseViewportPolicy(); return; }
+            if (!enabled) {
+                // Restore layout policy after the keyboard closes. Switching it
+                // mid-input changes the browser's own resize/pan behavior as well.
+                if (P.node?.isConnected && viewport(false).keyboard) return;
+                releaseViewportPolicy(); return;
+            }
             if (P.node?.isConnected && P.node.getAttribute('content') === P.applied) return;
             // Set the policy before typing, not in the middle of keyboard animation.
             if (editable(document.activeElement) || viewport(false).keyboard) return;
@@ -21907,7 +22065,7 @@
                 const data = diagnosticSnapshot(stage);
                 if (baseline) {
                     D.baseline = data;
-                    if (!data.viewport.used.keyboard) { D.openingTrace = []; D.baselineTime = now; }
+                    if (!data.viewport.used.keyboard) { D.openingTrace = []; D.trace = []; D.baselineTime = now; }
                 }
                 else D.lastFocus = data;
                 const v = data.viewport.used;
@@ -21927,16 +22085,22 @@
                     reason: data.conversation.reason });
                 // Keep the copied report small enough for a mobile message.
                 if (D.trace.length > 8) D.trace.shift();
+                // A later focus with no keyboard must not pair a new baseline
+                // with the previous opening's measurements or erase its trace.
+                if (keyboard) D.keyboardSession = { baseline: D.baseline,
+                    openingTrace: D.openingTrace.slice(), trace: D.trace.slice() };
             } catch (_) { /* Diagnostics never interrupt typing or scrolling. */ }
         }
         function report() {
             // Layout values only: no conversation text, draft, room IDs, URLs,
             // cookies, credentials or network requests are read or included.
             const current = diagnosticSnapshot('diagnostic-copy');
-            const data = { version: options.version || '4.5.5.25', browser: navigator.userAgent,
+            const session = D.keyboardSession;
+            const data = { version: options.version || '4.5.5.26', browser: navigator.userAgent,
                 screen: { width: screen.width, height: screen.height, dpr: window.devicePixelRatio },
-                baseline: D.baseline, keyboardDetected: !!D.lastKeyboard,
-                lastFocus: D.lastKeyboard || D.lastFocus, openingTrace: D.openingTrace, trace: D.trace,
+                baseline: session?.baseline || D.baseline, keyboardDetected: !!D.lastKeyboard,
+                lastFocus: D.lastKeyboard || D.lastFocus,
+                openingTrace: session?.openingTrace || D.openingTrace, trace: session?.trace || D.trace,
                 current: { enabled: current.enabled, suspended: current.suspended, focused: current.focused,
                     viewport: current.viewport, mode: current.mode, box: current.box?.rect, host: current.host?.rect,
                     conversationEnd: current.conversation.last?.rect?.bottom },
@@ -22418,19 +22582,26 @@
             return Math.abs(ratio - 1) < .001 ? 1 : Math.max(.25, Math.min(4, ratio));
         }
         function nativeAdjustment(v, context, requested = options.offset?.()) {
-            const { host, box } = context, rect = box.getBoundingClientRect(), scale = nativeScale(host);
+            const { host, box } = context, rect = box.getBoundingClientRect(), hostRect = host.getBoundingClientRect(), scale = nativeScale(host);
             // Always remove our own translation before measuring the available room.
             // Measuring the shifted box would alternate between +16 and 0 every frame.
             const applied = S.nativeFit && S.host === host ? S.shift * scale : 0;
             const baseTop = rect.top - applied, baseBottom = rect.bottom - applied;
+            const baseHostBottom = hostRect.bottom - applied;
+            // The inner box can end 16px above its host. Translating the whole
+            // host to erase that inset adds scrollable overflow to its ancestors.
+            // Bound both boxes, and ignore subpixel viewport rounding differences.
+            let roomBelow = v.measuredBottom - Math.max(baseBottom, baseHostBottom);
+            if (Math.abs(roomBelow) < 1) roomBelow = 0;
             const foreign = !(S.nativeFit && S.saved) && !['none', '0px', '0px 0px'].includes(getComputedStyle(host).translate);
             const auto = automatic();
             const min = foreign ? 0 : auto ? v.top - baseTop : Math.min(0, Math.ceil(Math.max(-160, v.top + 8 - baseTop)));
-            const max = foreign ? 0 : auto ? v.measuredBottom - baseBottom : Math.max(0, Math.floor(Math.min(160, v.measuredBottom - baseBottom) + .001));
+            const max = foreign ? 0 : auto ? roomBelow : Math.max(0, Math.floor(Math.min(160, roomBelow) + .001));
             requested = auto ? v.measuredBottom - baseBottom : Math.round(Math.max(-160, Math.min(160, Number(requested) || 0)));
-            const effective = Math.max(min, Math.min(max, requested));
+            const bounded = Math.max(min, Math.min(max, requested));
+            const effective = Math.abs(bounded) < 1 ? 0 : bounded;
             const room = auto ? bounds(host, v) : null;
-            return { reference: auto ? 'measured-bottom' : 'native-composer', baseTop, baseBottom, min, max, requested, effective,
+            return { reference: auto ? 'measured-bottom' : 'native-composer', baseTop, baseBottom, baseHostBottom, min, max, requested, effective,
                 applied: Math.round(applied * 100) / 100, limited: Math.abs(effective - requested) > .5, foreign,
                 eligible: v.resizedLayout && (auto
                     ? rect.height <= v.measuredBottom - v.top && room.bottom >= v.measuredBottom - 1 && room.top <= v.top + 1
@@ -22661,7 +22832,7 @@
                 const view = live ? current : D.lastKeyboard.viewport.used;
                 native = { ...native, reference: 'native-composer',
                     min: Math.min(0, Math.ceil(Math.max(-160, view.top + 8 - native.baseTop))),
-                    max: Math.max(0, Math.floor(Math.min(160, view.measuredBottom - native.baseBottom) + .001)) };
+                    max: Math.max(0, Math.floor(Math.min(160, view.measuredBottom - Math.max(native.baseBottom, native.baseHostBottom ?? native.baseBottom)) + .001)) };
             }
             if (native?.eligible) {
                 const effective = Math.max(native.min, Math.min(native.max, requested));
@@ -22676,7 +22847,12 @@
             return { known: true, requested, effective, min, max, limited: Math.abs(effective - requested) > .5,
                 reference: 'viewport', source: live ? 'current' : 'last-keyboard', mode: S.dock ? 'top-layer' : 'native' };
         }
-        return { sync, schedule, reset, report, calibration, view: (calibrated = true) => viewport(calibrated && !!options.enabled?.()), dispose() {
+        function placement() {
+            const input = options.composer?.();
+            const context = input && (S.host?.isConnected && S.box?.contains(input) ? { host: S.host, box: S.box } : findContext(input));
+            return context ? { ...context, viewport: viewport(false) } : null;
+        }
+        return { sync, schedule, reset, report, calibration, placement, view: (calibrated = true) => viewport(calibrated && !!options.enabled?.()), dispose() {
             if (S.disposed) return;
             S.disposed = true; reset();
             S.dockCss?.remove(); S.dockCss = null;
@@ -22696,7 +22872,7 @@
         composer: () => findChatInput(),
         shell: input => findComposerShell(input),
         sendButton: () => getSendButton(),
-        onMove: () => scheduleCmuMenuSwipeZonePosition(),
+        onMove: () => { scheduleCmuMenuSwipeZonePosition(); CMU_SHORTCUT_EDITOR.layout(); },
         onViewport: () => cmuSyncSettingsViewport(),
     });
     CMU_RESOURCES.cleanups.push(() => CMU_KEYBOARD_COMPOSER.dispose());
@@ -22772,7 +22948,7 @@
     }
     function cmuKeyboardAutoStatus() {
         return settings.keyboardComposerAssist
-            ? '자동 맞춤 사용 중 · 보이는 화면의 하단에 입력창과 대화를 함께 맞춰요. 숫자를 입력하지 않아도 돼요.'
+            ? '자동 맞춤 사용 중 · 입력창 전체가 화면 안에 머물도록 대화와 함께 조절해요. 기본 하단 여백은 유지해요.'
             : '위의 키보드 입력창 위치 보정을 켜면 자동 맞춤을 사용해요.';
     }
     function cmuSetKeyboardMode(panel, mode) {
