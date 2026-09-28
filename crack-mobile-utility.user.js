@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.5.27
-// @description  선택 통합 4.5.5.27: 단축어 창 높이 자동 조절·라존데 겹침 방지·입력창 보정 유지, 입력창 바깥 틀의 화면 초과 방지·기본 하단 여백 보존·키보드 닫힘 뒤 정책 복원·진단 시점 일치, 검은 숨김 제거·키보드 전환 중 직전 화면 유지, 실측 자동 하단 맞춤·보정 전환 끊김 제거·직접 조절 선택, 입력창 아래 남은 공간 안에서 실제 이동·저장 범위 반영, 정상 입력창의 지연 이동 제거·보정값 저장/이동 범위 안내·위아래 조절 버튼, Android 키보드 페이지 리사이즈·설정창 잘림·닫힘 뒤 대화 위치 복원 수정, 키보드 보정값 잘림·설정창 화면 범위·적용 버튼 대비와 완료 표시 수정, 글 감싸기 미니 사이드바 이동·아이콘 눌림 효과·설정 페이지 전환, 키보드 열림 안정화·편집 도구 통합·설정창 새 디자인, 첫 터치 키보드 보정 안정화·초기화 버튼 배치 수정, 대화 끝 감지·자동 스크롤 판정 보완, 휴대폰 키보드 진단 복사, 키보드 입력창 위치 보정 ON/OFF(기본 OFF), 단축어 일괄 삭제 연속 처리·새 목록 결과 확인, 설명 중복 체크박스 제거, 단축어 팝업 감지 보완, 라이트/다크·소설/채팅·입력창 전환, 설정 내 메모리/노트 UI, 코드 줄바꿈·라이트 가독성·반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager·AI 요약 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
+// @version      4.5.7.1
+// @description  선택 통합 4.5.7.1: 원작자 4.5.7 테마 저장·미니사이드바 SVG·마크다운 제목·모바일 전체화면 입력 보완. 기존 대화 프로필·키보드 보정·단축어 편집·설정 디자인·CDN 라디오존데 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL   none
@@ -34,6 +34,12 @@
 // ==/UserScript==
 
 /*
+ * 4.5.7.1 변경: 첨부된 원작자 4.5.7의 개선점을 4.5.5.27 통합본에 선별 반영.
+ * 테마 쿠키 직접 저장 및 뒤늦은 순정 설정 자동 클릭 제거, 상태·접근성 동기화.
+ * 미니사이드바의 원작자 SVG 적용(기존 프로필·Wish 하트·추가 도구 유지).
+ * 본문 글자 크기 조절에서 제목 고유 크기 보존, 화면 형식 오류를 토스트로 안내.
+ * 모바일 전체화면에서 채팅 입력 시작 시 해제. 중복 해제 요청/비활성 상태 차단.
+ * 기존 키보드·단축어·대화 프로필·설정·메모리/출력 UI·CDN 라존데 보존.
  * 4.5.5.27 변경: 단축어 팝업을 실제 화면과 입력창/라존데 위 공간 안에 배치.
  * 원본 입력창·초안·커서·키보드 좌표를 변경하지 않고 팝업 높이와 위치만 조절.
  * 일반 화면은 목록 내부 스크롤, 매우 좁은 화면은 팝업 전체 스크롤로 편집 버튼 접근.
@@ -172,8 +178,9 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.5.27';
+    const VERSION = '4.5.7.1';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
+    // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
@@ -1519,18 +1526,18 @@
       font-size: calc(1em * var(--cmu-font-scale, 1)) !important;
     }
 
-    html.cmu-enabled main [data-message-group-id] .wrtn-markdown :is(p, li, blockquote, h1, h2, h3, h4, h5, h6):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] [class*="wrtn-markdown"] :is(p, li, blockquote, h1, h2, h3, h4, h5, h6):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] .markdown-body :is(p, li, blockquote, h1, h2, h3, h4, h5, h6):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] .prose :is(p, li, blockquote, h1, h2, h3, h4, h5, h6):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)) {
+    html.cmu-enabled main [data-message-group-id] .wrtn-markdown :is(p, li, blockquote):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
+    html.cmu-enabled main [data-message-group-id] [class*="wrtn-markdown"] :is(p, li, blockquote):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
+    html.cmu-enabled main [data-message-group-id] .markdown-body :is(p, li, blockquote):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
+    html.cmu-enabled main [data-message-group-id] .prose :is(p, li, blockquote):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)) {
       font-size: inherit !important;
       line-height: inherit !important;
     }
 
-    html.cmu-enabled main [data-message-group-id] .wrtn-markdown :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] [class*="wrtn-markdown"] :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] .markdown-body :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] .prose :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *)) {
+    html.cmu-enabled main [data-message-group-id] .wrtn-markdown :is(p, li, blockquote) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *, h1, h2, h3, h4, h5, h6)),
+    html.cmu-enabled main [data-message-group-id] [class*="wrtn-markdown"] :is(p, li, blockquote) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *, h1, h2, h3, h4, h5, h6)),
+    html.cmu-enabled main [data-message-group-id] .markdown-body :is(p, li, blockquote) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *, h1, h2, h3, h4, h5, h6)),
+    html.cmu-enabled main [data-message-group-id] .prose :is(p, li, blockquote) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *, h1, h2, h3, h4, h5, h6)) {
       font-size: inherit !important;
     }
 
@@ -11727,24 +11734,24 @@
     const SIDE_ICON = {
         inputWrapper: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 7-5 5 5 5m10-10 5 5-5 5M14 4l-4 16"/></svg>',
         aiWriter: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 17-1 4 4-1L20 7l-3-3Z"/><path d="m14 7 3 3M4 5h6M4 9h4"/></svg>',
-        model: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 3.5 6.5v11L12 22l8.5-4.5v-11L12 2Zm0 2.2 5.9 3.1L12 10.4 6.1 7.3 12 4.2ZM5.5 9l5.5 2.9v7.2l-5.5-2.9V9Zm13 0v7.2L13 19.1v-7.2L18.5 9Z"/></svg>',
-        guide: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg>',
+        model: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="chud-btn-icon"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"></path><path d="M12 12l8-4.5"></path><path d="M12 12v9"></path><path d="M12 12L4 7.5"></path></svg>',
+        guide: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="15" height="15" class="chud-btn-icon"><path fill-rule="evenodd" d="M15.43 6.9c.5-.25 1.07-.14 1.44.23s.48.93.23 1.44l-2.61 5.33q-.2.4-.6.6l-5.33 2.6c-.5.26-1.08.15-1.44-.22a1.25 1.25 0 0 1-.23-1.44L9.5 10.1q.2-.4.6-.6zm-6.65 8.32 3.72-1.82-1.9-1.9z" clip-rule="evenodd"></path><path fill-rule="evenodd" d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20m0 1.6a8.41 8.41 0 0 0 0 16.8 8.41 8.41 0 0 0 0-16.8" clip-rule="evenodd"></path></svg>',
         profile: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 22c1.8-4 4.4-6 8-6s6.2 2 8 6"/></svg>',
         profileBox: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2.25"/><path d="M5.8 16c.55-2.05 1.65-3.1 3.2-3.1s2.65 1.05 3.2 3.1"/><path d="M15 8h3"/><path d="M15 12h3"/><path d="M15 16h2"/></svg>',
-        note: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
-        output: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h16"/></svg>',
-        summary: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 5h14v14H5z"/><path d="M8 9h8M8 13h5"/></svg>',
-        image: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8" cy="10" r="2"/><path d="M21 16l-5-5L5 19"/></svg>',
-        archive: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18v13H3z"/><path d="M3 7l2-4h14l2 4"/><path d="M10 12h4"/></svg>',
+        note: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon"><path d="M8 8.35h8v-1.6H8zm8 4H8v-1.6h8zm-8 4h4v-1.6H8z"></path><path fill-rule="evenodd" d="M3.75 3.29c0-.72.58-1.3 1.3-1.3h13.9c.72 0 1.3.58 1.3 1.3v12.6c0 .32-.12.65-.37.9l-4.55 4.8q-.38.4-.95.41H5.05a1.3 1.3 0 0 1-1.3-1.3zm1.6.3V20.4h8.44v-3.8c0-.72.58-1.3 1.3-1.3h3.56V3.6zM17.57 16.9l-2.18 2.3v-2.3z" clip-rule="evenodd"></path></svg>',
+        output: '<svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24" width="15" height="15" class="chud-btn-icon"><path d="M21 3.2H3v1.6h18zm0 5.75H3v1.6h18zM10 14.7H3v1.6h7zm10.62 2.29.01-.31-.01-.31.77-.75a.64.64 0 0 0 .11-.77l-.77-1.33a.7.7 0 0 0-.83-.33l-.96.27a4 4 0 0 0-.54-.31l-.26-1.04a.64.64 0 0 0-.62-.48h-1.61c-.3 0-.55.2-.62.48l-.26 1.04a4 4 0 0 0-.54.31l-1.03-.29a.65.65 0 0 0-.73.29l-.8 1.39c-.15.25-.1.57.11.78l.77.74-.01.31.01.31-.77.75a.64.64 0 0 0-.11.77l.8 1.39c.14.25.44.38.73.3l1.03-.29q.26.18.54.31l.26 1.04c.07.29.32.49.62.49h1.61c.29 0 .54-.2.62-.48l.26-1.04q.29-.13.54-.31l1.04.3c.28.08.58-.05.72-.3l.81-1.4a.64.64 0 0 0-.11-.77zm-3.91 1.06a1.38 1.38 0 0 1 0-2.76 1.38 1.38 0 0 1 0 2.76"></path></svg>',
+        summary: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="15" height="15" class="chud-btn-icon"><path d="M16.25 10.8a5.39 5.39 0 1 0 .02 10.78 5.39 5.39 0 0 0-.02-10.78m0 9.16a3.78 3.78 0 1 1 0-7.57 3.78 3.78 0 0 1 0 7.57"></path><path d="M17.02 13.43h-1.5v3.12l2.02 1.55.91-1.2-1.43-1.09z"></path><path d="M6.8 19.54v-3.29h-3V4.15h14.9V9.5h1.6V3.85c0-.72-.58-1.3-1.3-1.3H3.5c-.72 0-1.3.58-1.3 1.3v12.7c0 .72.58 1.3 1.3 1.3h1.7v3.2a.9.9 0 0 0 .89.89q.3 0 .58-.21l3.35-2.81-1.03-1.22z"></path><path d="M16.5 6.72H6v1.6h10.5zM11 10.03H6v1.6h5z"></path></svg>',
+        image: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon"><path d="m11.7 6.08 6.36 3.67-6.36 3.67z"></path><path fill-rule="evenodd" d="M6.71 3.91c0-.94.76-1.7 1.7-1.7H20.1c.94 0 1.7.76 1.7 1.7V15.6c0 .94-.76 1.7-1.7 1.7h-2.81v2.8c0 .94-.76 1.7-1.7 1.7H3.9a1.7 1.7 0 0 1-1.7-1.7V8.41c0-.94.76-1.7 1.7-1.7h2.81zm1.7-.1a.1.1 0 0 0-.1.1V15.6q0 .1.1.1H20.1a.1.1 0 0 0 .1-.1V3.91a.1.1 0 0 0-.1-.1zm0 13.49h7.28v2.8a.1.1 0 0 1-.1.1H3.9a.1.1 0 0 1-.1-.1V8.41q0-.1.1-.1h2.81v7.29c0 .94.76 1.7 1.7 1.7" clip-rule="evenodd"></path></svg>',
+        archive: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>',
         external: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v7H3V3h7"/></svg>',
-        roomBackground: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8" cy="9" r="1.5"/><path d="m4.5 17 4.2-4.2 3.1 3.1 2.2-2.2 5.5 5.3"/></svg>',
-        sceneBlur: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8.5V6a2 2 0 0 1 2-2h5"/><path d="M19 13v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-4.5"/><path d="m6 17 3.2-3.2 2.4 2.4 1.7-1.7 3.7 3.7"/><path d="m17 3 .65 1.85L19.5 5.5l-1.85.65L17 8l-.65-1.85-1.85-.65 1.85-.65L17 3Z"/><path d="m21 8 .38 1.12 1.12.38-1.12.38L21 11l-.38-1.12-1.12-.38 1.12-.38L21 8Z"/></svg>',
-        start: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
-        lore: '<svg class="chud-btn-icon chud-lore-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 6v12l8 4 8-4V6l-8-4Z"/><path d="M8 9h8M8 13h5"/></svg>',
-        translator: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h10M9 5c0 5-2 8-5 10"/><path d="M6 10c1 2 3 4 6 5"/><path d="M14 19l4-9 4 9M15.5 16h5"/></svg>',
-        aiSummary: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 4 7l8 4 8-4-8-4Z"/><path d="M4 12l8 4 8-4"/><path d="M4 17l8 4 8-4"/></svg>',
-        gameHud: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7.2 7.6h9.6c2.15 0 3.62 1.42 4.12 4l.7 3.62c.36 1.88-.54 3.18-1.9 3.18-.8 0-1.5-.38-2.08-1.06l-1.24-1.44H7.6l-1.24 1.44c-.58.68-1.28 1.06-2.08 1.06-1.36 0-2.26-1.3-1.9-3.18l.7-3.62c.5-2.58 1.97-4 4.12-4z"/><path d="M7.2 10.2v3.6M5.4 12h3.6"/><circle cx="16.25" cy="10.9" r=".82" fill="currentColor" stroke="none"/><circle cx="18.2" cy="13.05" r=".82" fill="currentColor" stroke="none"/></svg>',
-        scenePainter: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 4.2 19.8 9.3"/><path d="m13.5 5.4 5.1 5.1-8.35 8.35-5.95 1.2 1.2-5.95z"/><path d="m5.5 14.1 4.4 4.4"/><path d="M15.8 3.1c.74-.74 1.94-.74 2.68 0l2.42 2.42c.74.74.74 1.94 0 2.68l-2.3 2.3-5.1-5.1z"/></svg>',
+        roomBackground: '<svg width="15.5" height="15.5" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon chud-room-bg-icon" aria-hidden="true"><path d="M4.2 4.2c0-.88.72-1.6 1.6-1.6h12.4c.88 0 1.6.72 1.6 1.6v15.6c0 .88-.72 1.6-1.6 1.6H5.8c-.88 0-1.6-.72-1.6-1.6zm1.6 0v15.6h12.4V4.2z"></path><path d="M7.4 16.7 10.2 13l2 2.35 2.7-3.45 2.1 4.8z"></path><circle cx="9.1" cy="8.1" r="1.45"></circle></svg>',
+        sceneBlur: '<svg width="15.5" height="15.5" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon chud-scene-blur-icon" aria-hidden="true"><path d="M4.2 4.2c0-.88.72-1.6 1.6-1.6h12.4c.88 0 1.6.72 1.6 1.6v15.6c0 .88-.72 1.6-1.6 1.6H5.8c-.88 0-1.6-.72-1.6-1.6zm1.6 0v15.6h12.4V4.2z"></path><path d="M8.1 8.2h7.8v1.45H8.1zm0 3.05h7.8v1.45H8.1zm0 3.05h4.6v1.45H8.1z" opacity=".65"></path><path d="M17.4 13.1c1.52 1.44 2.35 2.67 2.35 3.74a2.35 2.35 0 1 1-4.7 0c0-1.07.83-2.3 2.35-3.74"></path></svg>',
+        start: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" class="chud-btn-icon"><path d="M4.2 4.8c0-.72.58-1.3 1.3-1.3h13c.72 0 1.3.58 1.3 1.3v10.4c0 .72-.58 1.3-1.3 1.3h-4.55l-3.6 3.15a.75.75 0 0 1-1.24-.56V16.5H5.5c-.72 0-1.3-.58-1.3-1.3zm1.6.3v9.8h4.91v2.7l2.64-2.7h4.85V5.1z"></path><path d="M11.2 7.5h1.6v2.1h2.1v1.6h-2.1v2.1h-1.6v-2.1H9.1V9.6h2.1z"></path></svg>',
+        lore: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="chud-btn-icon chud-lore-icon" aria-hidden="true"><path d="M3.5 5.65c2.72-.78 5.48-.28 8 1.5v11.7c-2.52-1.78-5.28-2.28-8-1.5z"></path><path d="M20.5 5.65c-2.72-.78-5.48-.28-8 1.5v11.7c2.52-1.78 5.28-2.28 8-1.5z"></path><path d="M12 7.15v11.7"></path><path d="m17.7 2.35.38 1.16 1.17.39-1.17.38-.38 1.17-.39-1.17-1.16-.38 1.16-.39z" fill="currentColor" stroke="none"></path></svg>',
+        translator: '<svg width="15.5" height="15.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="chud-btn-icon chud-translator-icon" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="4"></rect><path d="M8 16.5 12 7.5l4 9"></path><path d="M9.6 13.4h4.8"></path></svg>',
+        aiSummary: '<svg width="15.5" height="15.5" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon chud-ai-summary-icon" aria-hidden="true"><path d="M4.2 4.75c0-.72.58-1.3 1.3-1.3h13c.72 0 1.3.58 1.3 1.3v11.9c0 .72-.58 1.3-1.3 1.3h-7.1l-4.04 3.36a.75.75 0 0 1-1.23-.58v-2.78H5.5c-.72 0-1.3-.58-1.3-1.3zm1.6.3v11.3h1.93v2.37l3.08-2.37H18.2V5.05z"></path><path d="M12.34 6.72l.82 2.55 2.58.81-2.58.82-.82 2.55-.82-2.55-2.58-.82 2.58-.81z"></path><path d="M8 13.95h5.2v1.45H8zM8 7.95h1.9V9.4H8z"></path></svg>',
+        gameHud: '<svg width="15.5" height="15.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="chud-btn-icon chud-game-hud-icon" aria-hidden="true"><path d="M7.2 7.6h9.6c2.15 0 3.62 1.42 4.12 4l.7 3.62c.36 1.88-.54 3.18-1.9 3.18-.8 0-1.5-.38-2.08-1.06l-1.24-1.44H7.6l-1.24 1.44c-.58.68-1.28 1.06-2.08 1.06-1.36 0-2.26-1.3-1.9-3.18l.7-3.62c.5-2.58 1.97-4 4.12-4z"></path><path d="M7.2 10.2v3.6M5.4 12h3.6"></path><circle cx="16.25" cy="10.9" r=".82" fill="currentColor" stroke="none"></circle><circle cx="18.2" cy="13.05" r=".82" fill="currentColor" stroke="none"></circle></svg>',
+        scenePainter: '<svg width="15.5" height="15.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="chud-btn-icon chud-scene-painter-icon" aria-hidden="true"><path d="M14.7 4.2 19.8 9.3"></path><path d="m13.5 5.4 5.1 5.1-8.35 8.35-5.95 1.2 1.2-5.95z"></path><path d="m5.5 14.1 4.4 4.4"></path><path d="M15.8 3.1c.74-.74 1.94-.74 2.68 0l2.42 2.42c.74.74.74 1.94 0 2.68l-2.3 2.3-5.1-5.1z"></path></svg>',
         wishManager: '<svg class="chud-btn-icon chud-wish-heart-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21.35 10.55 20.03C5.4 15.36 2 12.27 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.77-3.4 6.86-8.55 11.54L12 21.35Z"/></svg>',
     };
     function isOwnElement(el) {
@@ -14114,57 +14121,25 @@
         return 'novel';
     }
 
-    function findNativeThemeSetting(mode) {
-        const label = mode === 'dark' ? '다크 모드' : '라이트 모드';
-        for (const node of document.querySelectorAll('span, p, label, button, [role="checkbox"]')) {
-            if (node.closest?.('#chud-sidebar, #chud-side-menu, #cmu-settings-panel, #crack-ui-settings-panel')) continue;
-            if (String(node.textContent || '').replace(/\s+/g, ' ').trim() !== label) continue;
-            const row = node.closest('[role="checkbox"], button, label, .cursor-pointer') || node.parentElement?.closest('[role="checkbox"], button, label, .cursor-pointer');
-            const control = row?.matches?.('[role="checkbox"]') ? row : row?.querySelector?.('[role="checkbox"]');
-            if (control) return control;
-        }
-        return null;
+    function writeCrackThemeCookie(mode) {
+        if (mode !== 'light' && mode !== 'dark') return;
+        try {
+            const expires = new Date();
+            expires.setFullYear(expires.getFullYear() + 99);
+            const base = `crack-user-theme=${mode}; path=/; expires=${expires.toUTCString()}; SameSite=Lax`;
+            const count = () => (String(document.cookie || '').match(/(?:^|;\s*)crack-user-theme=/g) || []).length;
+            const domain = '.' + location.hostname.split('.').slice(-2).join('.');
+            document.cookie = `${base}; domain=${domain}`;
+            if (count() > 1) {
+                document.cookie = `crack-user-theme=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax; domain=${domain}`;
+                document.cookie = base;
+            }
+        } catch (e) {}
     }
 
-    let lastPendingThemeAttempt = '';
-    let lastPendingThemeAttemptAt = 0;
-    let lastPendingThemeLookupAt = 0;
-    function syncPendingNativeTheme() {
-        let pending;
-        try { pending = localStorage.getItem('chud_pending_theme_mode'); } catch (e) { return; }
-        if (pending !== 'light' && pending !== 'dark') return;
-        // 원본 설정이 열렸을 때만 찾는다. 평소 사이드바 갱신마다 문서 전체를 검색하지 않는다.
-        const nativePanelOpen = [...document.querySelectorAll('[role="dialog"], #web-modal')]
-            .some((panel) => {
-                if ((panel.id === 'crack-ui-settings-panel' || panel.id === ID.panel) || panel.closest('#crack-ui-settings-root, [aria-hidden="true"]')) return false;
-                const style = getComputedStyle(panel);
-                const rect = panel.getBoundingClientRect();
-                return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
-            });
-        if (!nativePanelOpen && !location.pathname.includes('/setting')) return;
-        if (Date.now() - lastPendingThemeLookupAt < 800) return;
-        lastPendingThemeLookupAt = Date.now();
-        const control = findNativeThemeSetting(pending);
-        if (!control) return;
-        if (control.getAttribute('aria-checked') === 'true' || control.getAttribute('data-state') === 'checked') {
-            try { localStorage.removeItem('chud_pending_theme_mode'); } catch (e) {}
-            lastPendingThemeAttempt = '';
-            lastPendingThemeAttemptAt = 0;
-            return;
-        }
-        if (lastPendingThemeAttempt === pending && Date.now() - lastPendingThemeAttemptAt < 1500) return;
-        lastPendingThemeAttempt = pending;
-        lastPendingThemeAttemptAt = Date.now();
-        control.click();
-        setTimeout(() => {
-            const current = findNativeThemeSetting(pending);
-            if (current?.getAttribute('aria-checked') === 'true' || current?.getAttribute('data-state') === 'checked') {
-                try { localStorage.removeItem('chud_pending_theme_mode'); } catch (e) {}
-                lastPendingThemeAttempt = '';
-                lastPendingThemeAttemptAt = 0;
-            }
-        }, 180);
-    }
+    // Discard stale work from older builds; never replay it against native settings.
+    try { localStorage.removeItem('chud_pending_theme_mode'); } catch (_) {}
+    
 
     function toggleQuickTheme() {
         const next = getQuickThemeMode() === 'dark' ? 'light' : 'dark';
@@ -14173,8 +14148,6 @@
         const uiPlusChoice = document.querySelector(`#crack-ui-settings-panel [data-crack-ui-theme-mode="${next}"]`);
         if (uiPlusChoice?.dataset.crackUiBound === '1') {
             try { localStorage.removeItem('chud_pending_theme_mode'); } catch (e) {}
-            lastPendingThemeAttempt = '';
-            lastPendingThemeAttemptAt = 0;
             uiPlusChoice.click();
             syncCmuQuickButtons();
             return;
@@ -14182,11 +14155,10 @@
         try {
             localStorage.setItem('theme', next);
             localStorage.removeItem('crack_ui_theme_mode');
-            localStorage.setItem('chud_pending_theme_mode', next);
+            // 쿠키에 바로 저장하므로 크랙 설정창을 대신 눌러 줄 필요가 없다(남아 있으면 나중에 설정에서 고른 테마를 되돌렸다).
+            localStorage.removeItem('chud_pending_theme_mode');
         } catch (e) {}
-        lastPendingThemeAttempt = '';
-        lastPendingThemeAttemptAt = 0;
-        lastPendingThemeLookupAt = 0;
+        writeCrackThemeCookie(next);
         const root = document.documentElement;
         root.classList.toggle('dark', next === 'dark');
         root.classList.toggle('light', next === 'light');
@@ -14196,7 +14168,6 @@
             document.body.dataset.theme = next;
             document.body.style.colorScheme = next;
         }
-        syncPendingNativeTheme();
         syncCmuQuickButtons();
     }
 
@@ -14290,7 +14261,7 @@
             timeoutId = setTimeout(release, 23000);
             try { uiPlusChoice.click(); } catch (error) {
                 release();
-                alert(`작품 UI 변경에 실패했습니다. 다시 시도해주세요.\n${error.message || error}`);
+                if (shouldRun()) showToast(`작품 UI를 바꾸지 못했어요 · ${error.message || error}`);
             }
             return;
         }
@@ -14311,7 +14282,7 @@
             showToast('화면 형식 변경 완료 · 새로고침합니다');
             setTimeout(() => { cmuDraftFlush('ui-mode-reload'); window.location.reload(); }, 450);
         } catch (error) {
-            alert(`작품 UI 변경에 실패했습니다. 다시 시도해주세요.\n${error.message || error}`);
+            if (shouldRun()) showToast(`작품 UI를 바꾸지 못했어요 · ${error.message || error}`);
         } finally {
             quickEpisodeSaveBusy = quickEpisodeReloadPending;
             syncCmuQuickButtons();
@@ -14332,6 +14303,8 @@
             const value = String(!!pressed);
             if (button.getAttribute('aria-pressed') !== value) button.setAttribute('aria-pressed', value);
             if (button.disabled !== !!disabled) button.disabled = !!disabled;
+            const busy = String(!!disabled);
+            if (button.getAttribute('aria-busy') !== busy) button.setAttribute('aria-busy', busy);
         };
         const theme = getQuickThemeMode();
         const mode = getQuickEpisodeMode();
@@ -14340,7 +14313,7 @@
 
     }
     function cmuQuickModeEvent(event) {
-        if (event.type === 'storage' && !['theme', 'crack_ui_theme_mode', 'crack_ui_episode_ui_mode', 'chud_episode_ui_mode'].includes(event.key)) return;
+        if (event.type === 'storage' && event.key !== null && !['theme', 'crack_ui_theme_mode', 'crack_ui_episode_ui_mode', 'chud_episode_ui_mode'].includes(event.key)) return;
         CMI.uiModeAt = 0;
         syncCmuQuickButtons();
     }
@@ -14385,8 +14358,8 @@
             DASH_SIDE.content = content;
             const buttons = {
                 modelButton: makeSideButton('modelButton', 'chud-model-btn', '모델 빠른 선택', SIDE_ICON.model, openCompactModelPicker),
-                themeButton: makeSideButton('themeButton', 'chud-theme-btn', '라이트/다크 테마 전환', QUICK_MODE_ICON.light, toggleQuickTheme),
-                episodeModeButton: makeSideButton('episodeModeButton', 'chud-episode-mode-btn', '소설형/채팅형 전환', QUICK_MODE_ICON.novel, toggleQuickEpisodeMode),
+                themeButton: makeSideButton('themeButton', 'chud-theme-btn', '라이트/다크 테마 전환', QUICK_MODE_ICON[getQuickThemeMode()], toggleQuickTheme),
+                episodeModeButton: makeSideButton('episodeModeButton', 'chud-episode-mode-btn', '소설형/채팅형 전환', QUICK_MODE_ICON[getQuickEpisodeMode()], toggleQuickEpisodeMode),
 
                 inputWrapperButton: makeSideButton('inputWrapperButton', 'chud-input-wrapper-btn', '글 감싸기 도구 설정', SIDE_ICON.inputWrapper, () => CMU_TEXT_TOOLS.wrapper?.open()),
                 guideButton: makeSideButton('guideButton', 'chud-guide-btn', '플레이 가이드', SIDE_ICON.guide, () => clickFirst([/플레이\s*가이드/, /가이드/], '플레이 가이드')),
@@ -19564,7 +19537,6 @@
             ensureMobileEdgeMenuButtons();
         }
         if (popupDirty) {
-            syncPendingNativeTheme();
             scheduleCmuMemoryUi();
             scheduleCmuOutputUi();
             const userNoteOpen = syncCmuUserNoteDialogState();
@@ -19732,6 +19704,7 @@
             if (next === CMU_DOM_WATCH.themeSignature)
                 return;
             CMU_DOM_WATCH.themeSignature = next;
+            syncCmuQuickButtons();
             CMU_DOM_ROUTER.themeDirty = true;
             scheduleCmuDomRouterFlush();
         });
@@ -20736,6 +20709,23 @@
         cmuListen(window.visualViewport, 'resize', scheduleCmuInputCounterSync, { passive: true });
     }
     catch (_) { }
+    // 4.5.7 author fix, with single-flight and feature lifecycle guards.
+    let cmuFullscreenExitPending = false;
+    function exitCmuFullscreenForChatInput(event) {
+        if (!shouldRun() || settings.enabled === false || cmuFullscreenExitPending ||
+            !isCmuFullscreenActive() || !isMobileLike() || !isChatInputElement(event.target)) return;
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (typeof exit !== 'function') return;
+        cmuFullscreenExitPending = true;
+        const release = () => {
+            cmuFullscreenExitPending = false;
+            if (shouldRun()) syncCmuFullscreenControls(document);
+        };
+        try { Promise.resolve(exit.call(document)).then(release, release); }
+        catch (_) { release(); }
+    }
+    cmuListen(document, 'pointerdown', exitCmuFullscreenForChatInput, true);
+    cmuListen(document, 'focusin', exitCmuFullscreenForChatInput, true);
     ['fullscreenchange', 'webkitfullscreenchange'].forEach(type => {
         cmuListen(document, type, () => syncCmuFullscreenControls(document), true);
     });
