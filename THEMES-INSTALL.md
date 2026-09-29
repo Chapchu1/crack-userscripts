@@ -4,8 +4,8 @@ Tampermonkey를 설치한 브라우저에서 아래 링크를 열고 설치하�
 
 | 스크립트 | 버전 | 설치 |
 |---|---|---|
-| CSP — 생성 이미지 배경 | 4.3.28 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-theme-background.user.js) |
-| Crack Custom Room — 직접 지정 이미지 배경 | 4.1.8 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-custom-room-background.user.js) |
+| CSP — 생성 이미지 배경 | 4.3.29 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-theme-background.user.js) |
+| Crack Custom Room — 직접 지정 이미지 배경 | 4.1.9 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-custom-room-background.user.js) |
 
 설치 후 크랙 페이지를 새로고침하세요. 기존 54개와 새로 추가한 24개, 총 78개 테마를 사용할 수 있습니다. 새 테마는 추가 테마 목록 하단에 있습니다.
 
@@ -17,7 +17,7 @@ Tampermonkey를 설치한 브라우저에서 아래 링크를 열고 설치하�
 
 ## 장식선 보정
 
-- 호프 카드의 작은 카드 장식을 날개 달린 하트로 바꿨습니다.
+- 호프 카드의 중앙 장식과 구분선을 둥근 분홍 하트·흰 날개로 다시 만들었습니다. 양옆은 가는 분홍·금빛 곡선과 작은 하트·반짝임으로 꾸몄습니다.
 - 유치원 우사기는 부드러운 이중 곡선에 파스텔 하트·별을 더하고, 모자 구분선도 함께 꾸몄습니다.
 
 ## 크기·라이트 모드 보정
