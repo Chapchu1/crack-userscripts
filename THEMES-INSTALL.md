@@ -4,8 +4,8 @@ Tampermonkey를 설치한 브라우저에서 아래 링크를 열고 설치하�
 
 | 스크립트 | 버전 | 설치 |
 |---|---|---|
-| CSP — 생성 이미지 배경 | 4.3.26 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-theme-background.user.js) |
-| Crack Custom Room — 직접 지정 이미지 배경 | 4.1.6 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-custom-room-background.user.js) |
+| CSP — 생성 이미지 배경 | 4.3.27 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-theme-background.user.js) |
+| Crack Custom Room — 직접 지정 이미지 배경 | 4.1.7 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-custom-room-background.user.js) |
 
 설치 후 크랙 페이지를 새로고침하세요. 기존 54개와 새로 추가한 24개, 총 78개 테마를 사용할 수 있습니다. 새 테마는 추가 테마 목록 하단에 있습니다.
 
@@ -15,7 +15,12 @@ Tampermonkey를 설치한 브라우저에서 아래 링크를 열고 설치하�
 
 새 버전은 각 스크립트의 `.meta.js`를 통해 확인하고 같은 `.user.js` 설치 주소에서 업데이트합니다.
 
-## 이번 업데이트
+## 크기·라이트 모드 보정
+
+- 하단 캐릭터 이미지는 약 30% 키우고, 라이트 모드에서 조금 더 선명하게 표시합니다.
+- 유에 마법진의 크기와 중앙 배치는 그대로 유지합니다. 다크 모드의 이미지 투명도도 유지합니다.
+
+## 앞서 반영한 내용
 
 - 새 테마의 하단 캐릭터는 작고 연하게 표시합니다. 중앙 배치 테마는 큰 마법진을 은은하게 표시합니다.
 - 호프 카드는 체리x샤오랑 채팅창 마법진을 사용하고, 유치원 우사기의 두 장식은 유치원 모자로 바꿨습니다.

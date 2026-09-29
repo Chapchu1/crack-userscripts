@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🖼️ CSP - Generated Image Background Blur (배경 이미지&테마)
 // @namespace    crack-scene-painter-background-borderless
-// @version      4.3.26
+// @version      4.3.27
 // @description  자동 장면 배경·다크/라이트·소설/채팅 설정을 유지하고, 기존 34개·추가 44개 테마를 접기·펼치기로 제공하며, 사용자 이미지 24개 테마의 장식선과 전용 채팅창 이미지를 포함합니다.
 // @match        https://crack.wrtn.ai/*
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
@@ -13,6 +13,7 @@
 // @supportURL   https://github.com/Chapchu1/crack-userscripts/issues
 // ==/UserScript==
 
+// 2026-09-29: 하단 캐릭터 약 30% 확대·라이트 모드 이미지 선명도 개선. 유에 마법진 크기 유지.
 // 2026-09-29: 새 테마 채팅창 축소·투명도 조절, 중앙 마법진 확대, 유치원 모자 장식, 선택한 7개 테마 삭제.
 // 2026-09-29: 테마 이미지 자동 다운로드·캐시 적용. 별도 이미지 팩 설치 불필요.
 // 2026-09-29: 원작자 4.0.6.2 공통 업데이트 병합 (추가 테마·전용 배경 기능 유지).
@@ -55,7 +56,7 @@
   }
 
   const SCRIPT_NAME = 'CSP Borderless Background Blur';
-  const VERSION = '4.3.26';
+  const VERSION = '4.3.27';
   const SGB_MUTATION_BATCH_MS = 32;
 
   // User artwork: original filenames are the visible theme names.
@@ -76,9 +77,10 @@
       "sceneHeight": 68,
       "sceneMobile": 60,
       "sceneRatio": 1.475369,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.612108,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-sess-kikyo-2",
@@ -96,9 +98,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 1.042889,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.612108,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-sess-sword",
@@ -116,9 +119,10 @@
       "sceneHeight": 59,
       "sceneMobile": 51,
       "sceneRatio": 1.781022,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.612108,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-sesshomaru",
@@ -136,9 +140,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.692857,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.612108,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-sugar-rune",
@@ -156,9 +161,10 @@
       "sceneHeight": 68,
       "sceneMobile": 60,
       "sceneRatio": 1.403893,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.156051,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-touya-yukito",
@@ -176,9 +182,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 1.033898,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.104072,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-yue-card",
@@ -198,7 +205,8 @@
       "sceneRatio": 0.644495,
       "chatHeight": 0,
       "chatRatio": 0.995772,
-      "chatOpacity": 0.14
+      "chatOpacity": 0.14,
+      "lightChatOpacity": 0.22
     },
     {
       "value": "pack29-yue",
@@ -218,7 +226,8 @@
       "sceneRatio": 1.00274,
       "chatHeight": 0,
       "chatRatio": 0.995772,
-      "chatOpacity": 0.14
+      "chatOpacity": 0.14,
+      "lightChatOpacity": 0.22
     },
     {
       "value": "pack29-yue-kero",
@@ -238,7 +247,8 @@
       "sceneRatio": 0.971014,
       "chatHeight": 0,
       "chatRatio": 0.995772,
-      "chatOpacity": 0.14
+      "chatOpacity": 0.14,
+      "lightChatOpacity": 0.22
     },
     {
       "value": "pack29-hope-card",
@@ -258,7 +268,8 @@
       "sceneRatio": 0.439458,
       "chatHeight": 0,
       "chatRatio": 0.997920997920998,
-      "chatOpacity": 1
+      "chatOpacity": 1,
+      "lightChatOpacity": 1
     },
     {
       "value": "pack29-usagi-bouquet",
@@ -276,9 +287,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.782677,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.090452,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-usagi-baby",
@@ -296,9 +308,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.803965,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.090452,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-usagi-school",
@@ -316,9 +329,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.83908,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.090452,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-kuromi",
@@ -336,9 +350,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.811918,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.038806,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-kuromi-melody",
@@ -356,9 +371,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 1.146127,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.176685,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-gojo-dark",
@@ -376,9 +392,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.694497,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.019499,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-gojo-dark-2",
@@ -396,9 +413,10 @@
       "sceneHeight": 59,
       "sceneMobile": 51,
       "sceneRatio": 1.819193,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.019499,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-gojo-geto-smile",
@@ -416,9 +434,10 @@
       "sceneHeight": 59,
       "sceneMobile": 51,
       "sceneRatio": 1.786885,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.149137,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-gojo-geto-v",
@@ -436,9 +455,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.979138,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.149137,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-meowth",
@@ -456,9 +476,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.878683,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.722359,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-ditto",
@@ -476,9 +497,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.800971,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.122186,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-terriermon",
@@ -496,9 +518,10 @@
       "sceneHeight": 68,
       "sceneMobile": 60,
       "sceneRatio": 1.294479,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.461538,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-tokomon",
@@ -516,9 +539,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.925595,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.813456,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     },
     {
       "value": "pack29-pikachu",
@@ -536,9 +560,10 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 1.011158,
-      "chatHeight": 44,
+      "chatHeight": 56,
       "chatRatio": 1.697802,
-      "chatOpacity": 0.38
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
     }
   ]);
   const USER_THEME_INDEX = new Map(USER_THEME_PACK.map(theme => [theme.value, theme]));
@@ -1417,8 +1442,8 @@
       };
       const centered = t.align === 'center';
       // The legacy Sakura circle already contains faint alpha; use it unchanged.
-      css += rule(s, `--sgb-pack-scene-height:${t.sceneHeight}px;--sgb-pack-scene-gap:${(t.sceneHeight*t.sceneRatio/2+12).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneHeight+8}px;--sgb-pack-chat-height:${centered ? '86%' : `min(${t.chatHeight}px,26%)`};--sgb-pack-chat-width:${centered ? 'min(180px,46%)' : 'min(120px,28%)'};--sgb-pack-chat-bottom:${centered ? '50%' : '0px'};--sgb-pack-chat-translate:${centered ? '50%' : '0%'};--sgb-pack-chat-opacity:${t.chatOpacity};` + colors(false));
-      css += rule(s+'[data-sgb-theme="light"]', colors(true));
+      css += rule(s, `--sgb-pack-scene-height:${t.sceneHeight}px;--sgb-pack-scene-gap:${(t.sceneHeight*t.sceneRatio/2+12).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneHeight+8}px;--sgb-pack-chat-height:${centered ? '86%' : `min(${t.chatHeight}px,34%)`};--sgb-pack-chat-width:${centered ? 'min(180px,46%)' : 'min(150px,34%)'};--sgb-pack-chat-bottom:${centered ? '50%' : '0px'};--sgb-pack-chat-translate:${centered ? '50%' : '0%'};--sgb-pack-chat-opacity:${t.chatOpacity};--sgb-pack-chat-filter:none;` + colors(false));
+      css += rule(s+'[data-sgb-theme="light"]', colors(true) + `--sgb-pack-chat-opacity:${t.lightChatOpacity};--sgb-pack-chat-filter:${t.chatOpacity === 1 ? 'brightness(.8)' : 'none'};`);
       css += `@media(max-width:620px){${rule(s,`--sgb-pack-scene-height:${t.sceneMobile}px;--sgb-pack-scene-gap:${(t.sceneMobile*t.sceneRatio/2+10).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneMobile+8}px;--sgb-pack-divider-height:30px;`)}}`;
     }
     css += rule(scene, `content:""!important;display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-novel-sep-box-height)!important;min-height:var(--sgb-novel-sep-box-height)!important;border:0!important;border-radius:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-art),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;background-repeat:no-repeat!important;`);
@@ -1430,7 +1455,7 @@
     css += rule(base+' main [data-sgb-input-host]::before,'+base+' main [data-sgb-input-host]::after,'+base+' main [data-sgb-input-box]::after','content:none!important;display:none!important;');
     css += rule(base+' main [data-sgb-input-box]', 'position:relative!important;box-sizing:border-box!important;width:var(--sgb-radio-input-width,100%)!important;max-width:none!important;min-width:0!important;flex-shrink:0!important;margin-left:0!important;margin-right:0!important;left:var(--sgb-radio-input-shift,0px)!important;right:auto!important;overflow:visible!important;isolation:isolate!important;border:1px solid var(--sgb-pack-border)!important;border-radius:14px!important;background:linear-gradient(180deg,rgba(var(--sgb-pack-surface-top),var(--sgb-ui-opacity,.96)),rgba(var(--sgb-pack-surface-bottom),var(--sgb-ui-opacity,.96)))!important;box-shadow:0 12px 38px rgba(0,0,0,.16)!important;backdrop-filter:blur(4px)!important;-webkit-backdrop-filter:blur(4px)!important;');
     // Artwork has its own noninteractive layer, so text and buttons stay fully opaque.
-    css += rule(base+' main [data-sgb-input-box]::before', 'content:""!important;display:block!important;position:absolute!important;box-sizing:border-box!important;inset:auto!important;left:50%!important;bottom:var(--sgb-pack-chat-bottom)!important;width:var(--sgb-pack-chat-width)!important;height:var(--sgb-pack-chat-height)!important;min-width:0!important;min-height:0!important;max-width:100%!important;max-height:100%!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;transform:translate(-50%,var(--sgb-pack-chat-translate))!important;opacity:var(--sgb-pack-chat-opacity)!important;z-index:-1!important;pointer-events:none!important;background:var(--sgb-pack-chat-art) center/contain no-repeat!important;filter:none!important;animation:none!important;');
+    css += rule(base+' main [data-sgb-input-box]::before', 'content:""!important;display:block!important;position:absolute!important;box-sizing:border-box!important;inset:auto!important;left:50%!important;bottom:var(--sgb-pack-chat-bottom)!important;width:var(--sgb-pack-chat-width)!important;height:var(--sgb-pack-chat-height)!important;min-width:0!important;min-height:0!important;max-width:100%!important;max-height:100%!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;transform:translate(-50%,var(--sgb-pack-chat-translate))!important;opacity:var(--sgb-pack-chat-opacity)!important;z-index:-1!important;pointer-events:none!important;background:var(--sgb-pack-chat-art) center/contain no-repeat!important;filter:var(--sgb-pack-chat-filter,none)!important;animation:none!important;');
     css += rule(base+' main [data-sgb-input-box] :is(textarea,[contenteditable="true"])','color:var(--sgb-pack-ink)!important;-webkit-text-fill-color:var(--sgb-pack-ink)!important;caret-color:var(--sgb-pack-ink)!important;text-shadow:0 1px 3px rgba(0,0,0,.65)!important;');
     css += rule(base+'[data-sgb-theme="light"] main [data-sgb-input-box] :is(textarea,[contenteditable="true"])','text-shadow:0 1px 2px rgba(255,255,255,.8)!important;');
     css += rule(base+' main [data-sgb-input-box] .is-editor-empty:first-child:before','opacity:.86!important;color:var(--sgb-pack-ink)!important;-webkit-text-fill-color:var(--sgb-pack-ink)!important;');
