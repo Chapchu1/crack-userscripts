@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🖼️ CSP - Generated Image Background Blur (배경 이미지&테마)
 // @namespace    crack-scene-painter-background-borderless
-// @version      4.3.31
+// @version      4.3.32
 // @description  자동 장면 배경·다크/라이트·소설/채팅 설정을 유지하고, 기존 34개·추가 44개 테마를 접기·펼치기로 제공하며, 사용자 이미지 24개 테마의 장식선과 전용 채팅창 이미지를 포함합니다.
 // @match        https://crack.wrtn.ai/*
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
@@ -13,7 +13,7 @@
 // @supportURL   https://github.com/Chapchu1/crack-userscripts/issues
 // ==/UserScript==
 
-// 2026-09-29: 호프 카드 장식 아이콘을 테마색의 가는 윤곽선과 반투명 채움으로 새로 구성.
+// 2026-09-29: 호프 카드의 작은 카드 아이콘과 양옆·두 번째 장식선을 원래 디자인으로 복구.
 // 2026-09-29: 호프 카드 메인 원본 이미지 복구. 날개 하트는 양옆 장식선과 구분선 아이콘에만 적용.
 // 2026-09-29: 호프 카드의 날개 하트 장식, 유치원 우사기의 하트·별·곡선 장식선 적용.
 // 2026-09-29: 하단 캐릭터 약 30% 확대·라이트 모드 이미지 선명도 개선. 유에 마법진 크기 유지.
@@ -59,7 +59,7 @@
   }
 
   const SCRIPT_NAME = 'CSP Borderless Background Blur';
-  const VERSION = '4.3.31';
+  const VERSION = '4.3.32';
   const SGB_MUTATION_BATCH_MS = 32;
 
   // User artwork: original filenames are the visible theme names.
@@ -257,12 +257,12 @@
       "value": "pack29-hope-card",
       "label": "호프 카드",
       "group": "유에",
-      "desc": "날개 하트 · 별빛 곡선",
+      "desc": "마법 카드 · 날개",
       "art": "adff246b28a08",
       "chatArt": "b863e267b26e1",
       "chatName": "호프 카드 채팅창(중앙)",
       "align": "center",
-      "motif": "hopewings",
+      "motif": "card",
       "accent": "#f0c0d6",
       "secondary": "#e8d49a",
       "highlight": "#d1e6dc",
@@ -1132,7 +1132,6 @@
 
   function userPackMotif(name, a, b, c) {
     const shapes = {
-      hopewings: `<g opacity=".78"><g fill="${c}" fill-opacity=".12" stroke="${c}" stroke-width=".8" stroke-opacity=".88"><path d="M10.55 6.3C7.5 6.7 4.7 4.4 1.7 4.2c.4 3 3 5.3 6 4.9-.9.9-2.1 1-3.4.6 1.2 2.4 3.7 2.8 6 1.5-.5 1-1.3 1.5-2.4 1.7 1.8 1.1 3.7.8 5.2-.4C11.4 10.5 10.7 8.9 10.55 6.3Z"/><g transform="translate(32 0) scale(-1 1)"><path d="M10.55 6.3C7.5 6.7 4.7 4.4 1.7 4.2c.4 3 3 5.3 6 4.9-.9.9-2.1 1-3.4.6 1.2 2.4 3.7 2.8 6 1.5-.5 1-1.3 1.5-2.4 1.7 1.8 1.1 3.7.8 5.2-.4C11.4 10.5 10.7 8.9 10.55 6.3Z"/></g></g><path d="M16 5.2c-2.4-3.5-5.5-2.1-5.5 1 0 3.3 3.4 6.2 5.5 7.9 2.1-1.7 5.5-4.6 5.5-7.9 0-3.1-3.1-4.5-5.5-1Z" fill="${a}" fill-opacity=".22" stroke="${a}" stroke-opacity=".96" stroke-width=".95"/></g>`,
       softheart: `<path d="M12 20.4C9.4 18.4 3 14.2 3 8.8c0-5.2 6.3-6.8 9-2.2 2.7-4.6 9-3 9 2.2 0 5.4-6.4 9.6-9 11.6Z" fill="${b}" fill-opacity=".22" stroke="${b}" stroke-width="1.7"/>`,
       softstar: `<path d="m12 2.6 2.9 5.9 6.5.9-4.7 4.6 1.1 6.4-5.8-3-5.8 3 1.1-6.4-4.7-4.6 6.5-.9Z" fill="${c}" fill-opacity=".83" stroke="${c}" stroke-width=".65"/>`,
       softglint: `<path d="M12 2c1.1 6.5 3.1 8.9 10 10-6.9 1.1-8.9 3.5-10 10C10.9 15.5 8.9 13.1 2 12c6.9-1.1 8.9-3.5 10-10Z" fill="${a}" stroke="none"/>`,
@@ -1167,10 +1166,6 @@
     const a = mix(theme.accent), b = mix(theme.secondary), c = mix(theme.highlight);
     const y = divider ? 24 : 44, height = divider ? 48 : 88;
     const variant = theme.motif;
-    if (variant === 'hopewings') {
-      const line = `<defs><linearGradient id="hope" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="160" y2="0"><stop stop-color="${a}" stop-opacity="0"/><stop offset=".28" stop-color="${a}" stop-opacity=".56"/><stop offset="1" stop-color="${a}" stop-opacity=".88"/></linearGradient></defs><g fill="none" stroke-linecap="round"><path d="${divider ? 'M0 24C56 24 85 21 160 24' : 'M0 24C40 24 56 14 86 24S133 34 160 24'}" stroke="url(#hope)" stroke-width=".9" vector-effect="non-scaling-stroke"/><path d="${divider ? 'M72 24Q118 31 159 24' : 'M18 24C49 35 111 13 145 24'}" stroke="${b}" stroke-opacity=".42" stroke-width=".65" vector-effect="non-scaling-stroke"/></g>`;
-      return userPackSvgUrl(right ? `<g transform="translate(160 0) scale(-1 1)">${line}</g>` : line, '0 0 160 48', true);
-    }
     if (variant === 'schoolhat') {
       const primary = variant === 'schoolhat' ? b : c;
       const line = `<defs><linearGradient id="school" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="160" y2="0"><stop stop-color="${primary}" stop-opacity="0"/><stop offset=".24" stop-color="${primary}" stop-opacity=".58"/><stop offset="1" stop-color="${primary}" stop-opacity=".88"/></linearGradient></defs><path d="${divider ? 'M0 24H160' : 'M0 14Q84 43 160 14'}" fill="none" stroke="url(#school)" stroke-width=".95" vector-effect="non-scaling-stroke"/>${divider ? '' : `<path d="M0 10Q82 29 160 11" fill="none" stroke="${a}" stroke-opacity=".20" stroke-width=".65" vector-effect="non-scaling-stroke"/>`}`;
@@ -1450,10 +1445,9 @@
         const a = light ? userPackMix(t.accent,'#23334b',.51) : t.accent;
         const b = light ? userPackMix(t.secondary,'#23334b',.51) : t.secondary;
         const c = light ? userPackMix(t.highlight,'#23334b',.51) : t.highlight;
-        const graceful = t.motif === 'schoolhat' || t.motif === 'hopewings';
-        const winged = t.motif === 'hopewings';
-        const ornaments = graceful ? `--sgb-pack-charm:${userPackSvgUrl(userPackMotif('softheart',a,winged ? a : b,c),'0 0 24 24')};--sgb-pack-charm-width:${winged ? 28 : 14}px;--sgb-pack-charm-height:${winged ? 21 : 14}px;--sgb-pack-soft-star:${userPackSvgUrl(userPackMotif('softstar',a,b,winged ? b : c))};--sgb-pack-soft-glint:${userPackSvgUrl(userPackMotif('softglint',a,b,c))};--sgb-pack-divider-charm:${userPackSvgUrl(userPackMotif(winged ? 'softstar' : 'softheart',a,b,winged ? b : c))};--sgb-pack-glyph-width:${winged ? 32 : 26}px;` : '';
-        return `--sgb-pack-left:${userPackSide(t,light)};--sgb-pack-right:${userPackSide(t,light,true)};--sgb-pack-divider-left:${userPackSide(t,light,false,true)};--sgb-pack-divider-right:${userPackSide(t,light,true,true)};--sgb-pack-glyph:${userPackSvgUrl(userPackMotif(t.motif,a,b,c),winged ? '0 0 32 18' : '0 0 24 24')};--sgb-pack-border:rgba(${rgb(a)},${light ? '.30' : '.32'});--sgb-pack-ink:${userPackTextPatch(t,light).textColor};--sgb-pack-surface-top:${rgb(light?lightTop:darkTop)};--sgb-pack-surface-bottom:${rgb(light?lightBottom:darkBottom)};` + ornaments;
+        const graceful = t.motif === 'schoolhat';
+        const ornaments = graceful ? `--sgb-pack-charm:${userPackSvgUrl(userPackMotif('softheart',a,b,c),'0 0 24 24')};--sgb-pack-charm-width:${14}px;--sgb-pack-charm-height:${14}px;--sgb-pack-soft-star:${userPackSvgUrl(userPackMotif('softstar',a,b,c))};--sgb-pack-soft-glint:${userPackSvgUrl(userPackMotif('softglint',a,b,c))};--sgb-pack-divider-charm:${userPackSvgUrl(userPackMotif('softheart',a,b,c))};--sgb-pack-glyph-width:${26}px;` : '';
+        return `--sgb-pack-left:${userPackSide(t,light)};--sgb-pack-right:${userPackSide(t,light,true)};--sgb-pack-divider-left:${userPackSide(t,light,false,true)};--sgb-pack-divider-right:${userPackSide(t,light,true,true)};--sgb-pack-glyph:${userPackSvgUrl(userPackMotif(t.motif,a,b,c),'0 0 24 24')};--sgb-pack-border:rgba(${rgb(a)},${light ? '.30' : '.32'});--sgb-pack-ink:${userPackTextPatch(t,light).textColor};--sgb-pack-surface-top:${rgb(light?lightTop:darkTop)};--sgb-pack-surface-bottom:${rgb(light?lightBottom:darkBottom)};` + ornaments;
       };
       const centered = t.align === 'center';
       // The legacy Sakura circle already contains faint alpha; use it unchanged.
@@ -1462,16 +1456,12 @@
       css += `@media(max-width:620px){${rule(s,`--sgb-pack-scene-height:${t.sceneMobile}px;--sgb-pack-scene-gap:${(t.sceneMobile*t.sceneRatio/2+10).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneMobile+8}px;--sgb-pack-divider-height:30px;`)}}`;
     }
     css += rule(scene, `content:""!important;display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-novel-sep-box-height)!important;min-height:var(--sgb-novel-sep-box-height)!important;border:0!important;border-radius:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-art),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;background-repeat:no-repeat!important;`);
-    const gracefulBase = base.replace('[data-sgb-ui-style^="pack29-"]', ':is([data-sgb-ui-style="pack29-usagi-school"],[data-sgb-ui-style="pack29-hope-card"])');
+    const gracefulBase = base.replace('[data-sgb-ui-style^="pack29-"]', '[data-sgb-ui-style="pack29-usagi-school"]');
     const gracefulScene = scene.replace(base, gracefulBase);
     // Keep every charm in a fixed-aspect layer; only the graceful lines stretch.
     css += rule(gracefulScene, 'background-image:var(--sgb-pack-art),var(--sgb-pack-charm),var(--sgb-pack-charm),var(--sgb-pack-soft-star),var(--sgb-pack-soft-star),var(--sgb-pack-soft-glint),var(--sgb-pack-soft-glint),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),var(--sgb-pack-charm-width) var(--sgb-pack-charm-height),var(--sgb-pack-charm-width) var(--sgb-pack-charm-height),9px 9px,9px 9px,4px 4px,4px 4px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(34% - var(--sgb-pack-scene-gap) * .68 + var(--sgb-ornament-shift,0px)) calc(50% + 8px),calc(66% + var(--sgb-pack-scene-gap) * .68 + var(--sgb-ornament-shift,0px)) calc(50% + 8px),calc(16% - var(--sgb-pack-scene-gap) * .32 + var(--sgb-ornament-shift,0px)) calc(50% + 2px),calc(84% + var(--sgb-pack-scene-gap) * .32 + var(--sgb-ornament-shift,0px)) calc(50% + 2px),calc(25% - var(--sgb-pack-scene-gap) * .5 + var(--sgb-ornament-shift,0px)) calc(50% + 3px),calc(75% + var(--sgb-pack-scene-gap) * .5 + var(--sgb-ornament-shift,0px)) calc(50% + 3px),left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
     css += rule(base+'[data-sgb-markdown-decor="on"] main [data-sgb-message-group] .wrtn-markdown hr', 'display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-pack-divider-height)!important;min-height:var(--sgb-pack-divider-height)!important;margin:.55em 0 .8em!important;border:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-glyph),var(--sgb-pack-divider-left),var(--sgb-pack-divider-right)!important;background-repeat:no-repeat!important;background-size:24px 24px,calc(50% - 21px) 28px,calc(50% - 21px) 28px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
     css += rule(gracefulBase+'[data-sgb-markdown-decor="on"] main [data-sgb-message-group] .wrtn-markdown hr', 'background-image:var(--sgb-pack-glyph),var(--sgb-pack-divider-charm),var(--sgb-pack-divider-charm),var(--sgb-pack-soft-glint),var(--sgb-pack-soft-glint),var(--sgb-pack-divider-left),var(--sgb-pack-divider-right)!important;background-size:var(--sgb-pack-glyph-width) 26px,8px 8px,8px 8px,5px 5px,5px 5px,calc(50% - 42px) 28px,calc(50% - 42px) 28px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(50% - 29px + var(--sgb-ornament-shift,0px)) center,calc(50% + 29px + var(--sgb-ornament-shift,0px)) center,calc(24% + var(--sgb-ornament-shift,0px)) center,calc(76% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
-    // Preserve the original Hope Card artwork; winged hearts decorate only the side lines and divider.
-    const hopeBase = `html.${CLS_ACTIVE}[data-sgb-ui-style="pack29-hope-card"]`;
-    css += rule(scene.replace(base, hopeBase), 'background-image:var(--sgb-pack-art),var(--sgb-pack-glyph),var(--sgb-pack-glyph),var(--sgb-pack-soft-glint),var(--sgb-pack-soft-glint),var(--sgb-pack-divider-charm),var(--sgb-pack-divider-charm),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),28px auto,28px auto,5px 5px,5px 5px,3px 3px,3px 3px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(34% - var(--sgb-pack-scene-gap) * .68 + var(--sgb-ornament-shift,0px)) calc(50% + 10px),calc(66% + var(--sgb-pack-scene-gap) * .68 + var(--sgb-ornament-shift,0px)) calc(50% + 10px),calc(16% - var(--sgb-pack-scene-gap) * .32 + var(--sgb-ornament-shift,0px)) calc(50% - 3px),calc(84% + var(--sgb-pack-scene-gap) * .32 + var(--sgb-ornament-shift,0px)) calc(50% - 3px),calc(24% - var(--sgb-pack-scene-gap) * .48 + var(--sgb-ornament-shift,0px)) calc(50% + 5px),calc(76% + var(--sgb-pack-scene-gap) * .48 + var(--sgb-ornament-shift,0px)) calc(50% + 5px),left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
-    css += rule(hopeBase+'[data-sgb-markdown-decor="on"] main [data-sgb-message-group] .wrtn-markdown hr', 'background-image:var(--sgb-pack-glyph),var(--sgb-pack-charm),var(--sgb-pack-charm),var(--sgb-pack-soft-glint),var(--sgb-pack-soft-glint),var(--sgb-pack-divider-left),var(--sgb-pack-divider-right)!important;background-size:32px auto,6px 6px,6px 6px,4px 4px,4px 4px,calc(50% - 33px) 28px,calc(50% - 33px) 28px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(30% + var(--sgb-ornament-shift,0px)) center,calc(70% + var(--sgb-ornament-shift,0px)) center,calc(15% + var(--sgb-ornament-shift,0px)) calc(50% - 1px),calc(85% + var(--sgb-ornament-shift,0px)) calc(50% - 1px),left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
     css += rule(base+' main [data-sgb-message-group] .wrtn-markdown hr::before,'+base+' main [data-sgb-message-group] .wrtn-markdown hr::after', 'content:none!important;display:none!important;');
     css += rule(base+' main [data-sgb-input-host]', 'background:transparent!important;background-image:none!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;');
     css += rule(base+' main [data-sgb-input-host]::before,'+base+' main [data-sgb-input-host]::after,'+base+' main [data-sgb-input-box]::after','content:none!important;display:none!important;');
