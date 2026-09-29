@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         🖼️ CSP - Generated Image Background Blur (배경 이미지&테마)
 // @namespace    crack-scene-painter-background-borderless
-// @version      4.3.20
-// @description  다크/라이트와 소설형/채팅형을 자동 구분해 배경·테마를 적용하고, PEARLWAVE와 해양 테마의 장식 및 채팅창 색상을 제공하며, 기존/추가 테마 접기와 시나모롤·치이카와·샤오랑·체리·키라라·세일러문 테마를 제공합니다.
+// @version      4.3.25
+// @description  자동 장면 배경·다크/라이트·소설/채팅 설정을 유지하고, 기존 34개·추가 51개 테마를 접기·펼치기로 제공하며, 사용자 이미지 31개 테마의 장식선과 전용 채팅창 이미지를 포함합니다.
 // @match        https://crack.wrtn.ai/*
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
 // @run-at       document-idle
