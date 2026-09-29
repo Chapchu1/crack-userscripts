@@ -12,10 +12,10 @@ Tampermonkey에서 바로 설치하고 GitHub를 통해 자동 업데이트할 �
 | Crack TXT → ChatGPT 전송기 (모바일) | 1.3.3 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-txt-chatgpt-mobile.user.js) |
 | ✨ Crack Muse Writer (AI 답변 커스텀) | 5.2.18 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-muse-writer.user.js) |
 | Crack Profile Box (크랙 프로필 박스) | 1.2.3 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-profile-box.user.js) |
-| 🖼️ CSP — 생성 이미지 배경·테마 | 4.3.25 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-theme-background.user.js) |
-| 🖼️ Crack Custom Room — 직접 지정 이미지 배경·테마 | 4.1.5 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-custom-room-background.user.js) |
+| 🖼️ CSP — 생성 이미지 배경·테마 | 4.3.26 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-theme-background.user.js) |
+| 🖼️ Crack Custom Room — 직접 지정 이미지 배경·테마 | 4.1.6 | [설치하기](https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-custom-room-background.user.js) |
 
-배경·테마 스크립트는 사용하는 배경 방식에 맞는 하나를 선택하세요. 총 85개 테마를 제공하며, 캐릭터 장식과 채팅창 이미지는 자동으로 불러옵니다. 이미지 ZIP을 따로 설치할 필요가 없습니다. [테마 설치 안내](THEMES-INSTALL.md)
+배경·테마 스크립트는 사용하는 배경 방식에 맞는 하나를 선택하세요. 총 78개 테마를 제공하며, 캐릭터 장식과 채팅창 이미지는 자동으로 불러옵니다. 이미지 ZIP을 따로 설치할 필요가 없습니다. [테마 설치 안내](THEMES-INSTALL.md)
 
 ## 자동 업데이트
 

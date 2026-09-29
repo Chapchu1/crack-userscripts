@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         🖼️ CSP - Generated Image Background Blur (배경 이미지&테마)
 // @namespace    crack-scene-painter-background-borderless
-// @version      4.3.25
-// @description  자동 장면 배경·다크/라이트·소설/채팅 설정을 유지하고, 기존 34개·추가 51개 테마를 접기·펼치기로 제공하며, 사용자 이미지 31개 테마의 장식선과 전용 채팅창 이미지를 포함합니다.
+// @version      4.3.26
+// @description  자동 장면 배경·다크/라이트·소설/채팅 설정을 유지하고, 기존 34개·추가 44개 테마를 접기·펼치기로 제공하며, 사용자 이미지 24개 테마의 장식선과 전용 채팅창 이미지를 포함합니다.
 // @match        https://crack.wrtn.ai/*
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
 // @run-at       document-idle
@@ -13,6 +13,7 @@
 // @supportURL   https://github.com/Chapchu1/crack-userscripts/issues
 // ==/UserScript==
 
+// 2026-09-29: 새 테마 채팅창 축소·투명도 조절, 중앙 마법진 확대, 유치원 모자 장식, 선택한 7개 테마 삭제.
 // 2026-09-29: 테마 이미지 자동 다운로드·캐시 적용. 별도 이미지 팩 설치 불필요.
 // 2026-09-29: 원작자 4.0.6.2 공통 업데이트 병합 (추가 테마·전용 배경 기능 유지).
 // UI 디자인 참고 출처 (Design reference / credit):
@@ -54,7 +55,7 @@
   }
 
   const SCRIPT_NAME = 'CSP Borderless Background Blur';
-  const VERSION = '4.3.25';
+  const VERSION = '4.3.26';
   const SGB_MUTATION_BATCH_MS = 32;
 
   // User artwork: original filenames are the visible theme names.
@@ -75,8 +76,9 @@
       "sceneHeight": 68,
       "sceneMobile": 60,
       "sceneRatio": 1.475369,
-      "chatHeight": 82,
-      "chatRatio": 1.612108
+      "chatHeight": 44,
+      "chatRatio": 1.612108,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-sess-kikyo-2",
@@ -94,27 +96,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 1.042889,
-      "chatHeight": 82,
-      "chatRatio": 1.612108
-    },
-    {
-      "value": "pack29-sess-profile",
-      "label": "셋쇼마루 옆모습",
-      "group": "셋쇼마루&슈슈룬",
-      "desc": "초승달 · 은빛 별빛",
-      "art": "a61ce0d916de0",
-      "chatArt": "a6db57c35819b",
-      "chatName": "셋쇼마루 채팅창(하단)",
-      "align": "bottom",
-      "motif": "crescent",
-      "accent": "#d4cff0",
-      "secondary": "#e3d4a5",
-      "highlight": "#edc0ce",
-      "sceneHeight": 59,
-      "sceneMobile": 51,
-      "sceneRatio": 1.781022,
-      "chatHeight": 82,
-      "chatRatio": 1.612108
+      "chatHeight": 44,
+      "chatRatio": 1.612108,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-sess-sword",
@@ -132,8 +116,9 @@
       "sceneHeight": 59,
       "sceneMobile": 51,
       "sceneRatio": 1.781022,
-      "chatHeight": 82,
-      "chatRatio": 1.612108
+      "chatHeight": 44,
+      "chatRatio": 1.612108,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-sesshomaru",
@@ -151,8 +136,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.692857,
-      "chatHeight": 82,
-      "chatRatio": 1.612108
+      "chatHeight": 44,
+      "chatRatio": 1.612108,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-sugar-rune",
@@ -170,8 +156,9 @@
       "sceneHeight": 68,
       "sceneMobile": 60,
       "sceneRatio": 1.403893,
-      "chatHeight": 82,
-      "chatRatio": 1.156051
+      "chatHeight": 44,
+      "chatRatio": 1.156051,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-touya-yukito",
@@ -189,27 +176,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 1.033898,
-      "chatHeight": 82,
-      "chatRatio": 1.104072
-    },
-    {
-      "value": "pack29-yue-profile",
-      "label": "유에 옆모습",
-      "group": "유에",
-      "desc": "초승달 · 은빛 별빛",
-      "art": "aaf1a62bfdec9",
-      "chatArt": "a396741605753",
-      "chatName": "유에 채팅창(중앙)",
-      "align": "center",
-      "motif": "crescent",
-      "accent": "#c6dcec",
-      "secondary": "#cfcbed",
-      "highlight": "#eef0f9",
-      "sceneHeight": 80,
-      "sceneMobile": 72,
-      "sceneRatio": 0.989071,
-      "chatHeight": 84,
-      "chatRatio": 0.995772
+      "chatHeight": 44,
+      "chatRatio": 1.104072,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-yue-card",
@@ -227,8 +196,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.644495,
-      "chatHeight": 84,
-      "chatRatio": 0.995772
+      "chatHeight": 0,
+      "chatRatio": 0.995772,
+      "chatOpacity": 0.14
     },
     {
       "value": "pack29-yue",
@@ -246,65 +216,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 1.00274,
-      "chatHeight": 84,
-      "chatRatio": 0.995772
-    },
-    {
-      "value": "pack29-yue-touya",
-      "label": "유에x도진",
-      "group": "유에",
-      "desc": "날개 · 하트",
-      "art": "ae719bc67505e",
-      "chatArt": "a78b290343750",
-      "chatName": "유에x도진 채팅창(하단)",
-      "align": "bottom",
-      "motif": "wingheart",
-      "accent": "#d5cce9",
-      "secondary": "#c6d9c8",
-      "highlight": "#ead4b3",
-      "sceneHeight": 80,
-      "sceneMobile": 72,
-      "sceneRatio": 1.106572,
-      "chatHeight": 82,
-      "chatRatio": 1.318538
-    },
-    {
-      "value": "pack29-yue-eriol",
-      "label": "유에x에리얼",
-      "group": "유에",
-      "desc": "모래시계 · 나비",
-      "art": "aadbbb6b1f246",
-      "chatArt": "a3ee9cd0f63d0",
-      "chatName": "유에x에리얼 채팅창(하단)",
-      "align": "bottom",
-      "motif": "hourglass",
-      "accent": "#a9d5ee",
-      "secondary": "#c0b8e4",
-      "highlight": "#e1c796",
-      "sceneHeight": 80,
-      "sceneMobile": 72,
-      "sceneRatio": 0.652612,
-      "chatHeight": 82,
-      "chatRatio": 0.720991
-    },
-    {
-      "value": "pack29-yue-sakura",
-      "label": "유에x체리",
-      "group": "유에",
-      "desc": "날개 · 하트",
-      "art": "a6c3a63e89a73",
-      "chatArt": "a396741605753",
-      "chatName": "유에 채팅창(중앙)",
-      "align": "center",
-      "motif": "wingheart",
-      "accent": "#ecc1d6",
-      "secondary": "#cfcaed",
-      "highlight": "#f0d69f",
-      "sceneHeight": 68,
-      "sceneMobile": 60,
-      "sceneRatio": 1.333333,
-      "chatHeight": 84,
-      "chatRatio": 0.995772
+      "chatHeight": 0,
+      "chatRatio": 0.995772,
+      "chatOpacity": 0.14
     },
     {
       "value": "pack29-yue-kero",
@@ -322,8 +236,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.971014,
-      "chatHeight": 84,
-      "chatRatio": 0.995772
+      "chatHeight": 0,
+      "chatRatio": 0.995772,
+      "chatOpacity": 0.14
     },
     {
       "value": "pack29-hope-card",
@@ -331,7 +246,7 @@
       "group": "유에",
       "desc": "마법 카드 · 날개",
       "art": "adff246b28a08",
-      "chatArt": "a9ccd4b9f7df8",
+      "chatArt": "b863e267b26e1",
       "chatName": "호프 카드 채팅창(중앙)",
       "align": "center",
       "motif": "card",
@@ -341,8 +256,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.439458,
-      "chatHeight": 84,
-      "chatRatio": 0.990528
+      "chatHeight": 0,
+      "chatRatio": 0.997920997920998,
+      "chatOpacity": 1
     },
     {
       "value": "pack29-usagi-bouquet",
@@ -360,8 +276,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.782677,
-      "chatHeight": 82,
-      "chatRatio": 1.090452
+      "chatHeight": 44,
+      "chatRatio": 1.090452,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-usagi-baby",
@@ -379,27 +296,29 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.803965,
-      "chatHeight": 82,
-      "chatRatio": 1.090452
+      "chatHeight": 44,
+      "chatRatio": 1.090452,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-usagi-school",
       "label": "유치원 우사기",
       "group": "쿠로미&우사기",
-      "desc": "파스텔 가랜드 · 꽃",
+      "desc": "유치원 모자 · 파스텔 장식선",
       "art": "a93dbee43b48e",
       "chatArt": "a9e172e7ffb31",
       "chatName": "우사기 채팅창(하단)",
       "align": "bottom",
-      "motif": "bunting",
+      "motif": "schoolhat",
       "accent": "#efd694",
       "secondary": "#bbd5e8",
       "highlight": "#efc4ce",
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.83908,
-      "chatHeight": 82,
-      "chatRatio": 1.090452
+      "chatHeight": 44,
+      "chatRatio": 1.090452,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-kuromi",
@@ -417,8 +336,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.811918,
-      "chatHeight": 82,
-      "chatRatio": 1.038806
+      "chatHeight": 44,
+      "chatRatio": 1.038806,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-kuromi-melody",
@@ -436,8 +356,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 1.146127,
-      "chatHeight": 82,
-      "chatRatio": 1.176685
+      "chatHeight": 44,
+      "chatRatio": 1.176685,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-gojo-dark",
@@ -455,8 +376,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.694497,
-      "chatHeight": 82,
-      "chatRatio": 1.019499
+      "chatHeight": 44,
+      "chatRatio": 1.019499,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-gojo-dark-2",
@@ -474,46 +396,9 @@
       "sceneHeight": 59,
       "sceneMobile": 51,
       "sceneRatio": 1.819193,
-      "chatHeight": 82,
-      "chatRatio": 1.019499
-    },
-    {
-      "value": "pack29-gojo-light",
-      "label": "고죠 Light",
-      "group": "주술회전",
-      "desc": "결정 · 푸른 별빛",
-      "art": "a962457b6a502",
-      "chatArt": "a02f91dc2b16f",
-      "chatName": "고죠 채팅창(하단)",
-      "align": "bottom",
-      "motif": "crystal",
-      "accent": "#cee8f5",
-      "secondary": "#b6c8ee",
-      "highlight": "#f0f6ff",
-      "sceneHeight": 80,
-      "sceneMobile": 72,
-      "sceneRatio": 0.580032,
-      "chatHeight": 82,
-      "chatRatio": 1.019499
-    },
-    {
-      "value": "pack29-gojo-geto-rest",
-      "label": "고죠X게토 눕눕",
-      "group": "주술회전",
-      "desc": "인피니티 · 별무리",
-      "art": "a1e8410df0c74",
-      "chatArt": "ad93c58078201",
-      "chatName": "고죠X게토 채팅방(하단)",
-      "align": "bottom",
-      "motif": "infinity",
-      "accent": "#c7c5e4",
-      "secondary": "#b5d4e2",
-      "highlight": "#e5d3b0",
-      "sceneHeight": 80,
-      "sceneMobile": 72,
-      "sceneRatio": 0.74814,
-      "chatHeight": 82,
-      "chatRatio": 1.149137
+      "chatHeight": 44,
+      "chatRatio": 1.019499,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-gojo-geto-smile",
@@ -531,8 +416,9 @@
       "sceneHeight": 59,
       "sceneMobile": 51,
       "sceneRatio": 1.786885,
-      "chatHeight": 82,
-      "chatRatio": 1.149137
+      "chatHeight": 44,
+      "chatRatio": 1.149137,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-gojo-geto-v",
@@ -550,8 +436,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.979138,
-      "chatHeight": 82,
-      "chatRatio": 1.149137
+      "chatHeight": 44,
+      "chatRatio": 1.149137,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-meowth",
@@ -569,8 +456,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.878683,
-      "chatHeight": 82,
-      "chatRatio": 1.722359
+      "chatHeight": 44,
+      "chatRatio": 1.722359,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-ditto",
@@ -588,8 +476,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.800971,
-      "chatHeight": 82,
-      "chatRatio": 1.122186
+      "chatHeight": 44,
+      "chatRatio": 1.122186,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-terriermon",
@@ -607,8 +496,9 @@
       "sceneHeight": 68,
       "sceneMobile": 60,
       "sceneRatio": 1.294479,
-      "chatHeight": 82,
-      "chatRatio": 1.461538
+      "chatHeight": 44,
+      "chatRatio": 1.461538,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-tokomon",
@@ -626,8 +516,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 0.925595,
-      "chatHeight": 82,
-      "chatRatio": 1.813456
+      "chatHeight": 44,
+      "chatRatio": 1.813456,
+      "chatOpacity": 0.38
     },
     {
       "value": "pack29-pikachu",
@@ -645,8 +536,9 @@
       "sceneHeight": 80,
       "sceneMobile": 72,
       "sceneRatio": 1.011158,
-      "chatHeight": 82,
-      "chatRatio": 1.697802
+      "chatHeight": 44,
+      "chatRatio": 1.697802,
+      "chatOpacity": 0.38
     }
   ]);
   const USER_THEME_INDEX = new Map(USER_THEME_PACK.map(theme => [theme.value, theme]));
@@ -1212,6 +1104,7 @@
 
   function userPackMotif(name, a, b, c) {
     const shapes = {
+      schoolhat: `<path d="M5.6 13v-2.4a6.4 6.4 0 0 1 12.8 0V13" fill="${a}" fill-opacity=".65"/><path d="M6 11.7q6 1.7 12 0v2q-6 1.6-12 0Z" fill="${c}" fill-opacity=".66" stroke="none"/><path d="M5.6 12.4C4 13 2 14 2 15.1c0 1.6 4.5 3 10 3s10-1.4 10-3c0-1.1-2-2.1-3.6-2.7-.9 2-11.9 2-12.8 0Z" fill="${a}" fill-opacity=".72"/><path d="M11.2 5.3C9.6 6.7 9 8.4 9 10" stroke="${c}" stroke-opacity=".78"/><path d="m17.7 13.8 2.2 2.2-2.4-.2-.6 2-1-3.3" fill="${b}" stroke="${b}" stroke-width=".7"/>`,
       crescent: `<path d="M16 2.6C7 2 4.8 15 14 18.4A8.3 8.3 0 1 1 16 2.6Z" fill="${a}" fill-opacity=".24"/><path d="m19 5 .9 2.2 2.3.8-2.3.8L19 11l-.8-2.2L16 8l2.2-.8Z" fill="${c}"/>`,
       feather: `<path d="M5 21C6 14 10 7 19 2c3 8-1 15-9 15l-3 3" fill="${b}" fill-opacity=".14"/><path d="m6 20 9-12m-5 7 5 .2m-3-4 4 .1M9 15l-.3-4"/>`,
       blossom: `<path d="M12 12C3 9 8 0 12 7c4-7 10 2 2 5 8-1 6 9 0 4-1 8-10 3-5-1-8 2-7-8 0-4" fill="${a}" fill-opacity=".18"/><circle cx="12" cy="12" r="1.9" fill="${c}" stroke="none"/>`,
@@ -1242,6 +1135,10 @@
     const a = mix(theme.accent), b = mix(theme.secondary), c = mix(theme.highlight);
     const y = divider ? 24 : 44, height = divider ? 48 : 88;
     const variant = theme.motif;
+    if (variant === 'schoolhat') {
+      const line = `<defs><linearGradient id="school" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="160" y2="0"><stop stop-color="${a}" stop-opacity="0"/><stop offset=".3" stop-color="${a}" stop-opacity=".6"/><stop offset="1" stop-color="${b}" stop-opacity=".8"/></linearGradient></defs><path d="M0 24H160" fill="none" stroke="url(#school)" stroke-width=".85" vector-effect="non-scaling-stroke"/><circle cx="101" cy="24" r="1.7" fill="${c}"/><circle cx="111" cy="24" r="1" fill="${b}"/>`;
+      return userPackSvgUrl(right ? `<g transform="translate(160 0) scale(-1 1)">${line}</g>` : line, '0 0 160 48', true);
+    }
     const calm = ['crescent','feather','filigree','blade','hourglass','infinity','orbit','crystal'].includes(variant);
     const path = calm ? `M4 ${y}H436` : `M4 ${y}C92 ${y-3} 124 ${y+4} 185 ${y}S319 ${y-3} 436 ${y}`;
     const curl = calm
@@ -1505,7 +1402,7 @@
     const scene = `${base} main .flex-col-reverse > [data-message-group-id][data-sgb-novel-group]:not(:last-child)::before`;
     const rule = (selector, declarations) => `${selector}{${declarations}}`;
     const rgb = hex => [1,3,5].map(i => parseInt(hex.slice(i,i+2),16)).join(',');
-    let css = '\n/* 2026-09-29: user artwork pack, 31 themes. Selected artwork loads automatically. */\n';
+    let css = '\n/* 2026-09-29: 24 user themes; small translucent bottom artwork and large centered circles. */\n';
     css += rule(base, '--sgb-pack-art:none;--sgb-pack-chat-art:none;');
     css += rule(base, '--sgb-novel-sep-content:"";--sgb-novel-sep-margin:10px clamp(8px,2vw,22px) 16px;--sgb-novel-sep-bg:none;--sgb-novel-sep-shadow:none;--sgb-novel-sep-border-top:0;--sgb-novel-sep-border-bottom:0;--sgb-pack-divider-height:34px;');
     for (const t of USER_THEME_PACK) {
@@ -1518,16 +1415,22 @@
         const c = light ? userPackMix(t.highlight,'#23334b',.51) : t.highlight;
         return `--sgb-pack-left:${userPackSide(t,light)};--sgb-pack-right:${userPackSide(t,light,true)};--sgb-pack-divider-left:${userPackSide(t,light,false,true)};--sgb-pack-divider-right:${userPackSide(t,light,true,true)};--sgb-pack-glyph:${userPackSvgUrl(userPackMotif(t.motif,a,b,c))};--sgb-pack-border:rgba(${rgb(a)},${light ? '.30' : '.32'});--sgb-pack-ink:${userPackTextPatch(t,light).textColor};--sgb-pack-surface-top:${rgb(light?lightTop:darkTop)};--sgb-pack-surface-bottom:${rgb(light?lightBottom:darkBottom)};`;
       };
-      css += rule(s, `--sgb-pack-scene-height:${t.sceneHeight}px;--sgb-pack-scene-gap:${(t.sceneHeight*t.sceneRatio/2+12).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneHeight+8}px;--sgb-pack-chat-height:${t.chatHeight}px;--sgb-pack-chat-align:${t.align};` + colors(false));
+      const centered = t.align === 'center';
+      // The legacy Sakura circle already contains faint alpha; use it unchanged.
+      css += rule(s, `--sgb-pack-scene-height:${t.sceneHeight}px;--sgb-pack-scene-gap:${(t.sceneHeight*t.sceneRatio/2+12).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneHeight+8}px;--sgb-pack-chat-height:${centered ? '86%' : `min(${t.chatHeight}px,26%)`};--sgb-pack-chat-width:${centered ? 'min(180px,46%)' : 'min(120px,28%)'};--sgb-pack-chat-bottom:${centered ? '50%' : '0px'};--sgb-pack-chat-translate:${centered ? '50%' : '0%'};--sgb-pack-chat-opacity:${t.chatOpacity};` + colors(false));
       css += rule(s+'[data-sgb-theme="light"]', colors(true));
-      css += `@media(max-width:620px){${rule(s,`--sgb-pack-scene-height:${t.sceneMobile}px;--sgb-pack-scene-gap:${(t.sceneMobile*t.sceneRatio/2+10).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneMobile+8}px;--sgb-pack-chat-height:${t.chatHeight-10}px;--sgb-pack-divider-height:30px;`)}}`;
+      css += `@media(max-width:620px){${rule(s,`--sgb-pack-scene-height:${t.sceneMobile}px;--sgb-pack-scene-gap:${(t.sceneMobile*t.sceneRatio/2+10).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneMobile+8}px;--sgb-pack-divider-height:30px;`)}}`;
     }
     css += rule(scene, `content:""!important;display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-novel-sep-box-height)!important;min-height:var(--sgb-novel-sep-box-height)!important;border:0!important;border-radius:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-art),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;background-repeat:no-repeat!important;`);
+    const schoolScene = scene.replace('[data-sgb-ui-style^="pack29-"]', '[data-sgb-ui-style="pack29-usagi-school"]');
+    css += rule(schoolScene, 'background-image:var(--sgb-pack-art),var(--sgb-pack-glyph),var(--sgb-pack-glyph),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),22px 22px,22px 22px,max(0px,calc(50% - var(--sgb-pack-scene-gap) - 32px)) 28px,max(0px,calc(50% - var(--sgb-pack-scene-gap) - 32px)) 28px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(50% - var(--sgb-pack-scene-gap) - 17px + var(--sgb-ornament-shift,0px)) center,calc(50% + var(--sgb-pack-scene-gap) + 17px + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
     css += rule(base+'[data-sgb-markdown-decor="on"] main [data-sgb-message-group] .wrtn-markdown hr', 'display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-pack-divider-height)!important;min-height:var(--sgb-pack-divider-height)!important;margin:.55em 0 .8em!important;border:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-glyph),var(--sgb-pack-divider-left),var(--sgb-pack-divider-right)!important;background-repeat:no-repeat!important;background-size:24px 24px,calc(50% - 21px) 28px,calc(50% - 21px) 28px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
     css += rule(base+' main [data-sgb-message-group] .wrtn-markdown hr::before,'+base+' main [data-sgb-message-group] .wrtn-markdown hr::after', 'content:none!important;display:none!important;');
     css += rule(base+' main [data-sgb-input-host]', 'background:transparent!important;background-image:none!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;');
-    css += rule(base+' main [data-sgb-input-host]::before,'+base+' main [data-sgb-input-host]::after,'+base+' main [data-sgb-input-box]::before,'+base+' main [data-sgb-input-box]::after','content:none!important;display:none!important;');
-    css += rule(base+' main [data-sgb-input-box]', 'position:relative!important;box-sizing:border-box!important;width:var(--sgb-radio-input-width,100%)!important;max-width:none!important;min-width:0!important;flex-shrink:0!important;margin-left:0!important;margin-right:0!important;left:var(--sgb-radio-input-shift,0px)!important;right:auto!important;overflow:visible!important;border:1px solid var(--sgb-pack-border)!important;border-radius:14px!important;background:var(--sgb-pack-chat-art) center var(--sgb-pack-chat-align)/auto min(var(--sgb-pack-chat-height),100%) no-repeat,linear-gradient(180deg,rgba(var(--sgb-pack-surface-top),var(--sgb-ui-opacity,.96)),rgba(var(--sgb-pack-surface-bottom),var(--sgb-ui-opacity,.96)))!important;box-shadow:0 12px 38px rgba(0,0,0,.16)!important;backdrop-filter:blur(4px)!important;-webkit-backdrop-filter:blur(4px)!important;');
+    css += rule(base+' main [data-sgb-input-host]::before,'+base+' main [data-sgb-input-host]::after,'+base+' main [data-sgb-input-box]::after','content:none!important;display:none!important;');
+    css += rule(base+' main [data-sgb-input-box]', 'position:relative!important;box-sizing:border-box!important;width:var(--sgb-radio-input-width,100%)!important;max-width:none!important;min-width:0!important;flex-shrink:0!important;margin-left:0!important;margin-right:0!important;left:var(--sgb-radio-input-shift,0px)!important;right:auto!important;overflow:visible!important;isolation:isolate!important;border:1px solid var(--sgb-pack-border)!important;border-radius:14px!important;background:linear-gradient(180deg,rgba(var(--sgb-pack-surface-top),var(--sgb-ui-opacity,.96)),rgba(var(--sgb-pack-surface-bottom),var(--sgb-ui-opacity,.96)))!important;box-shadow:0 12px 38px rgba(0,0,0,.16)!important;backdrop-filter:blur(4px)!important;-webkit-backdrop-filter:blur(4px)!important;');
+    // Artwork has its own noninteractive layer, so text and buttons stay fully opaque.
+    css += rule(base+' main [data-sgb-input-box]::before', 'content:""!important;display:block!important;position:absolute!important;box-sizing:border-box!important;inset:auto!important;left:50%!important;bottom:var(--sgb-pack-chat-bottom)!important;width:var(--sgb-pack-chat-width)!important;height:var(--sgb-pack-chat-height)!important;min-width:0!important;min-height:0!important;max-width:100%!important;max-height:100%!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;transform:translate(-50%,var(--sgb-pack-chat-translate))!important;opacity:var(--sgb-pack-chat-opacity)!important;z-index:-1!important;pointer-events:none!important;background:var(--sgb-pack-chat-art) center/contain no-repeat!important;filter:none!important;animation:none!important;');
     css += rule(base+' main [data-sgb-input-box] :is(textarea,[contenteditable="true"])','color:var(--sgb-pack-ink)!important;-webkit-text-fill-color:var(--sgb-pack-ink)!important;caret-color:var(--sgb-pack-ink)!important;text-shadow:0 1px 3px rgba(0,0,0,.65)!important;');
     css += rule(base+'[data-sgb-theme="light"] main [data-sgb-input-box] :is(textarea,[contenteditable="true"])','text-shadow:0 1px 2px rgba(255,255,255,.8)!important;');
     css += rule(base+' main [data-sgb-input-box] .is-editor-empty:first-child:before','opacity:.86!important;color:var(--sgb-pack-ink)!important;-webkit-text-fill-color:var(--sgb-pack-ink)!important;');
@@ -1536,7 +1439,6 @@
     userPackCssCache = css;
     return css;
   }
-
 
 
   /**
