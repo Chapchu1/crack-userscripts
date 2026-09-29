@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🖼️ Crack Custom Room Image Background (배경 이미지&테마)
 // @namespace    crack-custom-room-background
-// @version      4.1.7
+// @version      4.1.8
 // @description  방별 직접 이미지 설정을 유지하고, 기존 34개·추가 44개 테마를 접기·펼치기로 제공하며, 사용자 이미지 24개 테마의 장식선과 전용 채팅창 이미지를 포함합니다.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
@@ -11,6 +11,7 @@
 // @homepageURL  https://github.com/Chapchu1/crack-userscripts
 // ==/UserScript==
 
+// 2026-09-29: 호프 카드의 날개 하트 장식, 유치원 우사기의 하트·별·곡선 장식선 적용.
 // 2026-09-29: 하단 캐릭터 약 30% 확대·라이트 모드 이미지 선명도 개선. 유에 마법진 크기 유지.
 // 2026-09-29: 새 테마 채팅창 축소·투명도 조절, 중앙 마법진 확대, 유치원 모자 장식, 선택한 7개 테마 삭제.
 // 2026-09-29: 테마 이미지 자동 다운로드·캐시 적용. 별도 이미지 팩 설치 불필요.
@@ -54,7 +55,7 @@
   }
 
   const SCRIPT_NAME = 'Custom Room Image Background';
-  const VERSION = '4.1.7';
+  const VERSION = '4.1.8';
   const SGB_MUTATION_BATCH_MS = 32;
 
   // User artwork: original filenames are the visible theme names.
@@ -252,12 +253,12 @@
       "value": "pack29-hope-card",
       "label": "호프 카드",
       "group": "유에",
-      "desc": "마법 카드 · 날개",
+      "desc": "날개 하트 · 별빛 곡선",
       "art": "adff246b28a08",
       "chatArt": "b863e267b26e1",
       "chatName": "호프 카드 채팅창(중앙)",
       "align": "center",
-      "motif": "card",
+      "motif": "hopewings",
       "accent": "#f0c0d6",
       "secondary": "#e8d49a",
       "highlight": "#d1e6dc",
@@ -315,7 +316,7 @@
       "value": "pack29-usagi-school",
       "label": "유치원 우사기",
       "group": "쿠로미&우사기",
-      "desc": "유치원 모자 · 파스텔 장식선",
+      "desc": "유치원 모자 · 하트와 별빛",
       "art": "a93dbee43b48e",
       "chatArt": "a9e172e7ffb31",
       "chatName": "우사기 채팅창(하단)",
@@ -1127,6 +1128,10 @@
 
   function userPackMotif(name, a, b, c) {
     const shapes = {
+      hopewings: `<g fill="${c}" fill-opacity=".20" stroke="${c}" stroke-width="1.05"><path d="M11 12.5C7.5 12 4.2 8.5 1.4 6.8c-.2 3.1 1.4 5.4 4.2 6.7-1.5-.2-2.6-.6-3.6-1.2.7 2.3 2.8 3.7 5.5 3.9-1 .3-2 .3-2.8.1 1.1 1.9 3.4 2.3 6.5 1.1Z"/><path d="M21 12.5c3.5-.5 6.8-4 9.6-5.7.2 3.1-1.4 5.4-4.2 6.7 1.5-.2 2.6-.6 3.6-1.2-.7 2.3-2.8 3.7-5.5 3.9 1 .3 2 .3 2.8.1-1.1 1.9-3.4 2.3-6.5 1.1Z"/><path d="m5.6 13.5 4.7 1.5m-2.8 1.2 2.8.3m16.1-3-4.7 1.5m2.8 1.2-2.8.3" fill="none" stroke-opacity=".62" stroke-width=".75"/></g><path d="M16 20.5c-2.3-1.6-6-4.4-6-7.6 0-4 4.6-5.2 6-1.8 1.4-3.4 6-2.2 6 1.8 0 3.2-3.7 6-6 7.6Z" fill="${a}" fill-opacity=".38" stroke="${a}" stroke-width="1.15"/><path d="M12 12.3q.6-1.1 1.8-.8" fill="none" stroke="${a}" stroke-width=".75"/><path d="m16 1.4 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8Z" fill="${b}" stroke="none"/>`,
+      softheart: `<path d="M12 20.4C9.4 18.4 3 14.2 3 8.8c0-5.2 6.3-6.8 9-2.2 2.7-4.6 9-3 9 2.2 0 5.4-6.4 9.6-9 11.6Z" fill="${b}" fill-opacity=".22" stroke="${b}" stroke-width="1.7"/>`,
+      softstar: `<path d="m12 2.6 2.9 5.9 6.5.9-4.7 4.6 1.1 6.4-5.8-3-5.8 3 1.1-6.4-4.7-4.6 6.5-.9Z" fill="${c}" fill-opacity=".83" stroke="${c}" stroke-width=".65"/>`,
+      softglint: `<path d="M12 2c1.1 6.5 3.1 8.9 10 10-6.9 1.1-8.9 3.5-10 10C10.9 15.5 8.9 13.1 2 12c6.9-1.1 8.9-3.5 10-10Z" fill="${a}" stroke="none"/>`,
       schoolhat: `<path d="M5.6 13v-2.4a6.4 6.4 0 0 1 12.8 0V13" fill="${a}" fill-opacity=".65"/><path d="M6 11.7q6 1.7 12 0v2q-6 1.6-12 0Z" fill="${c}" fill-opacity=".66" stroke="none"/><path d="M5.6 12.4C4 13 2 14 2 15.1c0 1.6 4.5 3 10 3s10-1.4 10-3c0-1.1-2-2.1-3.6-2.7-.9 2-11.9 2-12.8 0Z" fill="${a}" fill-opacity=".72"/><path d="M11.2 5.3C9.6 6.7 9 8.4 9 10" stroke="${c}" stroke-opacity=".78"/><path d="m17.7 13.8 2.2 2.2-2.4-.2-.6 2-1-3.3" fill="${b}" stroke="${b}" stroke-width=".7"/>`,
       crescent: `<path d="M16 2.6C7 2 4.8 15 14 18.4A8.3 8.3 0 1 1 16 2.6Z" fill="${a}" fill-opacity=".24"/><path d="m19 5 .9 2.2 2.3.8-2.3.8L19 11l-.8-2.2L16 8l2.2-.8Z" fill="${c}"/>`,
       feather: `<path d="M5 21C6 14 10 7 19 2c3 8-1 15-9 15l-3 3" fill="${b}" fill-opacity=".14"/><path d="m6 20 9-12m-5 7 5 .2m-3-4 4 .1M9 15l-.3-4"/>`,
@@ -1158,8 +1163,9 @@
     const a = mix(theme.accent), b = mix(theme.secondary), c = mix(theme.highlight);
     const y = divider ? 24 : 44, height = divider ? 48 : 88;
     const variant = theme.motif;
-    if (variant === 'schoolhat') {
-      const line = `<defs><linearGradient id="school" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="160" y2="0"><stop stop-color="${a}" stop-opacity="0"/><stop offset=".3" stop-color="${a}" stop-opacity=".6"/><stop offset="1" stop-color="${b}" stop-opacity=".8"/></linearGradient></defs><path d="M0 24H160" fill="none" stroke="url(#school)" stroke-width=".85" vector-effect="non-scaling-stroke"/><circle cx="101" cy="24" r="1.7" fill="${c}"/><circle cx="111" cy="24" r="1" fill="${b}"/>`;
+    if (variant === 'schoolhat' || variant === 'hopewings') {
+      const primary = variant === 'schoolhat' ? b : c;
+      const line = `<defs><linearGradient id="school" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="160" y2="0"><stop stop-color="${primary}" stop-opacity="0"/><stop offset=".24" stop-color="${primary}" stop-opacity=".58"/><stop offset="1" stop-color="${primary}" stop-opacity=".88"/></linearGradient></defs><path d="${divider ? 'M0 24H160' : 'M0 14Q84 43 160 14'}" fill="none" stroke="url(#school)" stroke-width=".95" vector-effect="non-scaling-stroke"/>${divider ? '' : `<path d="M0 10Q82 29 160 11" fill="none" stroke="${a}" stroke-opacity=".20" stroke-width=".65" vector-effect="non-scaling-stroke"/>`}`;
       return userPackSvgUrl(right ? `<g transform="translate(160 0) scale(-1 1)">${line}</g>` : line, '0 0 160 48', true);
     }
     const calm = ['crescent','feather','filigree','blade','hourglass','infinity','orbit','crystal'].includes(variant);
@@ -1436,7 +1442,10 @@
         const a = light ? userPackMix(t.accent,'#23334b',.51) : t.accent;
         const b = light ? userPackMix(t.secondary,'#23334b',.51) : t.secondary;
         const c = light ? userPackMix(t.highlight,'#23334b',.51) : t.highlight;
-        return `--sgb-pack-left:${userPackSide(t,light)};--sgb-pack-right:${userPackSide(t,light,true)};--sgb-pack-divider-left:${userPackSide(t,light,false,true)};--sgb-pack-divider-right:${userPackSide(t,light,true,true)};--sgb-pack-glyph:${userPackSvgUrl(userPackMotif(t.motif,a,b,c))};--sgb-pack-border:rgba(${rgb(a)},${light ? '.30' : '.32'});--sgb-pack-ink:${userPackTextPatch(t,light).textColor};--sgb-pack-surface-top:${rgb(light?lightTop:darkTop)};--sgb-pack-surface-bottom:${rgb(light?lightBottom:darkBottom)};`;
+        const graceful = t.motif === 'schoolhat' || t.motif === 'hopewings';
+        const winged = t.motif === 'hopewings';
+        const ornaments = graceful ? `--sgb-pack-charm:${userPackSvgUrl(userPackMotif(winged ? 'hopewings' : 'softheart',a,b,c),winged ? '0 0 32 24' : '0 0 24 24')};--sgb-pack-charm-width:${winged ? 28 : 14}px;--sgb-pack-charm-height:${winged ? 21 : 14}px;--sgb-pack-soft-star:${userPackSvgUrl(userPackMotif('softstar',a,b,winged ? b : c))};--sgb-pack-soft-glint:${userPackSvgUrl(userPackMotif('softglint',a,b,c))};--sgb-pack-divider-charm:${userPackSvgUrl(userPackMotif(winged ? 'softstar' : 'softheart',a,b,winged ? b : c))};--sgb-pack-glyph-width:${winged ? 32 : 26}px;` : '';
+        return `--sgb-pack-left:${userPackSide(t,light)};--sgb-pack-right:${userPackSide(t,light,true)};--sgb-pack-divider-left:${userPackSide(t,light,false,true)};--sgb-pack-divider-right:${userPackSide(t,light,true,true)};--sgb-pack-glyph:${userPackSvgUrl(userPackMotif(t.motif,a,b,c),winged ? '0 0 32 24' : '0 0 24 24')};--sgb-pack-border:rgba(${rgb(a)},${light ? '.30' : '.32'});--sgb-pack-ink:${userPackTextPatch(t,light).textColor};--sgb-pack-surface-top:${rgb(light?lightTop:darkTop)};--sgb-pack-surface-bottom:${rgb(light?lightBottom:darkBottom)};` + ornaments;
       };
       const centered = t.align === 'center';
       // The legacy Sakura circle already contains faint alpha; use it unchanged.
@@ -1445,9 +1454,12 @@
       css += `@media(max-width:620px){${rule(s,`--sgb-pack-scene-height:${t.sceneMobile}px;--sgb-pack-scene-gap:${(t.sceneMobile*t.sceneRatio/2+10).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneMobile+8}px;--sgb-pack-divider-height:30px;`)}}`;
     }
     css += rule(scene, `content:""!important;display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-novel-sep-box-height)!important;min-height:var(--sgb-novel-sep-box-height)!important;border:0!important;border-radius:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-art),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;background-repeat:no-repeat!important;`);
-    const schoolScene = scene.replace('[data-sgb-ui-style^="pack29-"]', '[data-sgb-ui-style="pack29-usagi-school"]');
-    css += rule(schoolScene, 'background-image:var(--sgb-pack-art),var(--sgb-pack-glyph),var(--sgb-pack-glyph),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),22px 22px,22px 22px,max(0px,calc(50% - var(--sgb-pack-scene-gap) - 32px)) 28px,max(0px,calc(50% - var(--sgb-pack-scene-gap) - 32px)) 28px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(50% - var(--sgb-pack-scene-gap) - 17px + var(--sgb-ornament-shift,0px)) center,calc(50% + var(--sgb-pack-scene-gap) + 17px + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
+    const gracefulBase = base.replace('[data-sgb-ui-style^="pack29-"]', ':is([data-sgb-ui-style="pack29-usagi-school"],[data-sgb-ui-style="pack29-hope-card"])');
+    const gracefulScene = scene.replace(base, gracefulBase);
+    // Keep every charm in a fixed-aspect layer; only the graceful lines stretch.
+    css += rule(gracefulScene, 'background-image:var(--sgb-pack-art),var(--sgb-pack-charm),var(--sgb-pack-charm),var(--sgb-pack-soft-star),var(--sgb-pack-soft-star),var(--sgb-pack-soft-glint),var(--sgb-pack-soft-glint),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),var(--sgb-pack-charm-width) var(--sgb-pack-charm-height),var(--sgb-pack-charm-width) var(--sgb-pack-charm-height),9px 9px,9px 9px,4px 4px,4px 4px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(34% - var(--sgb-pack-scene-gap) * .68 + var(--sgb-ornament-shift,0px)) calc(50% + 8px),calc(66% + var(--sgb-pack-scene-gap) * .68 + var(--sgb-ornament-shift,0px)) calc(50% + 8px),calc(16% - var(--sgb-pack-scene-gap) * .32 + var(--sgb-ornament-shift,0px)) calc(50% + 2px),calc(84% + var(--sgb-pack-scene-gap) * .32 + var(--sgb-ornament-shift,0px)) calc(50% + 2px),calc(25% - var(--sgb-pack-scene-gap) * .5 + var(--sgb-ornament-shift,0px)) calc(50% + 3px),calc(75% + var(--sgb-pack-scene-gap) * .5 + var(--sgb-ornament-shift,0px)) calc(50% + 3px),left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
     css += rule(base+'[data-sgb-markdown-decor="on"] main [data-sgb-message-group] .wrtn-markdown hr', 'display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-pack-divider-height)!important;min-height:var(--sgb-pack-divider-height)!important;margin:.55em 0 .8em!important;border:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-glyph),var(--sgb-pack-divider-left),var(--sgb-pack-divider-right)!important;background-repeat:no-repeat!important;background-size:24px 24px,calc(50% - 21px) 28px,calc(50% - 21px) 28px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
+    css += rule(gracefulBase+'[data-sgb-markdown-decor="on"] main [data-sgb-message-group] .wrtn-markdown hr', 'background-image:var(--sgb-pack-glyph),var(--sgb-pack-divider-charm),var(--sgb-pack-divider-charm),var(--sgb-pack-soft-glint),var(--sgb-pack-soft-glint),var(--sgb-pack-divider-left),var(--sgb-pack-divider-right)!important;background-size:var(--sgb-pack-glyph-width) 26px,8px 8px,8px 8px,5px 5px,5px 5px,calc(50% - 42px) 28px,calc(50% - 42px) 28px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(50% - 29px + var(--sgb-ornament-shift,0px)) center,calc(50% + 29px + var(--sgb-ornament-shift,0px)) center,calc(24% + var(--sgb-ornament-shift,0px)) center,calc(76% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
     css += rule(base+' main [data-sgb-message-group] .wrtn-markdown hr::before,'+base+' main [data-sgb-message-group] .wrtn-markdown hr::after', 'content:none!important;display:none!important;');
     css += rule(base+' main [data-sgb-input-host]', 'background:transparent!important;background-image:none!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;');
     css += rule(base+' main [data-sgb-input-host]::before,'+base+' main [data-sgb-input-host]::after,'+base+' main [data-sgb-input-box]::after','content:none!important;display:none!important;');
