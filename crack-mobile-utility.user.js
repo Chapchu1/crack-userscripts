@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.7.1
-// @description  선택 통합 4.5.7.1: 원작자 4.5.7 테마 저장·미니사이드바 SVG·마크다운 제목·모바일 전체화면 입력 보완. 기존 대화 프로필·키보드 보정·단축어 편집·설정 디자인·CDN 라디오존데 유지.
+// @version      4.6.0.1
+// @description  4.6.0.1 통합: 원작자 4.6.0의 9/30 개편 대응·캐릭터/분기방·전송/초안·라존데 복구·문체 버튼·정보바 애니메이션·반복작업/메모리 최적화. 기존 키보드 보정·단축어 편집·대화 프로필·설정 디자인·작은 모델창 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL   none
@@ -11,9 +11,11 @@
 // @run-at       document-idle
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
 // @grant        unsafeWindow
 // @connect      old.rs.igx.kr
 // @connect      rs.igx.kr
+// @connect      igx-radiosonde-api-striker.b-cdn.net
 // @connect      radiosonde-api-striker.b-cdn.net
 // @connect      b-cdn.net
 // @connect      *.b-cdn.net
@@ -34,6 +36,11 @@
 // ==/UserScript==
 
 /*
+ * 4.6.0.1 변경: 원작자 4.6.0 공통 코어·캐릭터/분기방·전송·초안 정리 개선과 DOM/캐시 최적화 반영.
+ * 신규 라존데 전송/요청 큐·취소·캐시·최신 모델 탐색을 반영하고 사용자 모델 정렬/이전값 표시 보존.
+ * 문체 바로가기·정보바 숫자 애니메이션·전체화면/펼치기 SVG 및 유저노트 선택 보완.
+ * 기존 키보드·프로필·단축어·설정·메모리/출력·Wish 브리지를 보존.
+ * 검증: 구문/범위 정적 검사와 선택 함수의 VM 회귀 검사. 실제 Android 로그인 화면은 미검증.
  * 4.5.7.1 변경: 첨부된 원작자 4.5.7의 개선점을 4.5.5.27 통합본에 선별 반영.
  * 테마 쿠키 직접 저장 및 뒤늦은 순정 설정 자동 클릭 제거, 상태·접근성 동기화.
  * 미니사이드바의 원작자 SVG 적용(기존 프로필·Wish 하트·추가 도구 유지).
@@ -178,7 +185,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.7.1';
+    const VERSION = '4.6.0.1';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -425,6 +432,7 @@
         radiosonde: true,
         radiosondeLatency: true,
         dashboard: true,
+        dashboardNumberAnimation: true,
         dashboardSidebar: true,
         showUnavailableIntegrations: true,
         badgeChars: true,
@@ -551,6 +559,8 @@
         hotStart: 1900,
         editor: null,
         editorObserver: null,
+        placementObserver: null,
+        layoutDirty: true,
         editorHandlers: null,
         updateFrame: 0,
         delayedTimer: 0,
@@ -912,6 +922,9 @@
     function isEpisodePath() {
         return /^\/stories\/[^/?#]+\/episodes\/[^/?#]+/.test(location.pathname || '');
     }
+    function cmuIsCharacterChatPath(path = location.pathname || '') {
+        return /^\/characters\/[^/?#]+\/chats\/[^/?#]+/.test(path);
+    }
     function isChatRoomPath() {
         const path = location.pathname || '';
         return /\/stories\/[^/?#]+\/episodes\/[^/?#]+/.test(path) || /\/episodes\/[^/?#]+/.test(path) || /\/chats?\/[^/?#]+/.test(path);
@@ -995,7 +1008,8 @@
         const room = cmuRoomData(chatId);
         for (const msg of rows || []) {
             const id = messageIdOf(msg);
-            if (!id || (msg.chatId && String(msg.chatId) !== chatId)) continue;
+            // Branched rooms return inherited messages with the source room's chatId; rows come from this room's URL.
+            if (!id) continue;
             const previous = room.messages.get(id);
             room.messages.delete(id);
             room.messages.set(id, { ...previous, ...msg });
@@ -1036,7 +1050,7 @@
         try {
             const url = new URL(String(value || ''), location.href);
             if (!['crack-api.wrtn.ai', 'contents-api.wrtn.ai'].includes(url.hostname)) return null;
-            const match = url.pathname.match(/^\/(?:crack-gen|character-chat)\/v3\/chats\/([^/]+)\/messages(?:\/([^/]+))?\/?$/);
+            const match = url.pathname.match(/^\/(?:crack-gen|character-chat)\/(?:v3\/chats|character-chats)\/([^/]+)\/messages(?:\/([^/]+))?\/?$/);
             if (!match) return null;
             method = String(method || 'GET').toUpperCase();
             if (!['GET', 'PATCH', 'DELETE'].includes(method)) return null;
@@ -1093,13 +1107,20 @@
         if (!force && cached && Date.now() - cached.at < (cursor ? 60000 : 1600)) return cached.page;
         if (room.inflight.has(key)) return room.inflight.get(key);
         const task = (async () => {
-            const url = `https://crack-api.wrtn.ai/crack-gen/v3/chats/${encodeURIComponent(chatId)}/messages?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+            // Character chats (/characters/:id/chats/:chatId) use their own endpoint; v3/chats answers 404 there.
+            const resource = cmuIsCharacterChatPath() ? 'character-chats' : 'v3/chats';
+            // The head page is re-read on room entry and after generations; long messages make 100 rows ~280KB.
+            // Deeper pages (dashboard turn scans) keep 100 rows to limit the number of requests.
+            const limit = cursor ? 100 : 40;
+            const url = `https://crack-api.wrtn.ai/crack-gen/${resource}/${encodeURIComponent(chatId)}/messages?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
             // This layer deduplicates by revision; URL-only reuse could return a pre-edit response.
             const json = cmuAssertPayload(await apiGet(url, { roomId: chatId, dedupe: false }));
             if (!shouldRun() || getChatId() !== chatId) throw new Error('Room changed');
             if (room.revision !== revision) throw new Error('Message changed during request');
             if (!Array.isArray(json.data?.messages)) throw new Error('Invalid message page');
-            const page = { arr: json.data.messages, cursor: json.data.nextCursor || '', hasNext: json.data.hasNext === true };
+            // Character chat pages omit hasNext; a cursor means more pages.
+            const page = { arr: json.data.messages, cursor: json.data.nextCursor || '',
+                hasNext: json.data.hasNext === true || (json.data.hasNext === undefined && !!json.data.nextCursor) };
             cmuRememberMessages(chatId, page.arr);
             room.pages.set(cursor, { at: Date.now(), page });
             while (room.pages.size > 4) room.pages.delete(room.pages.keys().next().value);
@@ -1238,102 +1259,23 @@
     function messageIdOf(msg) {
         return String(msg?._id || msg?.id || msg?.messageId || msg?.messageID || msg?.uuid || '');
     }
-    function gmGetJson(url, timeoutMs = 15000) {
-        if (!shouldRun())
-            return Promise.reject(new Error('runtime disposed'));
-        return new Promise((resolve, reject) => {
-            if (typeof GM_xmlhttpRequest !== 'function') {
-                fetch(url, { headers: { accept: 'application/json' } })
-                    .then(res => {
-                    if (!res.ok)
-                        throw new Error(`HTTP ${res.status}`);
-                    return res.json();
-                })
-                    .then(resolve, reject);
-                return;
-            }
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url,
-                timeout: timeoutMs,
-                headers: { Accept: 'application/json' },
-                onload: (res) => {
-                    const status = Number(res.status) || 0;
-                    if (status && (status < 200 || status >= 300)) {
-                        reject(new Error(`HTTP ${status}`));
-                        return;
-                    }
-                    try {
-                        resolve(JSON.parse(res.responseText));
-                    }
-                    catch (err) {
-                        reject(err);
-                    }
-                },
-                onerror: () => reject(new Error('network error')),
-                ontimeout: () => reject(new Error('timeout')),
-            });
-        });
+    // Tampermonkey/Violentmonkey expose GM_xmlhttpRequest; Safari Userscripts and some mobile managers only GM.xmlHttpRequest.
+    function cmuGmXhrAvailable() {
+        if (typeof GM_xmlhttpRequest === 'function')
+            return true;
+        try { return typeof GM !== 'undefined' && typeof GM?.xmlHttpRequest === 'function'; } catch (_) { return false; }
     }
-    function gmGetRsJson(url, timeoutMs = 10000) {
-        if (!shouldRun())
-            return Promise.reject(new Error('runtime disposed'));
-        return new Promise((resolve, reject) => {
-            const requestUrl = String(url || '');
-            const parsePayload = (raw, fallback) => {
-                if (fallback && typeof fallback === 'object')
-                    return fallback;
-                if (typeof raw !== 'string' || !raw.trim())
-                    throw new Error('empty response');
-                return JSON.parse(raw);
-            };
-            if (typeof GM_xmlhttpRequest !== 'function') {
-                fetch(requestUrl, {
-                    method: 'GET',
-                    cache: 'no-store',
-                    headers: { accept: 'application/json' },
-                }).then(async res => {
-                    if (!res.ok)
-                        throw new Error(`HTTP ${res.status} @ ${res.url || requestUrl}`);
-                    return await res.json();
-                }).then(resolve, reject);
-                return;
-            }
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url: requestUrl,
-                timeout: timeoutMs,
-                anonymous: true,
-                headers: {
-                    Accept: 'application/json',
-                    'Cache-Control': 'no-cache',
-                    Pragma: 'no-cache',
-                },
-                onload: (res) => {
-                    const status = Number(res.status) || 0;
-                    const finalUrl = String(res.finalUrl || requestUrl);
-                    if (status && (status < 200 || status >= 300)) {
-                        reject(new Error(`HTTP ${status} @ ${finalUrl}`));
-                        return;
-                    }
-                    try {
-                        resolve(parsePayload(res.responseText, res.response));
-                    }
-                    catch (err) {
-                        reject(new Error(`JSON parse failed @ ${finalUrl}: ${err?.message || err}`));
-                    }
-                },
-                onerror: (res) => {
-                    const status = Number(res?.status) || 0;
-                    const finalUrl = String(res?.finalUrl || requestUrl);
-                    reject(new Error(`network error${status ? ` ${status}` : ''} @ ${finalUrl}`));
-                },
-                ontimeout: (res) => {
-                    const finalUrl = String(res?.finalUrl || requestUrl);
-                    reject(new Error(`timeout @ ${finalUrl}`));
-                },
-            });
-        });
+    function cmuGmXhr(details) {
+        if (typeof GM_xmlhttpRequest === 'function')
+            return GM_xmlhttpRequest(details);
+        let settled = false;
+        const once = fn => (...args) => { if (!settled) { settled = true; fn?.(...args); } };
+        const wrapped = { ...details, onload: once(details.onload), onerror: once(details.onerror),
+            ontimeout: once(details.ontimeout), onabort: once(details.onabort) };
+        const result = GM.xmlHttpRequest(wrapped);
+        // Promise-style managers may resolve without invoking callbacks.
+        Promise.resolve(result).then(res => { if (res && res.status !== undefined) wrapped.onload(res); }, err => wrapped.onerror(err));
+        return { abort() { settled = true; try { result?.abort?.(); } catch (_) { } } };
     }
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
@@ -1976,7 +1918,8 @@
       fill: none !important;
       stroke: currentColor !important;
     }
-    #${ID.settingsButton}.cmu-native-toolbar-btn svg {
+    #${ID.settingsButton}.cmu-native-toolbar-btn svg,
+    #${ID.fullscreenButton}.cmu-native-toolbar-btn svg {
       width: 16px !important;
       height: 16px !important;
       color: hsl(var(--line-gray-2, 0 0% 62%)) !important;
@@ -1987,12 +1930,7 @@
       justify-content: center !important;
       width: 16px !important;
       height: 16px !important;
-      line-height: 1 !important;
-      font-size: 15px !important;
-      font-weight: 700 !important;
-      color: hsl(var(--line-gray-2, 0 0% 62%)) !important;
       pointer-events: none !important;
-      transform: translateY(-.5px);
     }
 
     #${ID.composerExpandButton}.cmu-composer-expand-overlay {
@@ -2040,6 +1978,14 @@
     }
     #${ID.composerExpandButton}.cmu-composer-expand-overlay.cmu-composer-expand-visible {
       display: inline-flex !important;
+    }
+    #${ID.composerExpandButton}.cmu-composer-expand-overlay svg {
+      display: block !important;
+      width: 16px !important;
+      height: 16px !important;
+      fill: none !important;
+      stroke: currentColor !important;
+      pointer-events: none !important;
     }
     #${ID.composerExpandButton}.cmu-composer-expand-overlay:hover,
     #${ID.composerExpandButton}.cmu-composer-expand-overlay:focus-visible {
@@ -2989,6 +2935,22 @@
     body[data-theme="dark"] #chud-infobar,
     html[data-theme="dark"] #chud-infobar { color: rgba(255,255,255,.58); }
 
+    #chud-info-text .chud-num { display: inline-block; }
+    #chud-info-text .chud-num.chud-num-up { animation: chud-num-up .55s cubic-bezier(.2,.75,.3,1); }
+    #chud-info-text .chud-num.chud-num-down { animation: chud-num-down .55s cubic-bezier(.2,.75,.3,1); }
+    @keyframes chud-num-up {
+      0% { transform: translateY(40%) scale(1.14); opacity: .55; }
+      60% { transform: translateY(-8%) scale(1.06); opacity: 1; }
+      100% { transform: none; }
+    }
+    @keyframes chud-num-down {
+      0% { transform: translateY(-40%) scale(1.14); opacity: .55; }
+      60% { transform: translateY(8%) scale(1.06); opacity: 1; }
+      100% { transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #chud-info-text .chud-num { animation: none !important; }
+    }
     #chud-info-text {
       display: flex;
       align-items: center;
@@ -3408,7 +3370,8 @@
       .chud-lore-icon { width: 15.5px; height: 15.5px; }
     }
 
-    .crack-ui-empty-send-blocked {
+    /* The same button turns into ■ stop while generating; never dim the stop state. */
+    .crack-ui-empty-send-blocked:not(:has(path[d^="M6 6h12v12H6"])) {
       opacity: .50 !important;
       cursor: not-allowed !important;
       filter: grayscale(.22) !important;
@@ -3416,6 +3379,9 @@
     .crack-ui-empty-send-blocked svg { pointer-events: none !important; }
 
     .igx-inline-overlay-host { position: relative !important; }
+    .igx-inline-overlay-host.igx-inline-overlay-pad { padding-top: 28px !important; }
+    /* 7px from the padding edge leaves a 6px visual gap above the box's 1px border. */
+    #igx-live-popup.inline.igx-anchor-shell { top: auto !important; bottom: calc(100% + 7px) !important; }
     #igx-live-popup {
       --bg-main: rgba(20, 20, 20, .92);
       --border-main: rgba(255, 255, 255, .12);
@@ -3801,6 +3767,9 @@
     `);
     function applyState() {
         const html = document.documentElement;
+        const setRootAttribute = (name, value) => {
+            if (html.getAttribute(name) !== value) html.setAttribute(name, value);
+        };
         const active = shouldRun();
         // 유저노트가 떠 있는 동안에는 CMU의 페이지 레이아웃/합성 레이어를
         // 통째로 휴면시켜 iOS 선택 손잡이가 순정 좌표계만 사용하게 한다.
@@ -3819,7 +3788,7 @@
         const themeChatBorderlessOnly = themeActive && cmuThemeShouldUseChatBorderlessOnly();
         const themeFxActive = themeActive;
         html.classList.toggle('cmu-theme-active', themeActive);
-        html.setAttribute('data-cmu-external-theme', externalThemeProvider || 'none');
+        setRootAttribute('data-cmu-external-theme', externalThemeProvider || 'none');
         if (!externalThemeLocked) {
             html.classList.toggle('sgb-bg-room', themeActive);
             html.classList.toggle('sgb-bg-active', themeActive);
@@ -3833,28 +3802,28 @@
         html.classList.toggle('cmu-hide-stat-bar', layoutActive && isChatRoomPath() && isMobileLike() && !!settings.hideStatBar);
         if (!userNoteOpen)
             scheduleCmuStatBarMark();
-        html.setAttribute('data-cmu-theme', cmuTheme);
-        html.setAttribute('data-cmu-ui-style', 'borderless');
+        setRootAttribute('data-cmu-theme', cmuTheme);
+        setRootAttribute('data-cmu-ui-style', 'borderless');
         html.removeAttribute('data-cmu-selected-ui-style');
-        html.setAttribute('data-cmu-chat-borderless-only', themeChatBorderlessOnly ? '1' : '0');
-        html.setAttribute('data-cmu-native-ui-mode', cmuThemeUiModeForSettings() || 'unknown');
-        html.setAttribute('data-cmu-theme-dialogue', themeFxActive && settings.themeDialogue !== false ? 'on' : 'off');
-        html.setAttribute('data-cmu-theme-thought', themeFxActive && settings.themeThought !== false ? 'on' : 'off');
-        html.setAttribute('data-cmu-theme-italic', themeFxActive && settings.themeItalic !== false ? 'on' : 'off');
-        html.setAttribute('data-cmu-theme-strong', themeFxActive && settings.themeStrong !== false ? 'on' : 'off');
-        html.setAttribute('data-cmu-theme-code', themeFxActive && settings.themeCode !== false ? 'on' : 'off');
-        html.setAttribute('data-cmu-theme-markdown', themeFxActive && settings.themeMarkdown !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-chat-borderless-only', themeChatBorderlessOnly ? '1' : '0');
+        setRootAttribute('data-cmu-native-ui-mode', cmuThemeUiModeForSettings() || 'unknown');
+        setRootAttribute('data-cmu-theme-dialogue', themeFxActive && settings.themeDialogue !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-theme-thought', themeFxActive && settings.themeThought !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-theme-italic', themeFxActive && settings.themeItalic !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-theme-strong', themeFxActive && settings.themeStrong !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-theme-code', themeFxActive && settings.themeCode !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-theme-markdown', themeFxActive && settings.themeMarkdown !== false ? 'on' : 'off');
         if (!externalThemeLocked) {
-            html.setAttribute('data-sgb-theme', cmuTheme);
-            html.setAttribute('data-sgb-ui-style', 'borderless');
-            html.setAttribute('data-sgb-theme-colors', 'on');
-            html.setAttribute('data-sgb-dialogue-bg', themeFxActive && settings.themeDialogue !== false ? 'on' : 'off');
-            html.setAttribute('data-sgb-thought-bg', themeFxActive && settings.themeThought !== false ? 'on' : 'off');
-            html.setAttribute('data-sgb-code-bg', themeFxActive && settings.themeCode !== false ? 'on' : 'off');
-            html.setAttribute('data-sgb-italic-bg', themeFxActive && settings.themeItalic !== false ? 'on' : 'off');
-            html.setAttribute('data-sgb-strong-bg', themeFxActive && settings.themeStrong !== false ? 'on' : 'off');
-            html.setAttribute('data-sgb-text-shadow', themeActive ? 'on' : 'off');
-            html.setAttribute('data-sgb-text-shadow-tone', cmuTheme);
+            setRootAttribute('data-sgb-theme', cmuTheme);
+            setRootAttribute('data-sgb-ui-style', 'borderless');
+            setRootAttribute('data-sgb-theme-colors', 'on');
+            setRootAttribute('data-sgb-dialogue-bg', themeFxActive && settings.themeDialogue !== false ? 'on' : 'off');
+            setRootAttribute('data-sgb-thought-bg', themeFxActive && settings.themeThought !== false ? 'on' : 'off');
+            setRootAttribute('data-sgb-code-bg', themeFxActive && settings.themeCode !== false ? 'on' : 'off');
+            setRootAttribute('data-sgb-italic-bg', themeFxActive && settings.themeItalic !== false ? 'on' : 'off');
+            setRootAttribute('data-sgb-strong-bg', themeFxActive && settings.themeStrong !== false ? 'on' : 'off');
+            setRootAttribute('data-sgb-text-shadow', themeActive ? 'on' : 'off');
+            setRootAttribute('data-sgb-text-shadow-tone', cmuTheme);
         }
         if (externalThemeLocked) {
             if (!cmuExternalThemeCleanupDone) {
@@ -4289,6 +4258,14 @@
             dialog.dataset.cmuChatListHeightFixed = '1';
         }
     }
+    let cmuEdgeMenuSyncFrame = 0;
+    function scheduleCmuEdgeMenuSyncFrame() {
+        if (cmuEdgeMenuSyncFrame || document.hidden) return;
+        cmuEdgeMenuSyncFrame = requestAnimationFrame(() => {
+            cmuEdgeMenuSyncFrame = 0;
+            syncCmuEdgeMenuOpenState();
+        });
+    }
     function scheduleMobileChatListPopoverLayoutSettle() {
         if (scheduleMobileChatListPopoverLayoutSettle._busy)
             return;
@@ -4296,7 +4273,7 @@
         const steps = [0, 16, 48, 120, 260, 520];
         steps.forEach((ms, i) => setTimeout(() => {
             forceMobileChatListPopoverLayout();
-            syncCmuEdgeMenuOpenState();
+            scheduleCmuEdgeMenuSyncFrame();
             if (i === steps.length - 1)
                 scheduleMobileChatListPopoverLayoutSettle._busy = false;
         }, ms));
@@ -4453,32 +4430,23 @@
         };
         cmuListen(document, 'pointerdown', syncOnNativeSelectionStart, { capture: true, passive: true });
         cmuListen(document, 'touchstart', syncOnNativeSelectionStart, { capture: true, passive: true });
-        if (document.body) {
-            CMU_USER_NOTE_STATE.observer = new MutationObserver(mutations => {
-                const relevant = mutations.some(mutation => {
-                    if (mutation.type === 'attributes') {
-                        const target = mutation.target;
-                        return target instanceof Element &&
-                            (target.matches?.('[role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-vaul-drawer], textarea') ||
-                                !!target.closest?.('[role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-vaul-drawer]'));
-                    }
-                    return [...mutation.addedNodes, ...mutation.removedNodes].some(node => {
-                        return node instanceof Element &&
-                            (node.matches?.('[role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-vaul-drawer], textarea') ||
-                                !!node.querySelector?.('[role="dialog"], [aria-modal="true"], [data-radix-dialog-content], [data-vaul-drawer], textarea'));
-                    });
-                });
-                if (relevant)
-                    syncSettled();
-            });
-            CMU_USER_NOTE_STATE.observer.observe(document.body, {
-                childList: true,
-                subtree: true,
-                attributes: true,
-                attributeFilter: ['data-state', 'aria-hidden', 'hidden', 'placeholder', 'aria-label'],
-            });
-        }
+        // Dialog insertion/changes are handled by the shared CMU DOM router.
         syncNow();
+    }
+    // The site's dialog scroll lock (react-remove-scroll, body[data-scroll-locked]) cancels touchmove at a text
+    // field's scroll edge, which breaks long-press selection in the user note and other dialogs on phones.
+    // Stop those moves on <body>: React (#__next) has already handled them, only the document-level lock is skipped.
+    function cmuReleaseDialogTextTouch(event) {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest('textarea, [contenteditable="true"]') && target.closest('[role="dialog"]') &&
+            document.body?.hasAttribute('data-scroll-locked'))
+            event.stopPropagation();
+    }
+    function installCmuDialogTextTouchRelease() {
+        if (!document.body)
+            return;
+        cmuListen(document.body, 'touchmove', cmuReleaseDialogTextTouch, { passive: true });
+        addStyle(`[role="dialog"] :is(textarea, [contenteditable="true"]) { overscroll-behavior: contain; }`);
     }
     function isInsideKnownPopup(el) {
         if (!(el instanceof Element))
@@ -4538,15 +4506,28 @@
         ].filter(Boolean).join(' ');
         return /메시지|message/i.test(attrs);
     }
+    // Empty composer shows ▶ (autoplay), typed composer shows → (send); ■ (stop) is never a send button.
+    const CMU_SEND_ICON_SELECTOR = 'path[d^="M18.77 11.13"], path[d^="M18.38 12.88"]';
+    const CMU_STOP_ICON_SELECTOR = 'path[d^="M6 6h12v12H6"]';
+    function cmuHasSendIcon(btn) {
+        if (!(btn instanceof HTMLButtonElement) || btn.querySelector(CMU_STOP_ICON_SELECTOR))
+            return false;
+        if (btn.querySelector(CMU_SEND_ICON_SELECTOR))
+            return true;
+        // Icon paths change between releases; the trailing submit button of the composer action row is the send button.
+        const row = btn.parentElement;
+        return btn.type === 'submit' && !!row?.classList.contains('justify-between') && row.lastElementChild === btn &&
+            !btn.closest('[id^="cmu-"], [id^="chud-"]') && !!btn.previousElementSibling?.querySelector?.('button');
+    }
     function isRawSendButton(btn) {
-        if (!(btn instanceof HTMLButtonElement))
+        if (!(btn instanceof HTMLButtonElement) || btn.querySelector(CMU_STOP_ICON_SELECTOR))
             return false;
         if (isInsideKnownPopup(btn))
             return false;
         const label = `${btn.getAttribute('aria-label') || ''} ${btn.title || ''} ${btn.textContent || ''}`;
         if (/전송|보내기|send/i.test(label))
             return true;
-        return !!btn.querySelector('path[d^="M18.77 11.13"]');
+        return cmuHasSendIcon(btn);
     }
     function hasRawSendButtonNear(el) {
         if (!(el instanceof Element))
@@ -4598,6 +4579,12 @@
     function findChatInput(force = false) {
         if (!force && cmuCachedInputUsable(cmuCachedChatInput))
             return cmuCachedChatInput;
+        // Only chat rooms have a composer; elsewhere every miss used to rescan the page.
+        if (!isChatRoomPath()) {
+            if (cmuCachedChatInput)
+                invalidateCmuChatInputCache();
+            return null;
+        }
         const prioritySelectors = [
             '.__chat_input_textarea',
             'p[data-placeholder*="메시지"], p[data-placeholder*="Message"], p[data-placeholder*="message"]',
@@ -4675,7 +4662,9 @@
                 candidates.push(btn);
         };
         document.querySelectorAll('button[aria-label]').forEach(add);
-        document.querySelectorAll('path[d^="M18.77 11.13"]').forEach(path => add(path.closest('button')));
+        document.querySelectorAll(CMU_SEND_ICON_SELECTOR).forEach(path => add(path.closest('button')));
+        // The send button has no type attribute (submit by default), so match structure, not [type].
+        document.querySelectorAll('main .justify-between > button:last-child').forEach(add);
         if (!candidates.length) {
             cmuCachedSendButtonAt = now;
             return null;
@@ -4852,9 +4841,11 @@
         return btn;
     }
     const COMPOSER_EXPAND_STYLE_PROPS = ['height', 'max-height', 'overflow-y'];
+    // Arrow glyphs turn into emoji on iOS; use stroke icons like the toolbar.
+    const composerExpandSvg = d => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="${d}"></path></svg>`;
     const COMPOSER_EXPAND_ICONS = Object.freeze({
-        expand: '↗',
-        collapse: '↙',
+        expand: composerExpandSvg('M7 17 17 7M8 7h9v9'),
+        collapse: composerExpandSvg('M17 7 7 17M16 17H7V8'),
     });
     function snapshotComposerExpandStyles(target) {
         const snapshot = {};
@@ -5007,7 +4998,7 @@
         const nextState = expanded ? 'collapse' : 'expand';
         if (btn.dataset.cmuComposerExpandState !== nextState) {
             btn.dataset.cmuComposerExpandState = nextState;
-            btn.textContent = COMPOSER_EXPAND_ICONS[nextState];
+            btn.innerHTML = COMPOSER_EXPAND_ICONS[nextState];
 
             btn.setAttribute('aria-pressed', expanded ? 'true' : 'false');
         }
@@ -5190,7 +5181,7 @@
         btn.classList.remove('cmu-composer-expand-visible');
         btn.tabIndex = -1;
         btn.setAttribute('aria-hidden', 'true');
-        btn.textContent = COMPOSER_EXPAND_ICONS.expand;
+        btn.innerHTML = COMPOSER_EXPAND_ICONS.expand;
         btn.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); });
         btn.addEventListener('click', e => {
             e.preventDefault();
@@ -5239,6 +5230,8 @@
         document.documentElement.dataset.cmuComposerExpandBound = '1';
     }
     function cmuInputCounterRestoreHost() {
+        CMU_INPUT_COUNTER.placementObserver?.disconnect();
+        CMU_INPUT_COUNTER.placementObserver = null;
         const host = CMU_INPUT_COUNTER.host;
         const saved = CMU_INPUT_COUNTER.hostPosition;
         const savedPadding = CMU_INPUT_COUNTER.hostPaddingTop;
@@ -5282,6 +5275,9 @@
             editor.removeEventListener('paste', handlers.delayed, true);
         }
         CMU_INPUT_COUNTER.editorObserver?.disconnect?.();
+        CMU_INPUT_COUNTER.placementObserver?.disconnect();
+        CMU_INPUT_COUNTER.placementObserver = null;
+        CMU_INPUT_COUNTER.layoutDirty = true;
         CMU_INPUT_COUNTER.editor = null;
         CMU_INPUT_COUNTER.editorObserver = null;
         CMU_INPUT_COUNTER.editorHandlers = null;
@@ -5381,10 +5377,18 @@
     function cmuInputCounterSetHost(host) {
         if (!(host instanceof HTMLElement))
             return;
-        if (CMU_INPUT_COUNTER.host === host)
+        if (CMU_INPUT_COUNTER.host === host && CMU_INPUT_COUNTER.placementObserver)
             return;
         cmuInputCounterRestoreHost();
         CMU_INPUT_COUNTER.host = host;
+        CMU_INPUT_COUNTER.placementObserver?.disconnect();
+        CMU_INPUT_COUNTER.placementObserver = new MutationObserver(records => {
+            if (records.some(record => !record.target.closest?.('#' + ID.inputCounterWrap))) scheduleCmuInputCounterSync();
+        });
+        CMU_INPUT_COUNTER.placementObserver.observe(host, {
+            childList: true, subtree: true, attributes: true,
+            attributeFilter: ['class', 'style', 'hidden', 'disabled'],
+        });
         host.setAttribute('data-cmu-input-counter-host', '1');
         try {
             const css = getComputedStyle(host);
@@ -5536,7 +5540,7 @@
         cmuInputCounterUnbindEditor();
         CMU_INPUT_COUNTER.editor = editor;
         CMU_INPUT_COUNTER.resizeObserver?.observe(editor);
-        CMU_INPUT_COUNTER.editorObserver = cmuComposerSubscribe(editor, scheduleCmuInputCounterSync);
+        CMU_INPUT_COUNTER.editorObserver = cmuComposerSubscribe(editor, () => scheduleCmuInputCounterSync(false));
     }
     function renderCmuInputCounter() {
         CMU_INPUT_COUNTER.updateFrame = 0;
@@ -5552,7 +5556,11 @@
             return;
         }
         bindCmuInputCounterEditor(editor);
-        const countEl = ensureCmuInputCounterPlacement(editor);
+        let countEl = CMU_INPUT_COUNTER.renderedElement;
+        if (CMU_INPUT_COUNTER.layoutDirty || !countEl?.isConnected || !CMU_INPUT_COUNTER.host?.isConnected) {
+            CMU_INPUT_COUNTER.layoutDirty = false;
+            countEl = ensureCmuInputCounterPlacement(editor);
+        }
         if (!(countEl instanceof HTMLElement))
             return;
         const count = cmuInputCounterLength(cmuInputCounterText(editor));
@@ -5576,7 +5584,8 @@
         CMU_INPUT_COUNTER.renderedElement = countEl;
         CMU_INPUT_COUNTER.renderedTheme = detectCmuTheme();
     }
-    function scheduleCmuInputCounterSync() {
+    function scheduleCmuInputCounterSync(layout = true) {
+        if (layout !== false) CMU_INPUT_COUNTER.layoutDirty = true;
         if (CMU_INPUT_COUNTER.disposed || CMU_INPUT_COUNTER.updateFrame || cmuUserNoteGuardActive())
             return;
         CMU_INPUT_COUNTER.updateFrame = requestAnimationFrame(renderCmuInputCounter);
@@ -6345,6 +6354,47 @@
             cmuLogCaptureStartSelection();
         }
     }
+    function lcCloneCaptureContent(root) {
+        const clone = root.cloneNode(true);
+        // Read the live source before sanitizing styles. Do not measure individual lines.
+        const sources = [root, ...root.querySelectorAll('*')];
+        const copies = [clone, ...clone.querySelectorAll('*')];
+        const preserving = new Set(['pre', 'pre-wrap', 'pre-line', 'break-spaces']);
+        sources.forEach((source, index) => {
+            if (!(source instanceof HTMLElement)) return;
+            const copy = copies[index];
+            const css = getComputedStyle(source);
+            if (preserving.has(css.whiteSpace)) copy.setAttribute('data-cmu-lc-whitespace', source.closest('pre') ? 'pre-wrap' : css.whiteSpace);
+            // Inline tags can be visual blocks in the source (e.g. styled spans).
+            if (source.matches('span, strong, em, b, i') && css.display === 'block')
+                copy.setAttribute('data-cmu-lc-display', 'block');
+        });
+        return clone;
+    }
+    function lcCaptureBlockNodes(root) {
+        const blocks = [];
+        let inline = null;
+        const flush = () => {
+            if (!inline) return;
+            if (inline.textContent.trim() || inline.querySelector('br, img')) blocks.push(inline);
+            inline = null;
+        };
+        // Keep semantic roots such as a paragraph, list or code block intact.
+        if (root.matches('p, pre, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6')) return [root];
+        for (const node of root.childNodes) {
+            const isBlock = node instanceof HTMLElement && node.matches('p, div, pre, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6, hr, [data-cmu-lc-display="block"]');
+            if (isBlock) { flush(); blocks.push(node.cloneNode(true)); continue; }
+            if (node.nodeType !== Node.TEXT_NODE && !(node instanceof HTMLElement)) continue;
+            if (!inline) {
+                inline = document.createElement('p');
+                if (root.style.whiteSpace) inline.style.whiteSpace = root.style.whiteSpace;
+            }
+            inline.appendChild(node.cloneNode(true));
+        }
+        flush();
+        return blocks;
+    }
+
     function lcSanitizeClone(root) {
         if (!(root instanceof HTMLElement))
             return root;
@@ -6372,6 +6422,11 @@
         });
         root.removeAttribute('style');
         root.removeAttribute('class');
+        for (const el of [root, ...root.querySelectorAll('[data-cmu-lc-whitespace], [data-cmu-lc-display]')]) {
+            const whitespace = el.getAttribute('data-cmu-lc-whitespace');
+            if (['pre', 'pre-wrap', 'pre-line', 'break-spaces'].includes(whitespace)) el.style.whiteSpace = whitespace;
+            if (el.getAttribute('data-cmu-lc-display') === 'block') el.style.display = 'block';
+        }
         return root;
     }
     function lcParseTextRules(raw = []) {
@@ -6431,26 +6486,6 @@
         });
         return leaves.sort((a, b) => String(b.textContent || '').length - String(a.textContent || '').length)[0] || null;
     }
-    function lcNormalizeBlockNode(node) {
-        if (!node)
-            return null;
-        if (node.nodeType === Node.TEXT_NODE) {
-            const txt = String(node.textContent || '').replace(/\s+/g, ' ').trim();
-            if (!txt)
-                return null;
-            const p = document.createElement('p');
-            p.textContent = txt;
-            return p;
-        }
-        if (!(node instanceof HTMLElement))
-            return null;
-        if (node.tagName === 'IMG') {
-            const wrap = document.createElement('div');
-            wrap.appendChild(node.cloneNode(true));
-            return wrap;
-        }
-        return node.cloneNode(true);
-    }
     function lcCaptureImageSource(img) {
         if (!(img instanceof HTMLImageElement))
             return '';
@@ -6505,10 +6540,10 @@
         if (!(root instanceof HTMLElement))
             return null;
         const role = isUserGroupByDom(group) ? 'user' : 'assistant';
-        const clone = lcSanitizeClone(root.cloneNode(true));
+        const clone = lcSanitizeClone(lcCloneCaptureContent(root));
         lcAppendMissingMessageImages(group, clone);
         lcApplyTextRules(clone);
-        const rawNodes = Array.from(clone.childNodes || []).map(lcNormalizeBlockNode).filter(Boolean);
+        const rawNodes = lcCaptureBlockNodes(clone);
         const nodes = rawNodes.length ? rawNodes : [clone];
         const blocks = nodes.map(node => {
             const wrap = document.createElement('div');
@@ -7076,8 +7111,8 @@
                 try { window.htmlToImage = lib; } catch (_) { }
                 resolve(lib);
             };
-            if (typeof GM_xmlhttpRequest === 'function') {
-                GM_xmlhttpRequest({
+            if (cmuGmXhrAvailable()) {
+                cmuGmXhr({
                     method: 'GET',
                     url: libraryUrl,
                     timeout: 18000,
@@ -7205,10 +7240,10 @@
         }
 
         let gmError = null;
-        if (typeof GM_xmlhttpRequest === 'function') {
+        if (cmuGmXhrAvailable()) {
             try {
                 return await new Promise((resolve, reject) => {
-                    GM_xmlhttpRequest({
+                    cmuGmXhr({
                         method: 'GET',
                         url: source,
                         responseType: 'blob',
@@ -7884,7 +7919,7 @@
         { id: 'message', icon: Q_ICONS.message, label: '대화·편집', keys: ['messageLongPressMenu', 'editPasteFix', 'editTextCleaner', 'messageDoubleClickEdit', 'messageWordWrap'] },
         { id: 'theme', icon: Q_ICONS.theme, label: '테마', keys: ['themeSkin'] },
         { id: 'radiosonde', icon: Q_ICONS.radio, label: '라존데', keys: ['radiosonde'] },
-        { id: 'dashboard', icon: Q_ICONS.dash, label: '대시보드', keys: ['dashboard', 'dashboardSidebar'] },
+        { id: 'dashboard', icon: Q_ICONS.dash, label: '대시보드', keys: ['dashboard', 'dashboardNumberAnimation', 'dashboardSidebar'] },
         { id: 'badge', icon: Q_ICONS.badge, label: '배지', keys: ['badgeChars', 'badgeTime', 'modelIcon', 'answerCost'] },
         { id: 'nativemodel', icon: Q_ICONS.filter, label: '모델', keys: ['nativeModelFilter', 'outputModelFilter', 'outputLayout'] },
         { id: 'capture', icon: Q_ICONS.capture, label: '로그 캡처', keys: ['logCapture'] }
@@ -8054,14 +8089,19 @@
             return false;
         }
     }
+    // innerWidth/clientWidth force a synchronous layout and this runs on many hot paths; measure once per resize.
+    let cmuViewportWidthCache = 0;
     function cmuViewportWidth() {
+        if (cmuViewportWidthCache)
+            return cmuViewportWidthCache;
         const values = [
             window.innerWidth,
             document.documentElement?.clientWidth,
             window.visualViewport?.width,
             window.screen?.width,
         ].map(Number).filter(v => Number.isFinite(v) && v > 0);
-        return values.length ? Math.min(...values) : (window.innerWidth || 0);
+        cmuViewportWidthCache = values.length ? Math.min(...values) : (window.innerWidth || 0);
+        return cmuViewportWidthCache;
     }
     function isCmuEdgeMenuViewport() {
         return isMobileLike() && cmuViewportWidth() <= 820;
@@ -8171,9 +8211,12 @@
                 continue;
             const state = String(panel.getAttribute('data-state') || '');
             const cls = String(panel.className || '');
-            const text = cmuEdgeText(panel).slice(0, 600);
             const hasList = !!panel.querySelector?.('[data-testid="virtuoso-scroller"], [data-virtuoso-scroller="true"], [role="tablist"]');
-            if (panel.getAttribute('role') === 'dialog' && state === 'open' && hasList && (cls.includes('md:hidden') || panel.closest('[data-radix-popper-content-wrapper]')) && /에피소드|보관함|파티챗/.test(text))
+            if (panel.getAttribute('role') !== 'dialog' || state !== 'open' || !hasList || !(cls.includes('md:hidden') || panel.closest('[data-radix-popper-content-wrapper]')))
+                continue;
+            // Read the tab labels instead of innerText of the whole (layout-forcing) chat list.
+            const tabs = panel.querySelector('[role="tablist"]')?.textContent || '';
+            if (/에피소드|보관함|파티챗/.test(tabs) || /에피소드|보관함|파티챗/.test(cmuEdgeText(panel).slice(0, 600)))
                 return panel;
         }
         return null;
@@ -8266,6 +8309,14 @@
         if (cachedCmuRoomPanel?.isConnected && scoreCmuRoomPanel(cachedCmuRoomPanel) >= 10) {
             observeCmuRoomPanelState(cachedCmuRoomPanel);
             return cachedCmuRoomPanel;
+        }
+        // The room panel is rebuilt on every room change; try its known class before scoring every div in <main>.
+        const known = document.querySelector('main .border-l.border-outline_tertiary');
+        if (known && scoreCmuRoomPanel(known) >= 10) {
+            cachedCmuRoomPanel = known;
+            CMU_DOM_WATCH.roomPanelMissUntil = 0;
+            observeCmuRoomPanelState(known);
+            return known;
         }
         const root = document.querySelector('main') || document;
         if (CMU_DOM_WATCH.roomPanelSearchRoot === root && Date.now() < CMU_DOM_WATCH.roomPanelMissUntil)
@@ -8445,12 +8496,13 @@
     }
     function syncCmuEdgeMenuOpenState() {
         try {
-            if (syncCmuUserNoteDialogState())
-                return;
+            // Edge menus and the user note only exist in chat rooms; skip the dialog scan elsewhere.
             if (!(shouldRun() && isChatRoomPath() && isCmuEdgeMenuViewport())) {
                 document.documentElement.classList.remove('cmu-mobile-chat-list-open', 'cmu-mobile-room-panel-open', 'cmu-chat-list-height-fixed');
                 return;
             }
+            if (syncCmuUserNoteDialogState())
+                return;
             releaseCmuMobileChatListStaleMarkers();
             syncCmuMobileChatListOpenState();
             syncCmuRightRoomMenuOpenState();
@@ -8464,7 +8516,7 @@
         const steps = CMU_EDGE_SYNC_STEPS;
         steps.forEach((ms) => {
             const timer = setTimeout(() => {
-                syncCmuEdgeMenuOpenState();
+                scheduleCmuEdgeMenuSyncFrame();
                 if (ms === steps[steps.length - 1])
                     cmuEdgeMenuStateTimers = [];
             }, ms);
@@ -9018,14 +9070,20 @@
     }
     function renderFullscreenRow() {
         const supported = isCmuFullscreenSupported();
-        return qSwitch('fullscreenButton', '전체화면 버튼 표시', supported ? '톱니 옆 ⛶/✕ 빠른 전환 버튼 표시' : '현재 브라우저/기기에서 Fullscreen API 미지원', { disabled: !supported, forceOffWhenDisabled: true });
+        return qSwitch('fullscreenButton', '전체화면 버튼 표시', supported ? '톱니 옆에 전체화면 켜기/끄기 버튼 표시' : '현재 브라우저/기기에서 Fullscreen API 미지원', { disabled: !supported, forceOffWhenDisabled: true });
     }
+    // Text glyphs (⛶ ✕) fall back to emoji fonts on iOS/Android; draw the same stroke icons as the gear.
+    const CMU_FULLSCREEN_ICON = Object.freeze({
+        enter: 'M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4',
+        exit: 'M9 4v4a1 1 0 0 1-1 1H4M20 9h-4a1 1 0 0 1-1-1V4M15 20v-4a1 1 0 0 1 1-1h4M4 15h4a1 1 0 0 1 1 1v4',
+    });
     function setCmuFullscreenToolbarIcon(btn) {
         if (!(btn instanceof HTMLButtonElement))
             return;
         const active = isCmuFullscreenActive();
-        const icon = active ? '✕' : '⛶';
-        btn.innerHTML = `<span class="cmu-fullscreen-icon" aria-hidden="true">${icon}</span>`;
+        const path = active ? CMU_FULLSCREEN_ICON.exit : CMU_FULLSCREEN_ICON.enter;
+        if (btn.querySelector('.cmu-fullscreen-icon path')?.getAttribute('d') !== path)
+            btn.innerHTML = `<span class="cmu-fullscreen-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" focusable="false" style="fill:none!important;stroke:currentColor!important;"><path d="${path}"></path></svg></span>`;
         btn.title = active ? '전체화면 해제' : '전체화면 전환';
         btn.setAttribute('aria-label', active ? '전체화면 해제' : '전체화면 전환');
         btn.setAttribute('aria-pressed', active ? 'true' : 'false');
@@ -9217,7 +9275,7 @@
     ];
     const SIDE_PART_LABELS = [
         ['modelButton', '모델'], ['themeButton', '라이트/다크'], ['episodeModeButton', '소설/채팅'], ['inputWrapperButton', '글 감싸기'], ['guideButton', '가이드'], ['profileButton', '프로필'], ['profileBoxButton', '프로필 박스'], ['noteButton', '노트'],
-        ['outputButton', '출력'], ['summaryButton', '요약'], ['imageButton', '이미지'], ['archiveButton', '보관함'],
+        ['proseStyleButton', '문체'], ['outputButton', '출력'], ['summaryButton', '요약'], ['imageButton', '이미지'], ['archiveButton', '보관함'],
         ['roomBackgroundButton', '이미지 테마'], ['scenePainterButton', '모바일 삽화'], ['wishManagerButton', 'Wish RP'], ['sceneBlurButton', 'CSP 테마'],
         ['startButton', '시작'], ['loreButton', '로어'], ['translatorButton', '번역'], ['aiSummaryButton', 'AI 요약'], ['aiWriterButton', 'AI 답변'], ['gameHudButton', '게임 HUD']
     ];
@@ -9228,6 +9286,7 @@
         profileButton: 'profile',
         profileBoxButton: 'profileBox',
         noteButton: 'note',
+        proseStyleButton: 'proseStyle',
         outputButton: 'output',
         summaryButton: 'summary',
         imageButton: 'image',
@@ -9294,7 +9353,7 @@
     }
     const RS_GROUPS = [
         ['fable', 'Fable'], ['opus', 'Opus'], ['gpt', 'GPT'], ['gemini', 'Gemini'],
-        ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['other', '기타'],
+        ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['deepseek', 'DeepSeek'], ['other', '기타'],
     ];
     function rsModelGroup(model) {
         const text = `${model.slug} ${model.label || ''}`.toLowerCase();
@@ -9428,7 +9487,7 @@
         ${qSwitch('mobileRightMenuButton', '우측 메뉴 버튼', '모바일 오른쪽 손잡이로 방 설정 패널 열기')}
         ${qSwitch('composerExpandButton', '입력창 펼치기 버튼', '입력창 맨 오른쪽 위 · 긴 내용을 펼치고 다시 접기')}
         ${qSwitch('inputCharacterCounter', '입력 글자수 표시', '전송 버튼 위쪽 · 2,000자 경고')}
-        ${qSwitch('emptySendGuard', '빈 메시지 전송 막기')}
+        ${qSwitch('emptySendGuard', '빈 입력 ▶ 자동진행 막기', '빈 입력창의 ▶는 크래커를 쓰는 스토리 자동진행이라 실수로 누르지 않게 막음')}
       `)}
 
       <div class="sec">키보드</div>
@@ -10080,6 +10139,7 @@
       ${qCard(`
         ${qSwitch('dashboard', '정보바 표시', '턴수 · 누적 사용 · 잔여 · 차감', { group: 'g-info' })}
         ${qChipWrap('g-info', renderDashboardPartRows(), !!settings.dashboard)}
+        ${qSwitch('dashboardNumberAnimation', '숫자 변화 애니메이션', '값이 바뀔 때만 잠깐 올라가는 효과 · 기기의 동작 줄이기 설정을 따름', { dep: 'dashboard' })}
       `)}
       ${sideSection}
       <div class="sec">연동 가능한 확장</div>
@@ -10798,12 +10858,21 @@
         const global = findChatInput();
         return global && isButtonInsideChatComposer(btn) ? global : null;
     }
+    // classList.add/remove and dataset writes record a mutation even when nothing changes; this runs per keystroke
+    // and every record wakes the input counter's placement observer, so only write real changes.
+    function setEmptySendGuardButtonState(btn, blocked) {
+        const guard = settings.emptySendGuard ? '1' : '0';
+        if (btn.dataset.crackUiEmptySendGuard !== guard)
+            btn.dataset.crackUiEmptySendGuard = guard;
+        if (btn.dataset.crackUiEmptySendBlocked !== (blocked ? '1' : '0'))
+            btn.dataset.crackUiEmptySendBlocked = blocked ? '1' : '0';
+        if (btn.classList.contains('crack-ui-empty-send-blocked') !== blocked)
+            btn.classList.toggle('crack-ui-empty-send-blocked', blocked);
+    }
     function clearEmptySendGuardButton(btn) {
         if (!(btn instanceof HTMLElement))
             return;
-        btn.classList.remove('crack-ui-empty-send-blocked');
-        btn.dataset.crackUiEmptySendGuard = settings.emptySendGuard ? '1' : '0';
-        btn.dataset.crackUiEmptySendBlocked = '0';
+        setEmptySendGuardButtonState(btn, false);
     }
     function updateEmptySendGuardState() {
         const btn = getSendButton();
@@ -10830,14 +10899,7 @@
         });
         if (!btn)
             return;
-        btn.dataset.crackUiEmptySendGuard = settings.emptySendGuard ? '1' : '0';
-        btn.dataset.crackUiEmptySendBlocked = blocked ? '1' : '0';
-        if (blocked) {
-            btn.classList.add('crack-ui-empty-send-blocked');
-        }
-        else {
-            clearEmptySendGuardButton(btn);
-        }
+        setEmptySendGuardButtonState(btn, blocked);
     }
     function scheduleEmptySendGuardUiUpdate() {
         if (!scheduleEmptySendGuardUiUpdate._raf) {
@@ -10850,16 +10912,15 @@
         scheduleEmptySendGuardUiUpdate._settleTimer = setTimeout(updateEmptySendGuardState, 90);
     }
     function isSendButton(btn) {
-        if (!(btn instanceof HTMLButtonElement))
+        if (!(btn instanceof HTMLButtonElement) || btn.querySelector(CMU_STOP_ICON_SELECTOR))
+            return false;
+        // Cheap label/icon checks first: pairing a button with the composer walks nine ancestors per button.
+        const label = `${btn.getAttribute('aria-label') || ''} ${btn.title || ''}`;
+        if (!/전송|보내기|send/i.test(label) && !cmuHasSendIcon(btn))
             return false;
         if (btn.closest(`#${ID.panel}, [role="dialog"], [data-radix-popper-content-wrapper], [data-radix-dialog-content], [data-radix-dialog-content-wrapper]`))
             return false;
-        if (!findChatInputForSendButton(btn))
-            return false;
-        const label = `${btn.getAttribute('aria-label') || ''} ${btn.title || ''}`;
-        if (/전송|보내기|send/i.test(label))
-            return true;
-        return !!btn.querySelector('path[d^="M18.77 11.13"]');
+        return !!findChatInputForSendButton(btn);
     }
     function bindEmptySendGuard() {
         if (document.documentElement.dataset.cmuSendGuardBound === '1')
@@ -11663,6 +11724,7 @@
         profileButton: true,
         profileBoxButton: true,
         noteButton: true,
+        proseStyleButton: true,
         outputButton: true,
         summaryButton: true,
         imageButton: true,
@@ -11743,6 +11805,8 @@
         summary: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="15" height="15" class="chud-btn-icon"><path d="M16.25 10.8a5.39 5.39 0 1 0 .02 10.78 5.39 5.39 0 0 0-.02-10.78m0 9.16a3.78 3.78 0 1 1 0-7.57 3.78 3.78 0 0 1 0 7.57"></path><path d="M17.02 13.43h-1.5v3.12l2.02 1.55.91-1.2-1.43-1.09z"></path><path d="M6.8 19.54v-3.29h-3V4.15h14.9V9.5h1.6V3.85c0-.72-.58-1.3-1.3-1.3H3.5c-.72 0-1.3.58-1.3 1.3v12.7c0 .72.58 1.3 1.3 1.3h1.7v3.2a.9.9 0 0 0 .89.89q.3 0 .58-.21l3.35-2.81-1.03-1.22z"></path><path d="M16.5 6.72H6v1.6h10.5zM11 10.03H6v1.6h5z"></path></svg>',
         image: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon"><path d="m11.7 6.08 6.36 3.67-6.36 3.67z"></path><path fill-rule="evenodd" d="M6.71 3.91c0-.94.76-1.7 1.7-1.7H20.1c.94 0 1.7.76 1.7 1.7V15.6c0 .94-.76 1.7-1.7 1.7h-2.81v2.8c0 .94-.76 1.7-1.7 1.7H3.9a1.7 1.7 0 0 1-1.7-1.7V8.41c0-.94.76-1.7 1.7-1.7h2.81zm1.7-.1a.1.1 0 0 0-.1.1V15.6q0 .1.1.1H20.1a.1.1 0 0 0 .1-.1V3.91a.1.1 0 0 0-.1-.1zm0 13.49h7.28v2.8a.1.1 0 0 1-.1.1H3.9a.1.1 0 0 1-.1-.1V8.41q0-.1.1-.1h2.81v7.29c0 .94.76 1.7 1.7 1.7" clip-rule="evenodd"></path></svg>',
         archive: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>',
+        // Site's own "문체 변경" icon from the room panel (2026-10-01).
+        proseStyle: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon"><path d="m17.83 7.17 1.07 3.2 3.2 1.07a.6.6 0 0 1 0 1.13l-3.2 1.07-1.07 3.2a.6.6 0 0 1-1.13 0l-1.07-3.2-3.2-1.07a.6.6 0 0 1 0-1.13l3.2-1.07 1.07-3.2a.6.6 0 0 1 1.13 0M3.14 13.28a1.28 1.28 0 1 0 0-2.56 1.28 1.28 0 0 0 0 2.56m5.11 0a1.28 1.28 0 1 0 0-2.56 1.28 1.28 0 0 0 0 2.56"></path></svg>',
         external: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v7H3V3h7"/></svg>',
         roomBackground: '<svg width="15.5" height="15.5" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon chud-room-bg-icon" aria-hidden="true"><path d="M4.2 4.2c0-.88.72-1.6 1.6-1.6h12.4c.88 0 1.6.72 1.6 1.6v15.6c0 .88-.72 1.6-1.6 1.6H5.8c-.88 0-1.6-.72-1.6-1.6zm1.6 0v15.6h12.4V4.2z"></path><path d="M7.4 16.7 10.2 13l2 2.35 2.7-3.45 2.1 4.8z"></path><circle cx="9.1" cy="8.1" r="1.45"></circle></svg>',
         sceneBlur: '<svg width="15.5" height="15.5" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon chud-scene-blur-icon" aria-hidden="true"><path d="M4.2 4.2c0-.88.72-1.6 1.6-1.6h12.4c.88 0 1.6.72 1.6 1.6v15.6c0 .88-.72 1.6-1.6 1.6H5.8c-.88 0-1.6-.72-1.6-1.6zm1.6 0v15.6h12.4V4.2z"></path><path d="M8.1 8.2h7.8v1.45H8.1zm0 3.05h7.8v1.45H8.1zm0 3.05h4.6v1.45H8.1z" opacity=".65"></path><path d="M17.4 13.1c1.52 1.44 2.35 2.67 2.35 3.74a2.35 2.35 0 1 1-4.7 0c0-1.07.83-2.3 2.35-3.74"></path></svg>',
@@ -11797,9 +11861,15 @@
         catch (_) { }
         return window;
     }
+    let cmuExternalThemeCheckedAt = 0;
     function detectCmuExternalThemeProvider() {
         if (cmuExternalThemeProvider)
             return cmuExternalThemeProvider;
+        // Asked per message group; a theme that loads later is still picked up within two seconds
+        // (and immediately when its DOM markers appear, which clears this timestamp).
+        if (Date.now() - cmuExternalThemeCheckedAt < 2000)
+            return '';
+        cmuExternalThemeCheckedAt = Date.now();
         const w = getPublicWindow();
         const hasFlag = (name) => {
             try {
@@ -11855,8 +11925,9 @@
     }
     function findExternalClickable(patterns, visibleOnly = false) {
         const regs = patterns.map(p => p instanceof RegExp ? p : new RegExp(String(p).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
-        for (const el of document.querySelectorAll('button, [role="button"], a')) {
-            if (isOwnElement(el) || el.closest('[data-message-group-id], [contenteditable="true"]')) continue;
+        // Let the selector engine skip message buttons; long rooms hold thousands of them.
+        for (const el of document.querySelectorAll(':is(button, [role="button"], a):not([data-message-group-id] *):not([contenteditable="true"] *)')) {
+            if (isOwnElement(el)) continue;
             const text = getClickableLabelLite(el);
             if (!text || text.length > 120 || !regs.some(re => re.test(text))) continue;
             if (!visibleOnly || visibleClickable(el)) return el;
@@ -12326,7 +12397,8 @@
     function refreshSideAvailability(force = false) {
         const now = Date.now();
         const age = now - Number(DASH_SIDE.availableAt || 0);
-        if (DASH_SIDE.available && age < (force ? 1500 : 4000)) {
+        // Late extensions are caught by their ready events and the route probes; routine checks can be sparse.
+        if (DASH_SIDE.available && age < (force ? 1500 : 15000)) {
             return DASH_SIDE.available;
         }
         DASH_SIDE.availableAt = now;
@@ -12340,6 +12412,8 @@
             profileButton: true,
             profileBoxButton: isProfileBoxInstalledLite(),
             noteButton: true,
+            // Character chats have no prose style presets.
+            proseStyleButton: !cmuIsCharacterChatPath(),
             outputButton: true,
             summaryButton: true,
             startButton: true,
@@ -12616,25 +12690,37 @@
         }, 700);
         return true;
     }
+    let cmuSideAvailabilitySignature = '';
     function refreshIntegratedSideButtonsLite() {
         try {
             DASH_SIDE.availableAt = 0;
-            refreshSideAvailability(true);
+            // Seven route-change probes wait for late extensions; rebuild the composer blocks only when one appeared.
+            const signature = JSON.stringify(refreshSideAvailability(true));
+            if (signature === cmuSideAvailabilitySignature && document.getElementById(ID.dashboardSidebar)?.isConnected)
+                return false;
+            cmuSideAvailabilitySignature = signature;
             ensureInlineBlocks();
             applySideVisible();
             syncUnavailableIntegrations();
+            return true;
         }
-        catch (_) { }
+        catch (_) {
+            return true;
+        }
     }
     cmuListen(document, 'crack-ai-summary:ready', refreshIntegratedSideButtonsLite);
     cmuListen(document, 'wish-rp-manager:ready', refreshIntegratedSideButtonsLite);
+    let cmuSideRouteProbeToken = 0;
     function scheduleIntegratedSideButtonsRouteRefreshLite() {
-        // Crack은 SPA라 새 채팅방 진입 시 외부 확장 버튼이 본문보다 늦게 재주입될 수 있다.
-        // 새로고침 없이도 늦게 붙은 Wish RP/통합 버튼을 다시 감지해 사이드바에 복원한다.
+        if (!settings.dashboardSidebar)
+            return;
+        // Extensions are already loaded on in-app navigation; stop probing after two unchanged results.
+        const token = ++cmuSideRouteProbeToken;
+        let unchanged = 0;
         [0, 120, 320, 700, 1300, 2200, 3600, 6000, 9000].forEach(ms => setTimeout(() => {
-            if (!isChatRoomPath())
+            if (token !== cmuSideRouteProbeToken || (ms >= 3600 && ms !== 9000 && unchanged >= 2) || !isChatRoomPath())
                 return;
-            refreshIntegratedSideButtonsLite();
+            unchanged = refreshIntegratedSideButtonsLite() ? 0 : unchanged + 1;
         }, ms));
     }
     function getOutputSettingsTriggerLite() {
@@ -14139,7 +14225,7 @@
 
     // Discard stale work from older builds; never replay it against native settings.
     try { localStorage.removeItem('chud_pending_theme_mode'); } catch (_) {}
-    
+
 
     function toggleQuickTheme() {
         const next = getQuickThemeMode() === 'dark' ? 'light' : 'dark';
@@ -14218,9 +14304,9 @@
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             return;
         } catch (fetchError) {
-            if (!shouldRun() || typeof GM_xmlhttpRequest !== 'function' || /^HTTP (4|5)/.test(fetchError.message)) throw fetchError;
+            if (!shouldRun() || !cmuGmXhrAvailable() || /^HTTP (4|5)/.test(fetchError.message)) throw fetchError;
             await new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
+                cmuGmXhr({
                     method: 'PATCH', url: 'https://crack-api.wrtn.ai/crack-api/profiles/ui-setting', headers, data: payload,
                     withCredentials: true, anonymous: false, timeout: 10000,
                     onload: (response) => response.status >= 200 && response.status < 300
@@ -14366,6 +14452,7 @@
                 profileButton: makeSideButton('profileButton', 'chud-native-profile-btn', '크랙 기본 프로필', SIDE_ICON.profile, () => clickFirst([/대화\s*프로필/, /프로필/], '대화 프로필')),
                 profileBoxButton: makeSideButton('profileBoxButton', 'chud-profile-box-btn', '프로필 박스', SIDE_ICON.profileBox, openProfileBoxLite),
                 noteButton: makeSideButton('noteButton', 'chud-note-btn', '유저 노트', SIDE_ICON.note, () => clickFirst([/유저\s*노트/, /노트/], '유저 노트')),
+                proseStyleButton: makeSideButton('proseStyleButton', 'chud-prose-style-btn', '문체 변경', SIDE_ICON.proseStyle, () => clickFirst([/문체\s*변경/], '문체 변경')),
                 outputButton: makeSideButton('outputButton', 'chud-output-btn', '답변 길이 및 생각 조절', SIDE_ICON.output, openOutputSettingsLite),
                 summaryButton: makeSideButton('summaryButton', 'chud-summary-btn', '요약 메모리', SIDE_ICON.summary, openSummaryMemoryLite),
                 imageButton: makeSideButton('imageButton', 'chud-image-btn', '이미지 ON/OFF', SIDE_ICON.image, openNativeSituationImageToggleLite),
@@ -14386,7 +14473,7 @@
             buttons.profileButton.dataset.sideKey = 'nativeProfileButton';
             buttons.profileBoxButton.dataset.cpmExternalProfileLauncher = 'true';
             DASH_SIDE.btns = buttons;
-            content.append(buttons.modelButton, buttons.themeButton, buttons.episodeModeButton, buttons.inputWrapperButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.aiWriterButton, buttons.gameHudButton);
+            content.append(buttons.modelButton, buttons.themeButton, buttons.episodeModeButton, buttons.inputWrapperButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.proseStyleButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.aiWriterButton, buttons.gameHudButton);
             bar.append(content);
         }
         if (bar.parentElement !== shell)
@@ -14468,9 +14555,15 @@
             bar.style.removeProperty('visibility');
         }
     }
+    const DASH_BAR_SCROLL = new WeakMap();
     function applyDashboardBarScroll(bar, scrollTop) {
         if (!bar || !DASH_SCROLL.shell || bar.parentElement !== DASH_SCROLL.shell)
             return;
+        // Layout passes re-run this without scrolling; skip identical style writes.
+        const key = `${scrollTop}|${bar.style.top}`;
+        if (DASH_BAR_SCROLL.get(bar) === key && bar.style.transform)
+            return;
+        DASH_BAR_SCROLL.set(bar, key);
         const baseTop = parseFloat(bar.style.top) || 0;
         const height = Math.max(1, bar.offsetHeight || 1);
         const clippedTop = Math.max(0, scrollTop - baseTop);
@@ -14602,7 +14695,10 @@
             return;
         }
         let bar = document.getElementById(ID.dashboard);
+        // Composer re-renders call this repeatedly; only a new/moved bar, a room change or missing data needs a fetch.
+        let needsUpdate = !DASH.state.logs;
         if (!bar) {
+            needsUpdate = true;
             bar = document.createElement('div');
             bar.id = ID.dashboard;
             bar.addEventListener('pointerdown', () => { DASH.touchHold = true; }, true);
@@ -14635,14 +14731,20 @@
         else {
             DASH.textSpan = bar.querySelector('#chud-info-text');
         }
-        if (bar.parentElement !== shell)
+        if (bar.parentElement !== shell) {
             shell.insertBefore(bar, shell.firstChild || null);
+            needsUpdate = true;
+        }
         DASH.el = bar;
         const currentChatId = getChatId();
-        if (currentChatId && DASH.state.chatId && DASH.state.chatId !== currentChatId)
-            clearDashboardForRoom(currentChatId);
-        applyDashboardLayout(shell, input);
-        scheduleDashboardUpdate(true);
+        if (currentChatId && DASH.state.chatId !== currentChatId) {
+            if (DASH.state.chatId)
+                clearDashboardForRoom(currentChatId);
+            needsUpdate = true;
+        }
+        // ensureInlineBlocks applies the shared layout once after the sidebar and the info bar.
+        if (needsUpdate)
+            scheduleDashboardUpdate(true);
     }
     function syncDashMenu() {
         const visible = getDashVisible();
@@ -14668,6 +14770,8 @@
         return role === 'assistant' || role === 'char' || role === 'character' || role === 'bot' || role === 'ai';
     }
     function isRawPrologueMessage(msg) {
+        if (msg?.isIntroMessage === true)
+            return true;
         return /prologue|opening|intro/i.test(String(msg?.type || msg?.messageType || msg?.source || msg?.subType || msg?.message?.type || ''));
     }
     function pickRawMessageArray(json) {
@@ -14966,11 +15070,19 @@
         DASH_LOGS_INFLIGHT.set(chatId, task);
         return task;
     }
+    // Boot, late boots and composer re-renders each schedule a dashboard update; reuse one balance read.
+    const DASH_BALANCE = { at: 0, value: null };
     async function fetchBalance() {
+        if (getDashVisible().cracker === false)
+            return DASH.state.balance;
+        if (DASH_BALANCE.at && Date.now() - DASH_BALANCE.at < 10000)
+            return DASH_BALANCE.value;
         try {
             const json = await apiGet('https://crack-api.wrtn.ai/crack-cash/crackers');
             const q = json?.data?.quantity;
-            return typeof q === 'number' ? q : null;
+            DASH_BALANCE.value = typeof q === 'number' ? q : null;
+            DASH_BALANCE.at = Date.now();
+            return DASH_BALANCE.value;
         }
         catch (_) {
             return null;
@@ -15049,6 +15161,8 @@
     }
     function clearDashboardForRoom(chatId) {
         DASH.state.chatId = chatId || '';
+        // Numbers of the previous room must not count into the next room's values.
+        DASH_NUM.prev = {};
         DASH.state.logs = null;
         DASH.state.balance = null;
         DASH.state.cumulative = 0;
@@ -15138,9 +15252,10 @@
         const domGroups = justMoved ? 0 : document.querySelectorAll('div[data-message-group-id]').length;
         const turns = logs ? Math.max(0, Number(logs.officialTurnCount ?? logs.userTurnCount) || 0) : (justMoved ? null : Math.max(0, Math.floor(domGroups / 2) - 1));
         const parts = [];
-        const turnText = turns == null ? '—' : `${dashFmt(turns)}${logs?.complete === false ? '+' : ''}`;
-        const turnSummary = `${DASH_ICON.clock}<span style="font-weight:700;">${turnText}</span>턴`;
-        let turnDetail = `${DASH_ICON.clock}<span style="opacity:.75;margin-right:2px;">진행</span><span style="font-weight:700;">${turnText}</span>턴`;
+        // A DOM-based estimate is shown until the message scan finishes; don't animate from it.
+        const turnNum = turns == null ? '—' : dashNum('turn', turns, !!logs, logs?.complete === false ? '+' : '');
+        const turnSummary = `${DASH_ICON.clock}${turnNum}턴`;
+        let turnDetail = `${DASH_ICON.clock}<span style="opacity:.75;margin-right:2px;">진행</span>${turnNum}턴`;
         const hints = logs?.complete === false ? ['일부 집계'] : [];
         if (logs?.userTurnCount > 0)
             hints.push(`유저 ${dashFmt(logs.userTurnCount)}개`);
@@ -15154,14 +15269,14 @@
             turnDetail += `&nbsp;<span style="opacity:.75;">(${hints.join(' · ')})</span>`;
         parts.push({ key: 'turn', summaryHtml: turnSummary, detailHtml: turnDetail });
         const cum = DASH.state.cumulative;
-        const cumSummary = `${DASH_ICON.bittenCracker}<span style="font-weight:700;">${dashFmt(cum)}</span>개`;
-        const cumDetail = `${DASH_ICON.bittenCracker}<span style="opacity:.75;margin-right:2px;">누적 사용 크래커 · 추정 포함</span><span style="font-weight:700;">${dashFmt(cum)}</span>개`;
+        const cumSummary = `${DASH_ICON.bittenCracker}${dashNum('cumulative', cum)}개`;
+        const cumDetail = `${DASH_ICON.bittenCracker}<span style="opacity:.75;margin-right:2px;">누적 사용 크래커 · 추정 포함</span>${dashNum('cumulative', cum)}개`;
         parts.push({ key: 'cumulative', summaryHtml: cumSummary, detailHtml: cumDetail });
         const bal = DASH.state.balance;
         if (bal !== null && bal !== undefined) {
             const b = Number(bal) || 0;
-            const balSummary = `${DASH_ICON.cracker}<span style="font-weight:700;">${dashFmt(b)}</span>개`;
-            const balDetail = `${DASH_ICON.cracker}<span style="opacity:.75;margin-right:2px;">잔여</span><span style="font-weight:700;">${dashFmt(b)}</span>개`;
+            const balSummary = `${DASH_ICON.cracker}${dashNum('cracker', b)}개`;
+            const balDetail = `${DASH_ICON.cracker}<span style="opacity:.75;margin-right:2px;">잔여</span>${dashNum('cracker', b)}개`;
             parts.push({ key: 'cracker', summaryHtml: balSummary, detailHtml: balDetail });
         }
         else {
@@ -15169,7 +15284,7 @@
         }
         const diff = DASH.state.lastDiff || 0;
         if (diff > 0) {
-            const html = `<span style="display:inline-flex;align-items:center;"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="margin-right:2px;flex-shrink:0;"><polygon points="4,8 20,8 12,18"></polygon></svg><span style="font-weight:700;">${dashFmt(diff)}</span>개</span>`;
+            const html = `<span style="display:inline-flex;align-items:center;"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="margin-right:2px;flex-shrink:0;"><polygon points="4,8 20,8 12,18"></polygon></svg>${dashNum('deducted', diff)}개</span>`;
             parts.push({ key: 'deducted', summaryHtml: html, detailHtml: html });
         }
         const vis = parts.filter(p => visible[p.key] !== false);
@@ -15178,6 +15293,60 @@
             return;
         textSpan.innerHTML = html || '<span class="chud-part">대시보드 대기중…</span>';
         DASH.lastHtml = html;
+        animateDashboardNumbers(textSpan);
+    }
+    // Count-up on change only: a few frames of text updates plus a transform-only bump; nothing runs while idle.
+    const DASH_NUM = { prev: {}, frame: 0 };
+    function dashNum(key, value, exact = true, suffix = '') {
+        const n = Math.max(0, Number(value) || 0);
+        return `<span class="chud-num" data-num-key="${key}" data-num="${n}"${exact ? '' : ' data-num-estimate="1"'}${suffix ? ` data-num-suffix="${suffix}"` : ''} style="font-weight:700;">${dashFmt(n)}${suffix}</span>`;
+    }
+    function dashNumberAnimationWanted() {
+        if (settings.dashboardNumberAnimation === false || document.hidden)
+            return false;
+        try {
+            return !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        }
+        catch (_) {
+            return true;
+        }
+    }
+    function animateDashboardNumbers(root) {
+        if (DASH_NUM.frame) {
+            cancelAnimationFrame(DASH_NUM.frame);
+            DASH_NUM.frame = 0;
+        }
+        const animate = dashNumberAnimationWanted();
+        const jobs = [];
+        const seen = new Set();
+        for (const el of root.querySelectorAll('.chud-num[data-num-key]')) {
+            const key = el.dataset.numKey;
+            const to = Number(el.dataset.num);
+            if (!Number.isFinite(to) || el.dataset.numEstimate === '1')
+                continue;
+            const from = DASH_NUM.prev[key];
+            if (!seen.has(key))
+                DASH_NUM.prev[key] = to;
+            seen.add(key);
+            if (!animate || from === undefined || from === to)
+                continue;
+            el.classList.add(to > from ? 'chud-num-up' : 'chud-num-down');
+            jobs.push({ el, from, to, suffix: el.dataset.numSuffix || '' });
+        }
+        if (!jobs.length)
+            return;
+        const start = performance.now();
+        const duration = 450;
+        const step = now => {
+            const t = Math.min(1, (now - start) / duration);
+            const eased = 1 - Math.pow(1 - t, 3);
+            for (const job of jobs) {
+                if (job.el.isConnected)
+                    job.el.textContent = dashFmt(Math.round(job.from + (job.to - job.from) * eased)) + job.suffix;
+            }
+            DASH_NUM.frame = t < 1 ? requestAnimationFrame(step) : 0;
+        };
+        DASH_NUM.frame = requestAnimationFrame(step);
     }
     function getOrCreateDashTabId() {
         try {
@@ -15357,6 +15526,7 @@
             else
                 expireDashboardRoomStats(chatId);
         }
+        DASH_BALANCE.at = 0;
         if (getChatId() === chatId)
             scheduleDashboardUpdate(true);
 
@@ -15573,39 +15743,21 @@
             dl.__cmuDashPushWrapped = true;
         }
     }
+    // Radiosonde 4.5.3
+    // 참고 확프 v4.3.4의 데이터 취득부만 이식
+    // - v2 simple을 우선 사용하되 실패 시 OpenAPI bulk/current/status -> 공식 대시보드 -> legacy statistics 순으로 복구
+    // - 응답시간이 비어 있으면 통계/대시보드에서 보충
+    // - 독립 라존데의 UI/라우팅/별도 설정창 코드는 가져오지 않고 합본 UI만 사용
     const RS = {
-        // 4.5.0.4.12: IGX 공지 기준 모든 라디오존데 API의 정식 경로가 BunnyCDN으로 제공된다.
-        // BunnyCDN(radiosonde-api-striker.b-cdn.net)을 항상 1순위로 직접 호출하고,
-        // 기존 rs/old 주소는 장애 대응용 폴백으로만 유지한다.
-        apiBases: [
-            'https://radiosonde-api-striker.b-cdn.net/api/v2/simple/',
-            'https://rs.igx.kr/api/v2/simple/',
-            'https://old.rs.igx.kr/api/v2/simple/',
-            'https://rs.igx.kr/api/simple/',
-            'https://old.rs.igx.kr/api/simple/',
-        ],
-        modelsUrls: [
-            'https://radiosonde-api-striker.b-cdn.net/api/v2/models',
-            'https://rs.igx.kr/api/v2/models',
-            'https://old.rs.igx.kr/api/v2/models',
-            'https://rs.igx.kr/api/models',
-            'https://old.rs.igx.kr/api/models',
-        ],
-        statisticsUrls: [
-            'https://radiosonde-api-striker.b-cdn.net/api/v2/statistics',
-            'https://rs.igx.kr/api/v2/statistics',
-            'https://old.rs.igx.kr/api/v2/statistics',
-            'https://rs.igx.kr/api/statistics',
-            'https://old.rs.igx.kr/api/statistics',
-        ],
-        preferredApiBase: '',
         yameStatus: 'https://claude-radiosonde.chyoyam.chatgpt.site/api/v1/status',
-        activeWindowMs: 72 * 60 * 60 * 1000,
         validStatuses: new Set(['active', 'degraded', 'impacted']),
         models: [],
         last: new Map(),
         busy: false,
         pendingRefresh: false,
+        pendingManual: false,
+        lastAttemptAt: 0,
+        lastModelKey: "",
         discovered: false,
         discoveryAt: 0,
         discoveryPromise: null,
@@ -15613,283 +15765,99 @@
     const YAME_MODELS = [
         { slug: 'yame-fable5', apiId: 'fable5', source: 'yame', label: 'Fable 5.0', short: 'F5' },
     ];
+    // Built-in list for offline discovery (rs.igx.kr dashboard, 2026-10-01); live discovery adds newer models.
     const FALLBACK_MODELS = [
-        {
-                "slug": "claude-fable-5.1",
-                "apiId": "claude-fable-5.1",
-                "source": "igx",
-                "label": "Claude Fable 5.1",
-                "short": "F5.1"
-        },
-        {
-                "slug": "claude-opus-5.5",
-                "apiId": "claude-opus-5.5",
-                "source": "igx",
-                "label": "Claude Opus 5.5",
-                "short": "O5.5"
-        },
-        {
-                "slug": "claude-opus-5",
-                "apiId": "claude-opus-5",
-                "source": "igx",
-                "label": "Claude Opus 5",
-                "short": "O5"
-        },
-        {
-                "slug": "claude-opus-4.8",
-                "apiId": "claude-opus-4.8",
-                "source": "igx",
-                "label": "Claude Opus 4.8",
-                "short": "O4.8"
-        },
-        {
-                "slug": "claude-opus-4.7",
-                "apiId": "claude-opus-4.7",
-                "source": "igx",
-                "label": "Claude Opus 4.7",
-                "short": "O4.7"
-        },
-        {
-                "slug": "claude-opus-4.6",
-                "apiId": "claude-opus-4.6",
-                "source": "igx",
-                "label": "Claude Opus 4.6",
-                "short": "O4.6"
-        },
-        {
-                "slug": "claude-sonnet-5",
-                "apiId": "claude-sonnet-5",
-                "source": "igx",
-                "label": "Claude Sonnet 5",
-                "short": "S5"
-        },
-        {
-                "slug": "gemini-3.1-pro-preview",
-                "apiId": "gemini-3.1-pro-preview",
-                "source": "igx",
-                "label": "Gemini 3.1 Pro (Preview)",
-                "short": "G3.1P"
-        },
-        {
-                "slug": "gemini-2.5-pro",
-                "apiId": "gemini-2.5-pro",
-                "source": "igx",
-                "label": "Gemini 2.5 Pro",
-                "short": "G2.5P"
-        },
-        {
-                "slug": "gemini-3.8-flash",
-                "apiId": "gemini-3.8-flash",
-                "source": "igx",
-                "label": "Gemini 3.8 Flash",
-                "short": "G3.8F"
-        },
-        {
-                "slug": "gemini-3.7-flash",
-                "apiId": "gemini-3.7-flash",
-                "source": "igx",
-                "label": "Gemini 3.7 Flash",
-                "short": "G3.7F"
-        },
-        {
-                "slug": "gemini-3.6-flash",
-                "apiId": "gemini-3.6-flash",
-                "source": "igx",
-                "label": "Gemini 3.6 Flash",
-                "short": "G3.6F"
-        },
-        {
-                "slug": "gemini-3.5-flash",
-                "apiId": "gemini-3.5-flash",
-                "source": "igx",
-                "label": "Gemini 3.5 Flash",
-                "short": "G3.5F"
-        },
-        {
-                "slug": "gemini-3.5-flash-lite",
-                "apiId": "gemini-3.5-flash-lite",
-                "source": "igx",
-                "label": "Gemini 3.5 Flash Lite",
-                "short": "G3.5FL"
-        },
-        {
-                "slug": "gpt-6-sol",
-                "apiId": "gpt-6-sol",
-                "source": "igx",
-                "label": "ChatGPT 6 Sol",
-                "short": "G6S"
-        },
-        {
-                "slug": "gpt-6-luna",
-                "apiId": "gpt-6-luna",
-                "source": "igx",
-                "label": "ChatGPT 6 Luna",
-                "short": "G6L"
-        },
-        {
-                "slug": "gpt-5.6-sol",
-                "apiId": "gpt-5.6-sol",
-                "source": "igx",
-                "label": "ChatGPT 5.6 Sol",
-                "short": "G5.6S"
-        },
-        {
-                "slug": "gpt-5.6-terra",
-                "apiId": "gpt-5.6-terra",
-                "source": "igx",
-                "label": "ChatGPT 5.6 Terra",
-                "short": "G5.6T"
-        },
-        {
-                "slug": "gpt-5.6-luna",
-                "apiId": "gpt-5.6-luna",
-                "source": "igx",
-                "label": "ChatGPT 5.6 Luna",
-                "short": "G5.6L"
-        }
-];
+        ['claude-fable-5.1', 'Claude Fable 5.1', 'F5.1'], ['claude-opus-5.5', 'Claude Opus 5.5', 'O5.5'],
+        ['claude-opus-5', 'Claude Opus 5', 'O5'], ['claude-opus-4.8', 'Claude Opus 4.8', 'O4.8'],
+        ['claude-opus-4.7', 'Claude Opus 4.7', 'O4.7'], ['claude-opus-4.6', 'Claude Opus 4.6', 'O4.6'],
+        ['claude-sonnet-5.5', 'Claude Sonnet 5.5', 'S5.5'], ['claude-sonnet-5', 'Claude Sonnet 5', 'S5'],
+        ['gemini-3.1-pro-preview', 'Gemini 3.1 Pro (Preview)', 'G3.1P'], ['gemini-2.5-pro', 'Gemini 2.5 Pro', 'G2.5P'],
+        ['gemini-3.8-flash', 'Gemini 3.8 Flash', 'G3.8F'], ['gemini-3.7-flash', 'Gemini 3.7 Flash', 'G3.7F'],
+        ['gemini-3.6-flash', 'Gemini 3.6 Flash', 'G3.6F'], ['gemini-3.5-flash', 'Gemini 3.5 Flash', 'G3.5F'],
+        ['gemini-3.5-flash-lite', 'Gemini 3.5 Flash Lite', 'G3.5FL'], ['gpt-6-sol', 'ChatGPT 6 Sol', 'G6S'],
+        ['gpt-6-luna', 'ChatGPT 6 Luna', 'G6L'], ['gpt-5.6-sol', 'ChatGPT 5.6 Sol', 'G5.6S'],
+        ['gpt-5.6-terra', 'ChatGPT 5.6 Terra', 'G5.6T'], ['gpt-5.6-luna', 'ChatGPT 5.6 Luna', 'G5.6L'],
+        ['deepseek-v4.1-flash', 'DeepSeek V4.1 Flash', 'D4.1F'], ['deepseek-v4-pro', 'DeepSeek V4 Pro', 'D4P'],
+    ].map(([slug, label, short]) => ({ slug, apiId: slug, source: 'igx', label, short }));
     const DEFAULT_RS_MODELS = [...YAME_MODELS, ...FALLBACK_MODELS];
     const EXCLUDED_MODELS = new Set(['gemini-3-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']);
-    const MODEL_OVERRIDES = new Map(FALLBACK_MODELS.map(m => [m.slug, m]));
-    // 4.5.0.4.14:
-    // 공지 직후 /models CDN 캐시 반영이 늦어도 확인된 신규 모델은 즉시 사용할 수 있게 유지한다.
-    // 동시에 아래 자동 탐색 로직이 여러 /models + /statistics 출처를 합쳐서,
-    // 앞으로 새 모델이 생기면 스크립트 업데이트 없이도 자동 등록한다.
-    const REQUIRED_RS_SLUGS = [
-        'claude-opus-5.5',
-        'gpt-6-sol',
-        'gpt-6-luna',
-        'gemini-3.8-flash',
-        'gemini-3.7-flash',
-    ];
-    function mergeRequiredRsModels(models) {
-        const map = new Map();
-        for (const model of Array.isArray(models) ? models : []) {
-            if (model?.slug)
-                map.set(model.slug, { ...model });
-        }
-        for (const slug of REQUIRED_RS_SLUGS) {
-            const fallback = MODEL_OVERRIDES.get(slug);
-            if (!fallback)
-                continue;
-            const current = map.get(slug);
-            map.set(slug, {
-                ...fallback,
-                ...(current || {}),
-                slug,
-                apiId: slug,
-                source: 'igx',
-                // 공지 모델은 사람이 읽기 쉬운 고정 라벨/축약명을 우선한다.
-                label: fallback.label,
-                short: fallback.short,
-            });
-        }
-        return ensureUniqueShorts([...map.values()]);
-    }
+    const NON_MODEL_SLUGS = new Set([
+        'statistics', 'statistic', 'stats', 'status', 'state', 'health', 'summary', 'overview',
+        'data', 'result', 'results', 'models', 'model', 'metrics', 'metric', 'history', 'latest', 'current',
+        'latency', 'score', 'tps', 'api', 'meta', 'metadata',
+    ]);
+    const MODEL_OVERRIDES = new Map(FALLBACK_MODELS.map(model => [model.slug, model]));
+
+    const IGX_BASE_URL = 'https://rs.igx.kr';
+
     function titleWord(word) {
         const known = {
-            api: 'API', ai: 'AI', gpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini',
-            opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku',
-            pro: 'Pro', flash: 'Flash', lite: 'Lite', mini: 'Mini',
-            preview: 'Preview', thinking: 'Thinking',
+            api: 'API', ai: 'AI', gpt: 'GPT', claude: 'Claude', gemini: 'Gemini', deepseek: 'DeepSeek',
+            qwen: 'Qwen', grok: 'Grok', llama: 'Llama', mistral: 'Mistral', kimi: 'Kimi', glm: 'GLM',
+            fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku',
+            pro: 'Pro', flash: 'Flash', lite: 'Lite', mini: 'Mini', preview: 'Preview',
+            thinking: 'Thinking', sol: 'Sol', terra: 'Terra', luna: 'Luna', max: 'Max', turbo: 'Turbo',
+            experimental: 'Experimental', exp: 'Exp',
         };
         return known[word] || (word ? word.charAt(0).toUpperCase() + word.slice(1) : '');
     }
     function parseSlug(slug) {
-        const tokens = String(slug || '').toLowerCase().split('-').map(v => v.trim()).filter(Boolean);
+        // "v4.1" style versions (deepseek-v4.1-flash) count as version numbers.
+        const tokens = String(slug || '').toLowerCase().split('-').map(value => value.trim()).filter(Boolean)
+            .map((token, index) => index > 0 && /^v\d+(?:\.\d+)*$/.test(token) ? token.slice(1) : token);
         const brand = tokens[0] || 'model';
-        const isNum = t => /^\d+(?:\.\d+)*$/.test(t);
-        const nIdx = tokens.findIndex((t, i) => i > 0 && isNum(t));
+        const isNumber = token => /^\d+(?:\.\d+)*$/.test(token);
+        const numberIndex = tokens.findIndex((token, index) => index > 0 && isNumber(token));
         let version = '';
-        if (nIdx !== -1) {
+        if (numberIndex !== -1) {
             const parts = [];
-            for (let i = nIdx; i < tokens.length && isNum(tokens[i]); i++)
-                parts.push(tokens[i]);
+            for (let i = numberIndex; i < tokens.length && isNumber(tokens[i]); i++) parts.push(tokens[i]);
             version = parts.join('.');
         }
-        const descriptors = tokens.slice(1).filter(t => !isNum(t));
+        const descriptors = tokens.slice(1).filter(token => !isNumber(token));
         return { brand, version, descriptors };
     }
     function autoLabel(slug) {
         const override = MODEL_OVERRIDES.get(slug);
-        if (override)
-            return override.label;
+        if (override) return override.label;
         const { brand, version, descriptors } = parseSlug(slug);
         const brandName = titleWord(brand);
-        if (brand === 'claude') {
-            const family = descriptors.find(v => ['fable', 'opus', 'sonnet', 'haiku'].includes(v));
-            const rest = descriptors.filter(v => v !== family).map(titleWord);
-            return [brandName, family ? titleWord(family) : '', version, ...rest].filter(Boolean).join(' ');
-        }
-        const desc = descriptors.map(titleWord).join(' ');
-        if (version && desc)
-            return `${brandName} ${version} ${desc}`;
-        if (version)
-            return `${brandName} ${version}`;
-        if (desc)
-            return `${brandName} ${desc}`;
+        const descriptorText = descriptors.map(titleWord).join(' ');
+        if (version && descriptorText) return `${brandName} ${version} ${descriptorText}`;
+        if (version) return `${brandName} ${version}`;
+        if (descriptorText) return `${brandName} ${descriptorText}`;
         return brandName;
     }
     function autoShort(slug) {
         const override = MODEL_OVERRIDES.get(slug);
-        if (override)
-            return override.short;
+        if (override) return override.short;
         const { brand, version, descriptors } = parseSlug(slug);
+        const descriptorInitials = descriptors.filter(v => !['preview', 'experimental', 'exp'].includes(v)).map(v => v.charAt(0).toUpperCase()).join('');
         if (brand === 'claude') {
-            const family = descriptors.find(v => ['opus', 'sonnet', 'haiku'].includes(v));
+            const family = descriptors.find(v => ['fable', 'opus', 'sonnet', 'haiku'].includes(v));
             return `${family ? family.charAt(0).toUpperCase() : 'C'}${version || ''}`.slice(0, 8);
         }
-        if (brand === 'gemini')
-            return `G${version || ''}`.slice(0, 8);
-        return `${brand.charAt(0).toUpperCase()}${version || ''}`.slice(0, 8) || 'M';
+        if (brand === 'gemini') {
+            const tier = descriptors.filter(v => v !== 'pro').map(v => v.charAt(0).toUpperCase()).join('');
+            return `G${version || ''}${tier}`.slice(0, 8);
+        }
+        if (brand === 'gpt') {
+            const variant = descriptors.find(v => !['gpt', 'openai'].includes(v)) || '';
+            return `G${version || ''}${variant ? variant.charAt(0).toUpperCase() : ''}`.slice(0, 8);
+        }
+        return `${brand.charAt(0).toUpperCase()}${version || ''}${descriptorInitials}`.slice(0, 8) || 'M';
     }
-    function isRsModelSlug(slug) {
-        return typeof slug === 'string' && /^[a-z0-9][a-z0-9.-]*$/i.test(slug) &&
-            slug.includes('-') && /\d/.test(slug) && !EXCLUDED_MODELS.has(slug) && !slug.startsWith('yame-');
+    function isRsModelSlug(value) {
+    if (Array.isArray(igxV2Models) && igxV2Models.includes(value)) return true;
+        const slug = String(value || '').trim().toLowerCase();
+        if (!/^[a-z0-9][a-z0-9._-]*$/i.test(slug)) return false;
+        if (EXCLUDED_MODELS.has(slug) || NON_MODEL_SLUGS.has(slug)) return false;
+        if (!slug.includes('-') || !/\d/.test(slug) || slug.startsWith('yame-')) return false;
+        if (/^(?:api|stats?|statistics|status|summary|metrics?|history|latest|current|health|data|results?)-/i.test(slug)) return false;
+        return true;
     }
     function rsModelMeta(slug) {
         return { slug, apiId: slug, source: 'igx', label: autoLabel(slug), short: autoShort(slug) };
-    }
-    function rsSlugFromDiscoveryItem(item) {
-        if (typeof item === 'string')
-            return item.trim();
-        if (!item || typeof item !== 'object')
-            return '';
-        return String(item.slug || item.model || item.id || item.name || '').trim();
-    }
-    function modelsFromList(payload) {
-        if (!payload || payload.success === false)
-            return [];
-        const raw = Array.isArray(payload.data)
-            ? payload.data
-            : Array.isArray(payload.data?.models)
-                ? payload.data.models
-                : Array.isArray(payload.models)
-                    ? payload.models
-                    : [];
-        const slugs = raw.map(rsSlugFromDiscoveryItem).filter(isRsModelSlug);
-        return [...new Set(slugs)].map(rsModelMeta);
-    }
-    function latestRecordMs(records) {
-        const times = Array.isArray(records) ? records.map(r => Date.parse(r?.time)).filter(Number.isFinite) : [];
-        return times.length ? Math.max(...times) : null;
-    }
-    function modelsFromStatistics(payload) {
-        if (!payload || payload.success === false || !Array.isArray(payload.data))
-            return [];
-        const models = new Map();
-        for (const provider of payload.data) {
-            for (const model of Array.isArray(provider?.models) ? provider.models : []) {
-                const slug = rsSlugFromDiscoveryItem(model);
-                if (!isRsModelSlug(slug))
-                    continue;
-                const latest = latestRecordMs(model.statistics);
-                if (latest === null || Date.now() - latest > RS.activeWindowMs)
-                    continue;
-                models.set(slug, rsModelMeta(slug));
-            }
-        }
-        return [...models.values()];
     }
     function ensureUniqueShorts(models) {
         const used = new Set();
@@ -15898,207 +15866,405 @@
             let candidate = original;
             let suffix = 2;
             while (used.has(candidate)) {
-                const s = String(suffix++);
-                candidate = `${original.slice(0, Math.max(1, 8 - s.length))}${s}`;
+                const suffixText = String(suffix++);
+                candidate = `${original.slice(0, Math.max(1, 8 - suffixText.length))}${suffixText}`;
             }
             used.add(candidate);
             return { ...model, short: candidate };
         });
     }
-    function loadRsModelCache() {
-        try {
-            const parsed = JSON.parse(readLS(LS.rsModels, 'null'));
-            const arr = Array.isArray(parsed) ? parsed : parsed?.models;
-            if (!Array.isArray(arr))
-                return null;
-            const models = arr
-                .filter(m => m && typeof m.slug === 'string' && typeof m.short === 'string' && typeof m.label === 'string' && isRsModelSlug(m.slug))
-                .map(m => ({ ...m, apiId: m.slug, source: 'igx' }));
-            return models.length ? mergeRequiredRsModels(models) : mergeRequiredRsModels([]);
+    function normalizeStatus(status) {
+        const value = String(status || 'unknown').trim().toLowerCase();
+        if (['active', 'operational', 'ok', 'healthy', 'online', 'normal'].includes(value)) return 'active';
+        if (['degraded', 'slow', 'warning', 'warn', 'unstable'].includes(value)) return 'degraded';
+        if (['impacted', 'down', 'offline', 'error', 'failed', 'failure', 'unavailable', 'critical', 'inactive'].includes(value)) return 'impacted';
+        return RS.validStatuses.has(value) ? value : 'unknown';
+    }
+
+    // 아래 별칭은 참고 확프의 검증된 데이터 파서를 그대로 가져오기 위한 연결점
+    const looksLikeModelSlug = isRsModelSlug;
+    const makeModelMeta = rsModelMeta;
+    function firstFinite(...values) {
+        for (const value of values) {
+            if (value === null || value === undefined || value === '') continue;
+            const number = Number(value);
+            if (Number.isFinite(number)) return number;
         }
-        catch (_) {
-            return null;
+        return null;
+    }
+    // IGX v2 /simple/{model}: { status, measuredAt, latency(ms), tps, score, failureCount }.
+    function metricRecordFromObject(source, impliedSlug = '') {
+        if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+        const slug = String(source.slug || source.model || impliedSlug || '');
+        if (!looksLikeModelSlug(slug)) return null;
+        const score = firstFinite(source.score, source.experience_score?.value);
+        const latency = firstFinite(source.latency, source.latency_ms, source.ttft_ms);
+        const tps = firstFinite(source.tps);
+        const rawStatus = String(source.status || source.state || '');
+        if (score === null && latency === null && tps === null && !rawStatus) return null;
+        return { slug, status: normalizeStatus(rawStatus), score, latency, tps, failureCount: firstFinite(source.failureCount) ?? 0 };
+    }
+    // Last-resort metrics when the per-model API fails; parsing the 0.8MB dashboard is costly on phones.
+    function dashboardEntriesFromHtml(html) {
+        const parsed = new DOMParser().parseFromString(String(html || ''), 'text/html');
+        const bySlug = new Map();
+        const slugRe = /^[a-z0-9][a-z0-9._-]*$/i;
+        const statusRe = /\b(Operational|Active|Degraded|Impacted|Down|Offline|Unknown)\b/i;
+        const scoreRe = /(\d+(?:\.\d+)?)\s*\/\s*100\b/i;
+        const latencyRe = /(\d+(?:\.\d+)?)\s*(?:초|s\b)/i;
+        const tpsRe = /(\d+(?:\.\d+)?)\s*(?:tok\/s|tokens?\/s)\b/i;
+        for (const node of parsed.querySelectorAll('body *')) {
+            if (node.children.length) continue;
+            const slug = String(node.textContent || '').trim();
+            if (!slugRe.test(slug) || !looksLikeModelSlug(slug)) continue;
+            let row = node.parentElement;
+            for (let depth = 0; row && depth < 8; depth += 1, row = row.parentElement) {
+                const rowText = String(row.textContent || '').replace(/\s+/g, ' ').trim();
+                const statusMatch = rowText.match(statusRe);
+                const scoreMatch = rowText.match(scoreRe);
+                if (!statusMatch || !scoreMatch) continue;
+                const latencyMatch = rowText.match(latencyRe);
+                const tpsMatch = rowText.match(tpsRe);
+                bySlug.set(slug, {
+                    slug,
+                    status: normalizeStatus(statusMatch[1]),
+                    score: Number(scoreMatch[1]),
+                    latency: latencyMatch ? Number(latencyMatch[1]) * 1000 : null,
+                    tps: tpsMatch ? Number(tpsMatch[1]) : null,
+                    failureCount: 0,
+                });
+                break;
+            }
+        }
+        return bySlug;
+    }
+
+    // rs.igx.kr/api/v2/* answers 307 to this CDN without CORS headers, so browser fetch must call the CDN directly.
+    // The CDN sends `Access-Control-Allow-Origin: *`; the igx host stays as an extension-only fallback.
+    const IGX_API_BASES = ['https://igx-radiosonde-api-striker.b-cdn.net/v2/', `${IGX_BASE_URL}/api/v2/`];
+    // The CDN pins /v2/models (query strings are ignored); only the dashboard lists newly added models.
+    const IGX_MODEL_CACHE_KEY = 'cmu_rs_models_v1';
+    const IGX_MODEL_CACHE_MS = 6 * 60 * 60 * 1000;
+    var igxV2Models = null;
+    let igxModelListPromise = null;
+    let igxApiBaseIndex = 0;
+    const igxMetricCache = new Map();
+    const igxMetricInflight = new Map();
+    const igxMetricFailures = new Map();
+    const igxPendingRequests = [];
+    const igxActiveAborts = new Set();
+    let igxRunningRequests = 0;
+
+    function igxAbortError() {
+        const error = new Error('IGX request cancelled');
+        error.name = 'AbortError';
+        return error;
+    }
+    function igxCanRequest() {
+        return !document.hidden && shouldRun() && settings.radiosonde && isChatRoomPath();
+    }
+    function cancelIgxRequests() {
+        if (igxActiveAborts.size || igxPendingRequests.length) RS.lastAttemptAt = 0;
+        for (const abort of [...igxActiveAborts]) abort();
+        for (const job of igxPendingRequests.splice(0)) job.reject(igxAbortError());
+    }
+    function pumpIgxRequests() {
+        if (!igxCanRequest()) {
+            cancelIgxRequests();
+            return;
+        }
+        while (igxRunningRequests < 4 && igxPendingRequests.length) {
+            const job = igxPendingRequests.shift();
+            igxRunningRequests++;
+            Promise.resolve().then(() => {
+                if (!igxCanRequest()) throw igxAbortError();
+                return job.run();
+            }).then(job.resolve, job.reject).finally(() => {
+                igxRunningRequests--;
+                pumpIgxRequests();
+            });
         }
     }
-    function saveRsModelCache(models) {
-        try {
-            const merged = mergeRequiredRsModels(models);
-            localStorage.setItem(LS.rsModels, JSON.stringify({ ts: Date.now(), models: merged }));
-        }
-        catch (_) { }
+    function igxRequestAttempts(endpoint, rawText, url) {
+        if (url) return [{ target: url, useFetch: true }, { target: url, useFetch: false }];
+        // The dashboard has no CORS headers; only the extension transport can read it.
+        if (rawText) return [{ target: IGX_BASE_URL + '/', useFetch: false }];
+        const order = [igxApiBaseIndex, ...IGX_API_BASES.keys()].filter((value, index, list) => list.indexOf(value) === index);
+        return order.flatMap(base => [
+            { target: IGX_API_BASES[base] + endpoint, useFetch: true, base },
+            { target: IGX_API_BASES[base] + endpoint, useFetch: false, base },
+        ]);
     }
+    function igxRequestJson(endpoint, { rawText = false, url = '', envelope = true } = {}) {
+        const attempts = igxRequestAttempts(endpoint, rawText, url)
+            .filter(attempt => attempt.useFetch ? typeof fetch === 'function' && typeof AbortController === 'function' : cmuGmXhrAvailable());
+        return new Promise((resolve, reject) => {
+            igxPendingRequests.push({ resolve, reject, run: () => new Promise((done, fail) => {
+                let settled = false, stage = -1, phaseTimer, hardTimer, request, controller, lastError = null;
+                const closeStage = () => {
+                    clearTimeout(phaseTimer);
+                    try { controller?.abort(); } catch (_) {}
+                    try { request?.abort?.(); } catch (_) {}
+                    controller = request = null;
+                };
+                const finish = (error, value) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(hardTimer);
+                    igxActiveAborts.delete(abort);
+                    closeStage();
+                    if (error) fail(error); else done(value);
+                };
+                const abort = () => finish(igxAbortError());
+                const parse = response => {
+                    const status = Number(response.status) || 0;
+                    if (status && (status < 200 || status >= 300)) throw new Error('HTTP ' + status);
+                    if (rawText) {
+                        if (!response.responseText) throw new Error('Empty response');
+                        return response.responseText;
+                    }
+                    const payload = JSON.parse(response.responseText);
+                    if (envelope && payload?.success !== true) throw new Error(payload?.message || 'IGX request failed');
+                    return envelope ? payload.data : payload;
+                };
+                const next = () => {
+                    if (settled) return;
+                    if (!igxCanRequest()) { abort(); return; }
+                    stage++; // Invalidate callbacks before aborting the previous transport.
+                    closeStage();
+                    const attempt = attempts[stage];
+                    if (!attempt) { finish(lastError || new Error('Network request failed')); return; }
+                    const token = stage;
+                    const current = () => !settled && token === stage;
+                    const failure = error => {
+                        if (!current()) return;
+                        lastError = error instanceof Error ? error : new Error('Network request failed');
+                        next();
+                    };
+                    const loaded = response => {
+                        if (!current()) return;
+                        try {
+                            const value = parse(response);
+                            if (attempt.base !== undefined) igxApiBaseIndex = attempt.base;
+                            finish(null, value);
+                        } catch (error) { failure(error); }
+                    };
+                    phaseTimer = setTimeout(() => failure(new Error('Request transport timeout')), 8000);
+                    try {
+                        if (attempt.useFetch) {
+                            controller = new AbortController();
+                            fetch(attempt.target, { method: 'GET', credentials: 'omit', cache: 'no-store', signal: controller.signal,
+                                headers: { Accept: rawText ? 'text/html' : 'application/json' } }).then(async response => {
+                                loaded({ status: response.status, responseText: await response.text() });
+                            }).catch(failure);
+                        } else {
+                            request = cmuGmXhr({ method: 'GET', url: attempt.target, timeout: 18000,
+                                headers: { Accept: rawText ? 'text/html' : 'application/json' }, onload: loaded,
+                                onerror: () => failure(new Error('Extension network error')),
+                                ontimeout: () => failure(new Error('Extension request timeout')),
+                                onabort: () => failure(new Error('Extension request aborted')),
+                            });
+                        }
+                    } catch (error) { failure(error); }
+                };
+                igxActiveAborts.add(abort);
+                hardTimer = setTimeout(() => finish(new Error('Request timeout')), 20000);
+                next();
+            }) });
+            pumpIgxRequests();
+        });
+    }
+    let igxDashboardMetrics = null;
+    let igxDashboardMetricsAt = 0;
+    let igxDashboardMetricsPromise = null;
+    let igxDashboardRetryAt = 0;
+    function recentIgxDashboardMetrics() {
+        return igxDashboardMetrics && Date.now() - igxDashboardMetricsAt < 5 * 60 * 1000
+            ? igxDashboardMetrics : new Map();
+    }
+    function recoverIgxDashboardMetrics() {
+        const recent = recentIgxDashboardMetrics();
+        if (recent.size) return Promise.resolve(recent);
+        if (igxDashboardMetricsPromise) return igxDashboardMetricsPromise;
+        if (Date.now() < igxDashboardRetryAt || !igxCanRequest() || !cmuGmXhrAvailable()) return Promise.resolve(new Map());
+        igxDashboardRetryAt = Date.now() + 5 * 60 * 1000;
+        igxDashboardMetricsPromise = igxRequestJson(null, { rawText: true })
+            .then(html => {
+                const entries = dashboardEntriesFromHtml(html);
+                if (!entries.size) throw new Error('No dashboard statistics');
+                igxDashboardMetrics = entries;
+                igxDashboardMetricsAt = Date.now();
+                return entries;
+            }).catch(() => new Map())
+            .finally(() => { igxDashboardMetricsPromise = null; });
+        return igxDashboardMetricsPromise;
+    }
+    function igxModelSlugs(data) {
+        if (!Array.isArray(data)) throw new Error('Invalid IGX model list');
+        const slugs = [...new Set(data.filter(value => typeof value === 'string' &&
+            /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !EXCLUDED_MODELS.has(value.toLowerCase())))];
+        if (!slugs.length) throw new Error('Empty IGX model list');
+        return slugs;
+    }
+    function igxDashboardModelSlugs(html) {
+        // Read only the serialized model IDs; never evaluate dashboard JavaScript.
+        const match = /\bmodels["']?\s*:\s*(\[[a-z0-9._",\s-]{1,32768}\])/i.exec(html);
+        if (!match) throw new Error('Missing IGX dashboard model list');
+        return igxModelSlugs(JSON.parse(match[1]));
+    }
+    function igxLoadCachedModels() {
+        try {
+            const cached = JSON.parse(localStorage.getItem(IGX_MODEL_CACHE_KEY) || 'null');
+            if (cached && Array.isArray(cached.slugs) && cached.slugs.length) return cached;
+        } catch (_) {}
+        return null;
+    }
+    async function getIgxOfficialModels() {
+        if (igxV2Models) return igxV2Models;
+        // One discovery per page at most, and the merged list is reused across pages for six hours.
+        if (!igxModelListPromise) igxModelListPromise = (async () => {
+            const cached = igxLoadCachedModels();
+            if (cached && Date.now() - Number(cached.at || 0) < IGX_MODEL_CACHE_MS) return (igxV2Models = cached.slugs);
+            const results = await Promise.allSettled([
+                igxRequestJson('models').then(igxModelSlugs),
+                cmuGmXhrAvailable() ? igxRequestJson(null, { rawText: true }).then(igxDashboardModelSlugs) : Promise.resolve([]),
+            ]);
+            const aborted = results.find(result => result.status === 'rejected' && result.reason?.name === 'AbortError');
+            if (aborted) throw aborted.reason;
+            const catalog = results[0].status === 'fulfilled' ? results[0].value : [];
+            const dashboard = results[1].status === 'fulfilled' ? results[1].value : [];
+            // The dashboard lists the newest models; the catalog only adds ones the dashboard missed.
+            const slugs = [...new Set([...dashboard, ...catalog])];
+            if (dashboard.length) {
+                try { localStorage.setItem(IGX_MODEL_CACHE_KEY, JSON.stringify({ at: Date.now(), slugs })); } catch (_) {}
+                return (igxV2Models = slugs);
+            }
+            // Without the dashboard, keep models learned earlier and retry discovery on the next page.
+            const merged = [...new Set([...(cached?.slugs || []), ...FALLBACK_MODELS.map(model => model.slug), ...slugs])];
+            return (igxV2Models = merged);
+        })().catch(error => {
+            igxModelListPromise = null;
+            throw error;
+        });
+        return igxModelListPromise;
+    }
+    function fetchIgxOfficialModel(slug, { force = false } = {}) {
+        if (igxMetricInflight.has(slug)) return igxMetricInflight.get(slug);
+        const cached = igxMetricCache.get(slug);
+        if (!force && cached && Date.now() - cached.at < 15000) return Promise.resolve(cached.record);
+        const failure = igxMetricFailures.get(slug);
+        if (failure && Date.now() < failure.retryAt) return Promise.reject(new Error('IGX retry cooldown'));
+        const task = igxRequestJson('simple/' + encodeURIComponent(slug)).then(data => {
+            const record = metricRecordFromObject(data, slug);
+            if (!record) throw new Error('Invalid IGX simple statistics');
+            igxMetricCache.set(slug, { at: Date.now(), record });
+            igxMetricFailures.delete(slug);
+            return record;
+        }).catch(error => {
+            if (error.name !== 'AbortError') {
+                const count = Math.min(4, (failure?.count || 0) + 1);
+                igxMetricFailures.set(slug, { count, retryAt: Date.now() + Math.min(300000, 30000 * 2 ** (count - 1)) });
+            }
+            throw error;
+        }).finally(() => igxMetricInflight.delete(slug));
+        igxMetricInflight.set(slug, task);
+        return task;
+    }
+    async function fetchIgxSnapshot({ force = false, slugs = [], onRecord } = {}) {
+        const requested = [...new Set(slugs)];
+        const results = await Promise.allSettled(requested.map(async slug => {
+            const record = await fetchIgxOfficialModel(slug, { force });
+            if (igxCanRequest() && onRecord) onRecord(slug, record);
+            return record;
+        }));
+        const entries = new Map();
+        results.forEach((result, index) => {
+            if (result.status === 'fulfilled') entries.set(requested[index], result.value);
+        });
+        // A shared, bounded dashboard fallback covers API outages.
+        if (entries.size < requested.length && igxCanRequest()) {
+            const dashboard = await recoverIgxDashboardMetrics();
+            for (const slug of requested) {
+                if (entries.has(slug)) continue;
+                const record = dashboard.get(slug);
+                const latest = igxMetricCache.get(slug);
+                if (record && (!latest || igxDashboardMetricsAt >= latest.at)) {
+                    entries.set(slug, record);
+                    if (igxCanRequest() && onRecord) onRecord(slug, record);
+                }
+            }
+        }
+        return entries;
+    }
+
+    cmuListen(document, 'visibilitychange', () => { if (document.hidden) cancelIgxRequests(); });
+    cmuListen(window, 'pagehide', cancelIgxRequests);
+    CMU_RESOURCES.cleanups.push(cancelIgxRequests);
+
     async function discoverRsModels() {
-        if (RS.discoveryPromise)
-            return RS.discoveryPromise;
+        if (RS.discoveryPromise) return RS.discoveryPromise;
         RS.discoveryPromise = (async () => {
-            const cache = loadRsModelCache();
             const previous = JSON.stringify(RS.models);
             try {
-                const discovered = new Map();
-                const discoveryErrors = [];
-                const absorb = (models) => {
-                    for (const model of Array.isArray(models) ? models : []) {
-                        if (model?.slug && isRsModelSlug(model.slug))
-                            discovered.set(model.slug, { ...model, apiId: model.slug, source: 'igx' });
-                    }
-                };
-
-                // 4.5.0.4.14: 한 CDN의 오래된 목록 때문에 신규 모델이 빠지지 않도록
-                // 모든 공개 /models 출처를 병렬 조회하고 결과를 합집합으로 만든다.
-                const listResults = await Promise.allSettled(
-                    RS.modelsUrls.map(url => gmGetRsJson(url, 9000).then(modelsFromList))
-                );
-                for (const result of listResults) {
-                    if (result.status === 'fulfilled')
-                        absorb(result.value);
-                    else
-                        discoveryErrors.push(result.reason);
-                }
-
-                // /models보다 실제 통계 수집이 먼저 시작될 수도 있어 /statistics 결과도 합친다.
-                // 새 모델 slug가 어느 한 공개 출처에 나타나기만 하면 다음 자동 탐색 때 등록된다.
-                const statResults = await Promise.allSettled(
-                    RS.statisticsUrls.map(url => gmGetRsJson(url, 10000).then(modelsFromStatistics))
-                );
-                for (const result of statResults) {
-                    if (result.status === 'fulfilled')
-                        absorb(result.value);
-                    else
-                        discoveryErrors.push(result.reason);
-                }
-
-                let models = [...discovered.values()];
-                if (!models.length) {
-                    const lastDiscoveryError = discoveryErrors.filter(Boolean).at(-1);
-                    throw lastDiscoveryError || new Error('empty model list');
-                }
-                models = mergeRequiredRsModels(models);
-                RS.models = [...YAME_MODELS, ...models];
-                saveRsModelCache(models);
+                const slugs = await getIgxOfficialModels();
+                const discovered = ensureUniqueShorts(slugs.filter(looksLikeModelSlug).map(makeModelMeta));
+                if (discovered.length < 1) throw new Error('insufficient model list');
+                RS.models = [...YAME_MODELS, ...discovered];
             }
-            catch (_) {
-                if (!RS.models.length) RS.models = [...YAME_MODELS, ...mergeRequiredRsModels(cache?.length ? cache : FALLBACK_MODELS)];
+            catch (error) {
+                if (!RS.models.length) RS.models = DEFAULT_RS_MODELS.map(model => ({ ...model }));
+                // Visibility/route cancellation is not a completed discovery. Resume on the next visible refresh.
+                if (error?.name === 'AbortError') return RS.models;
             }
             RS.discoveryAt = Date.now();
             if (previous !== JSON.stringify(RS.models)) {
-                const active = new Set(RS.models.map(m => m.slug));
+                const active = new Set(RS.models.map(model => model.slug));
                 for (const slug of RS.last.keys()) if (!active.has(slug)) RS.last.delete(slug);
                 syncRsModelSettings();
-                if (RS.busy) RS.pendingRefresh = true;
-                else scheduleRadiosondeRefresh(true);
+                renderRsLine();
             }
             return RS.models;
         })();
-        try {
-            return await RS.discoveryPromise;
-        }
-        finally {
-            RS.discoveryPromise = null;
-        }
+        try { return await RS.discoveryPromise; }
+        finally { RS.discoveryPromise = null; }
     }
-    function normalizeStatus(status) {
-        const v = String(status || 'unknown').toLowerCase();
-        if (v === 'operational') return 'active';
-        if (v === 'unstable') return 'degraded';
-        if (v === 'critical' || v === 'inactive') return 'impacted';
-        return RS.validStatuses.has(v) ? v : 'unknown';
-    }
-    function fmt2(v) {
-        if (v === null || v === undefined || v === '')
-            return null;
-        const n = Number(v);
-        return Number.isFinite(n) ? n.toFixed(2) : null;
-    }
-    function fmt0(v) {
-        if (v === null || v === undefined || v === '')
-            return null;
-        const n = Number(v);
-        return Number.isFinite(n) ? Math.round(n).toString() : null;
-    }
-    function latencySeconds(latencyInt) {
-        if (latencyInt === null || latencyInt === undefined || latencyInt === '')
-            return null;
-        const n = Number(latencyInt);
-        if (!Number.isFinite(n))
-            return null;
-        return n >= 0 ? (n / 1000).toFixed(2) : null;
-    }
-    async function fetchRsModel(slug) {
-        const encoded = encodeURIComponent(slug);
-        const bases = [...new Set([
-            RS.preferredApiBase,
-            ...RS.apiBases,
-        ].filter(Boolean))];
 
-        let lastError = null;
-        const errors = [];
-        for (const base of bases) {
-            // 4.5.0.4.6: 브라우저에서 직접 열어 정상 확인한 URL 형식을 그대로 사용.
-            // `_cmu=timestamp` 같은 임의 query string은 붙이지 않는다.
-            const url = `${base}${encoded}`;
-            try {
-                const payload = await gmGetRsJson(url, 9000);
-                if (!payload || payload.success !== true || !payload.data)
-                    throw new Error(`invalid payload @ ${url}`);
-                RS.preferredApiBase = base;
-                return payload;
-            }
-            catch (error) {
-                lastError = error;
-                errors.push(String(error?.message || error));
-            }
-        }
-
-        const detail = errors.filter(Boolean).slice(0, 3).join(' | ');
-        throw new Error(detail || String(lastError?.message || 'radiosonde endpoint unavailable'));
-    }
-    async function fetchYameStatus() {
-        const url = `${RS.yameStatus}?t=${Date.now()}`;
-        try {
-            return await gmGetJson(url, 20000);
-        }
-        catch (_) {
-            await sleep(1200);
-            return await gmGetJson(`${RS.yameStatus}?t=${Date.now()}`, 20000);
-        }
-    }
-    function yameStatusFromScore(score, state, hasError = false) {
-        if (hasError)
-            return 'impacted';
-        const n = Number(score);
-        if (Number.isFinite(n)) {
-            if (n >= 80)
-                return 'active';
-            if (n >= 50)
-                return 'degraded';
-            return 'impacted';
-        }
-        return state === 'slow' ? 'degraded' : 'unknown';
+    // The status server takes seconds to answer and measures every 5 minutes; room changes reuse a recent answer.
+    const YAME_CACHE = { at: 0, value: null, promise: null };
+    async function fetchYameStatus({ force = false } = {}) {
+        if (!force && YAME_CACHE.value && Date.now() - YAME_CACHE.at < 30000) return YAME_CACHE.value;
+        if (YAME_CACHE.promise) return YAME_CACHE.promise;
+        YAME_CACHE.promise = igxRequestJson(null, { url: RS.yameStatus + '?t=' + Date.now(), envelope: false })
+            .then(value => { YAME_CACHE.value = value; YAME_CACHE.at = Date.now(); return value; })
+            .finally(() => { YAME_CACHE.promise = null; });
+        return YAME_CACHE.promise;
     }
     function normalizeYamePayload(payload) {
         const normalized = new Map();
-        if (!payload || !Array.isArray(payload.models))
-            return normalized;
+        if (!payload || !Array.isArray(payload.models)) return normalized;
         for (const model of payload.models) {
-            if (!model || typeof model.id !== 'string')
-                continue;
+            if (!model || typeof model.id !== 'string') continue;
             const metrics = model.metrics || {};
             const scoreInfo = model.experience_score || {};
             const hasError = Boolean(model.error);
-            const score = scoreInfo.value;
-            const status = yameStatusFromScore(score, model.state, hasError);
+            const status = hasError ? 'impacted' : model.state === 'slow' ? 'degraded' : 'active';
             normalized.set(model.id, {
-                success: true,
-                data: {
-                    status,
-                    latency: metrics.ttft_ms,
-                    tps: metrics.tps,
-                    score,
-                    failureCount: hasError ? 1 : 0,
-                },
+                status,
+                score: firstFinite(scoreInfo.value),
+                latency: firstFinite(metrics.ttft_ms),
             });
         }
         return normalized;
+    }
+    function fmt0(value) {
+        if (value === null || value === undefined || value === '') return null;
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.round(number).toString() : null;
+    }
+    function latencySeconds(latencyMs) {
+        if (latencyMs === null || latencyMs === undefined || latencyMs === '') return null;
+        const number = Number(latencyMs);
+        return Number.isFinite(number) && number >= 0 ? (number / 1000).toFixed(2) : null;
     }
     function scheduleRadiosondeRefresh(force = false) {
         clearTimeout(scheduleRadiosondeRefresh._timer);
@@ -16108,9 +16274,7 @@
         }, force ? 0 : 400);
     }
     function requestRadiosondeManualRefresh() {
-        if (!shouldRun() || !settings.radiosonde || !isChatRoomPath())
-            return;
-        // 수동 갱신은 클릭 즉시 피드백을 준다. 기존 점수가 있어도 '갱신중…'을 강제로 표시한다.
+        if (!shouldRun() || !settings.radiosonde || !isChatRoomPath()) return;
         renderRsLine('갱신중…', true);
         const button = document.querySelector('#igx-live-popup .btn-refresh');
         if (button) {
@@ -16118,134 +16282,151 @@
             button.setAttribute('aria-label', '라디오존데 갱신중');
         }
         if (RS.busy) {
-            // 진행 중 요청에 수동 클릭이 묻히지 않도록, 종료 직후 딱 한 번 다시 갱신한다.
             RS.pendingRefresh = true;
+            RS.pendingManual = true;
             return;
         }
         void refreshRadiosonde({ manual: true });
     }
+    let cmuRsRenderFrame = 0;
+    function scheduleRsLineRender() {
+        if (cmuRsRenderFrame || !igxCanRequest()) return;
+        cmuRsRenderFrame = requestAnimationFrame(() => {
+            cmuRsRenderFrame = 0;
+            if (igxCanRequest()) renderRsLine();
+        });
+    }
+    function markRsStale(slug) {
+        const previous = RS.last.get(slug);
+        RS.last.set(slug, previous ? { ...previous, stale: true } : { status: 'unknown', score: '—', lat: '—', stale: true });
+    }
     async function refreshRadiosonde({ manual = false } = {}) {
-        if (!shouldRun() || !settings.radiosonde || !isChatRoomPath())
-            return;
-        const modelKey = getRsVisibleModels().map(model => model.slug).sort().join('|');
-        if (!manual && RS.lastModelKey === modelKey && Date.now() - Number(RS.lastAttemptAt || 0) < 30000) { renderRsLine(); return; }
+        if (!igxCanRequest()) return;
         if (RS.busy) {
+            RS.pendingRefresh = true;
+            RS.pendingManual = RS.pendingManual || manual;
             if (manual) {
                 RS.pendingRefresh = true;
                 renderRsLine('갱신중…', true);
             }
             return;
         }
+        const requestKey = getRsVisibleModels().map(model => model.slug).sort().join('|');
+        if (!manual && RS.discoveryAt && RS.lastModelKey === requestKey && Date.now() - RS.lastAttemptAt < 15000) {
+            renderRsLine();
+            return;
+        }
         RS.busy = true;
-        RS.lastAttemptAt = Date.now();
-        RS.lastModelKey = modelKey;
         renderRsLine('갱신중…', manual);
         try {
-            // 모델 목록 탐색은 점수 조회를 막지 않는다. 캐시/기본 목록으로 즉시 조회하고
-            // v2 모델 목록은 뒤에서 조회하고 변경되면 즉시 한 번 더 갱신한다.
-            if (!RS.models.length) {
-                const cache = loadRsModelCache();
-                RS.models = [...YAME_MODELS, ...mergeRequiredRsModels(cache?.length ? cache : FALLBACK_MODELS)];
-            }
-            if (Date.now() - RS.discoveryAt >= 5 * 60 * 1000 && !RS.discoveryPromise)
-                void discoverRsModels().catch(() => {});
+            if (!RS.models.length) RS.models = DEFAULT_RS_MODELS.map(model => ({ ...model }));
+
+            // 첫 실행에서는 참고 확프와 동일하게 실제 스냅샷으로 모델 목록부터 확정한다
+            if (!RS.discoveryAt) await discoverRsModels(true);
+
             if (!shouldRun() || !settings.radiosonde || !isChatRoomPath()) return;
             const models = getRsVisibleModels();
+            RS.lastModelKey = models.map(model => model.slug).sort().join('|');
+            RS.lastAttemptAt = Date.now();
             const yameModels = models.filter(model => model.source === 'yame');
             const igxModels = models.filter(model => model.source !== 'yame');
+
             const yameTask = yameModels.length
-                ? fetchYameStatus().then(value => ({ status: 'fulfilled', value }), reason => ({ status: 'rejected', reason }))
+                ? fetchYameStatus({ force: manual }).then(value => {
+                    if (igxCanRequest()) {
+                      const records = normalizeYamePayload(value);
+                      for (const model of yameModels) {
+                        const record = records.get(model.apiId);
+                        if (record) RS.last.set(model.slug, { fetchedAt: Date.now(), status: normalizeStatus(record.status),
+                          score: fmt0(record.score) ?? '—', lat: latencySeconds(record.latency) ?? '—' });
+                      }
+                      scheduleRsLineRender();
+                    }
+                    return { status: 'fulfilled', value };
+                  }, reason => ({ status: 'rejected', reason }))
                 : Promise.resolve(null);
-            // 화면에서 켜 둔 IGX 모델만 예전 방식처럼 전부 병렬 조회한다.
-            const igxTask = Promise.allSettled(
-                igxModels.map(model => fetchRsModel(model.apiId || model.slug))
-            );
-            // IGX 결과는 YAME(Fable) 응답을 기다리지 않고 먼저 반영한다.
-            // Fable 쪽이 느리거나 죽어 있어도 나머지 점수 갱신이 같이 막히지 않는다.
-            const igxResults = await igxTask;
-            if (!shouldRun())
-                return;
-            const igxFailureDetails = [];
-            for (let i = 0; i < igxModels.length; i++) {
-                const model = igxModels[i];
-                const result = igxResults[i];
-                if (!result || result.status !== 'fulfilled' || result.value?.success !== true || !result.value?.data) {
-                    const reason = result?.status === 'rejected'
-                        ? String(result.reason?.message || result.reason || 'request rejected')
-                        : 'invalid response';
-                    igxFailureDetails.push(`${model.short}: ${reason}`);
-                    const prev = RS.last.get(model.slug);
-                    RS.last.set(model.slug, { ...(prev || { status: 'unknown', score: '—', lat: '—', tps: '—' }), stale: true });
+            const igxTask = igxModels.length
+                ? fetchIgxSnapshot({ force: manual, slugs: igxModels.map(model => model.apiId || model.slug),
+              onRecord: (slug, record) => {
+                const model = igxModels.find(model => (model.apiId || model.slug) === slug);
+                if (model) { RS.last.set(model.slug, { fetchedAt: Date.now(), status: normalizeStatus(record.status),
+                    score: fmt0(record.score) ?? '—', lat: latencySeconds(record.latency) ?? '—' });
+                  scheduleRsLineRender(); }
+              } }).then(value => ({ status: 'fulfilled', value }), reason => ({ status: 'rejected', reason }))
+                : Promise.resolve(null);
+
+            const [igxResult, yameResult] = await Promise.all([igxTask, yameTask]);
+            if (!igxCanRequest()) return;
+            const igxBySlug = new Map();
+
+            if (igxResult?.status === 'fulfilled' && igxResult.value instanceof Map) {
+                for (const model of igxModels) {
+                    const record = igxResult.value.get(model.apiId || model.slug) || igxResult.value.get(model.slug);
+                    if (record) igxBySlug.set(model.slug, record);
+                }
+            }
+
+            // Failed models retain the previous value and use the shared retry cooldown.
+            for (const model of igxModels) {
+                const record = igxBySlug.get(model.slug);
+                if (!record) {
+                    markRsStale(model.slug);
                     continue;
                 }
-                const d = result.value.data;
                 RS.last.set(model.slug, {
-                    stale: false,
                     fetchedAt: Date.now(),
-                    status: normalizeStatus(d.status),
-                    score: fmt0(d.score) ?? '—',
-                    lat: latencySeconds(d.latency) ?? '—',
-                    tps: fmt2(d.tps) ?? '—',
+                    status: normalizeStatus(record.status),
+                    score: fmt0(record.score) ?? '—',
+                    lat: latencySeconds(record.latency) ?? '—',
                 });
             }
             renderRsLine();
-            if (manual && igxModels.length && igxFailureDetails.length === igxModels.length) {
-                const first = igxFailureDetails[0] || '알 수 없는 오류';
-                showToast(`IGX 요청 실패 · ${first}`.slice(0, 140));
-                console.warn(LOG, 'radiosonde IGX all failed', igxFailureDetails);
-            }
 
-            const yameResult = await yameTask;
-            if (!shouldRun())
-                return;
             if (yameResult?.status === 'fulfilled') {
-                const normalizedYame = normalizeYamePayload(yameResult.value);
+                const normalized = normalizeYamePayload(yameResult.value);
                 for (const model of yameModels) {
-                    const value = normalizedYame.get(model.apiId);
-                    if (!value?.data) {
-                        const prev = RS.last.get(model.slug);
-                        RS.last.set(model.slug, { ...(prev || { status: 'unknown', score: '—', lat: '—', tps: '—' }), stale: true });
+                    const record = normalized.get(model.apiId);
+                    if (!record) {
+                        markRsStale(model.slug);
                         continue;
                     }
-                    const d = value.data;
                     RS.last.set(model.slug, {
-                        stale: false,
                         fetchedAt: Date.now(),
-                        status: normalizeStatus(d.status),
-                        score: fmt0(d.score) ?? '—',
-                        lat: latencySeconds(d.latency) ?? '—',
-                        tps: fmt2(d.tps) ?? '—',
+                        status: normalizeStatus(record.status),
+                        score: fmt0(record.score) ?? '—',
+                        lat: latencySeconds(record.latency) ?? '—',
                     });
                 }
             }
             else {
-                for (const model of yameModels) {
-                    const prev = RS.last.get(model.slug);
-                    RS.last.set(model.slug, { ...(prev || { status: 'unknown', score: '—', lat: '—', tps: '—' }), stale: true });
-                }
+                for (const model of yameModels)
+                    markRsStale(model.slug);
             }
             renderRsLine();
         }
-        catch (err) {
-            console.warn(LOG, 'radiosonde failed', err);
+        catch (error) {
+            console.warn(LOG, 'radiosonde failed', error);
             renderRsLine('라존데 갱신 실패', true);
         }
         finally {
             RS.busy = false;
-            const rerun = RS.pendingRefresh && shouldRun() && settings.radiosonde && isChatRoomPath();
+            const rerun = RS.pendingRefresh && igxCanRequest();
+            const rerunManual = RS.pendingManual;
             RS.pendingRefresh = false;
+            RS.pendingManual = false;
             const button = document.querySelector('#igx-live-popup .btn-refresh');
             if (button && !rerun) {
                 button.disabled = false;
                 button.setAttribute('aria-label', '라디오존데 갱신');
             }
             restartRsAutoTimer();
-            if (rerun)
-                setTimeout(() => void refreshRadiosonde({ manual: true }), 0);
+            if (rerun) setTimeout(() => void refreshRadiosonde({ manual: rerunManual }), 0);
         }
     }
+
     function restartRsAutoTimer() {
         if (!shouldRun() || !settings.radiosonde || !isChatRoomPath()) {
+            cancelIgxRequests();
             clearInterval(rsTimer);
             rsTimer = 0;
             return;
@@ -16346,7 +16527,9 @@
         if (BADGE.apiPromise) return BADGE.apiPromise;
         const task = Promise.resolve().then(async () => {
             // The same first page serves statistics, badges, draft confirmation and copy.
-            if (force || !room.first || Date.now() - room.firstAt > 1600)
+            // Pages the site loads (scrolling up) are already remembered through the response hook, so a cache reset
+            // alone must not re-download the head page; unknown new messages take the forced refresh path instead.
+            if (force || !room.first || Date.now() - room.firstAt > 60000)
                 await cmuSharedMessagePage(chatId, '', force);
             const messages = [...room.messages.values()].sort((a, b) => messageIdOf(b).localeCompare(messageIdOf(a)));
             const idMap = new Map(messages.map((msg, index) => [messageIdOf(msg), { msg, index }]));
@@ -18144,6 +18327,10 @@
         const gdToken = apiToken ? null : cmiGdTokenFor(resolved?.messageId || '');
         const token = apiToken || gdToken || null;
         if (!token) {
+            // A DOM-only pass runs before every API refresh; keep the resolved icon instead of flashing it.
+            const old = group.querySelector('.cmi-model-badge');
+            if (resolved?.source === 'dom' && old && old.dataset.messageId === String(resolved.messageId || ''))
+                return;
             cmiClearModelIcon(group);
             return;
         }
@@ -19338,7 +19525,7 @@
             document.getElementById('chud-info-menu')?.remove();
             document.getElementById('igx-live-popup')?.remove();
         }
-        if (settings.dashboardSidebar)
+        if (settings.dashboardSidebar && isChatRoomPath())
             refreshSideAvailability(late);
         ensureInlineBlocks();
         if (!late)
@@ -19425,7 +19612,8 @@
         return node instanceof Element && !!(node.matches?.('#sgb-bg-root, #sgb-bg-style') || node.querySelector?.('#sgb-bg-root, #sgb-bg-style'));
     }
     function cmuNodeMayAffectSideAvailability(node) {
-        if (!settings.dashboardSidebar || !(node instanceof Element) || node.closest?.('[data-message-group-id], ' + CMU_ROUTER_POPUP_SELECTOR))
+        // Older messages loading into the chat scroller never add extension launchers.
+        if (!settings.dashboardSidebar || !(node instanceof Element) || !isChatRoomPath() || node.closest?.('.stick-to-bottom, [data-message-group-id], ' + CMU_ROUTER_POPUP_SELECTOR))
             return false;
         if (observedScope?.contains?.(node) || cmuCachedChatInput?.contains?.(node))
             return false;
@@ -19498,7 +19686,7 @@
         const popupDirty = CMU_DOM_ROUTER.popupDirty;
         const themeDirty = CMU_DOM_ROUTER.themeDirty;
         const nativeModelDirty = CMU_DOM_ROUTER.nativeModelDirty;
-        const sideDirty = CMU_DOM_ROUTER.sideDirty && settings.dashboardSidebar;
+        const sideDirty = CMU_DOM_ROUTER.sideDirty && settings.dashboardSidebar && isChatRoomPath();
         const statDirty = CMU_DOM_ROUTER.statDirty;
         const groups = Array.from(CMU_DOM_ROUTER.messageGroups);
         const markdowns = Array.from(CMU_DOM_ROUTER.markdownNodes);
@@ -19789,6 +19977,7 @@
             for (const node of roots) {
                 if (cmuNodeTouchesExternalThemeMarker(node)) {
                     cmuExternalThemeProvider = '';
+                    cmuExternalThemeCheckedAt = 0;
                     CMU_DOM_ROUTER.themeDirty = true;
                     dirty = true;
                 }
@@ -19900,11 +20089,16 @@
         if (CMU_THEME_STATE.quoteWraps instanceof Map)
             CMU_THEME_STATE.quoteWraps.clear();
     }
+    // True until the first sweep, then only after CMU decorates again; non-chat pages skip the 30-attribute scan.
+    let cmuThemeDecorationsDirty = true;
     function clearThemeDecorations() {
         if (isCmuExternalThemeActive()) {
             clearCmuOwnedThemeDecorations();
             return;
         }
+        if (!cmuThemeDecorationsDirty)
+            return;
+        cmuThemeDecorationsDirty = false;
         const names = [
             'data-cmu-theme-message-group', 'data-cmu-theme-novel-group', 'data-cmu-theme-bubble', 'data-cmu-theme-bubble-fallback', 'data-cmu-theme-input-host', 'data-cmu-theme-input-box', 'data-cmu-theme-codeblock', 'data-cmu-theme-codeblock-head', 'data-cmu-theme-codeblock-body', 'data-cmu-theme-radiosonde-skin', 'data-cmu-theme-radiosonde-head', 'data-cmu-theme-radiosonde-part',
             'data-sgb-message-group', 'data-sgb-novel-group', 'data-sgb-bubble-parent', 'data-sgb-bubble', 'data-sgb-bubble-fallback', 'data-sgb-edit-bubble', 'data-sgb-edit-box', 'data-sgb-input-host', 'data-sgb-input-box', 'data-sgb-codeblock', 'data-sgb-codeblock-head', 'data-sgb-codeblock-body', 'data-sgb-radiosonde-skin', 'data-sgb-radiosonde-head', 'data-sgb-radiosonde-barline', 'data-sgb-radiosonde-part'
@@ -20128,11 +20322,12 @@
         }
         catch (_) { }
     }
-    function cmuPruneStaleQuoteWraps() {
+    // Records hold the original text nodes, which keep a left room's message DOM alive; prune on route changes too.
+    function cmuPruneStaleQuoteWraps(force = false) {
         const wraps = CMU_THEME_STATE.quoteWraps;
-        if (!(wraps instanceof Map) || wraps.size < 400) return;
+        if (!(wraps instanceof Map) || (!force && wraps.size < 60)) return;
         const now = Date.now();
-        if (now - (CMU_THEME_STATE.lastQuotePruneAt || 0) < 2000) return;
+        if (!force && now - (CMU_THEME_STATE.lastQuotePruneAt || 0) < 2000) return;
         CMU_THEME_STATE.lastQuotePruneAt = now;
         for (const [groupId, record] of wraps) {
             const nodes = Array.isArray(record?.insertedNodes) ? record.insertedNodes : [];
@@ -20269,15 +20464,13 @@
             });
         });
     }
-    function decorateThemeCodeblocks() {
-        document.querySelectorAll('main .wrtn-codeblock, main pre').forEach(decorateThemeCodeblock);
-    }
     function decorateThemeSkin() {
         applyState();
         if (!themeSkinEnabled()) {
             clearThemeDecorations();
             return;
         }
+        cmuThemeDecorationsDirty = true;
         decorateThemeBubbles();
         decorateThemeInputAndRadiosondeBorderless();
         decorateThemeQuotes();
@@ -20285,6 +20478,7 @@
     function decorateThemeSubset(groups) {
         if (!themeSkinEnabled())
             return;
+        cmuThemeDecorationsDirty = true;
         for (const group of groups || []) {
             if (!(group instanceof HTMLElement) || !group.isConnected)
                 continue;
@@ -20331,6 +20525,7 @@
     function decorateThemeQuotesSubset(markdowns) {
         if (!themeSkinEnabled() || Date.now() < Number(CMU_THEME_STATE.quoteHealUntil || 0))
             return;
+        cmuThemeDecorationsDirty = true;
         cmuPruneStaleQuoteWraps();
         for (const md of markdowns || []) {
             if (!(md instanceof HTMLElement) || !md.isConnected || md.closest('.not-wrtn-markdown, #igx-live-popup, #chud-sidebar, #chud-infobar'))
@@ -20442,10 +20637,39 @@
         return null;
     }
     let rsInlineHost = null;
+    const RS_LINE_GAP = 6;
+    function findRsShellAnchor() {
+        const composer = findRsComposerElement();
+        const shell = composer && findComposerShell(composer);
+        if (!(shell instanceof HTMLElement) || shell === composer || !shell.isConnected)
+            return null;
+        const css = getComputedStyle(shell);
+        return css.overflowX === 'visible' && css.overflowY === 'visible' ? shell : null;
+    }
     function clearRsInlineHost() {
         if (rsInlineHost?.isConnected)
-            rsInlineHost.classList.remove('igx-inline-overlay-host');
+            rsInlineHost.classList.remove('igx-inline-overlay-host', 'igx-inline-overlay-pad');
         rsInlineHost = null;
+    }
+    // Keep the line a fixed gap above the composer box. The site's padding above the composer varies (story 14-16px,
+    // character chat none), so add room when needed and place the line from the composer's actual top.
+    function syncRsHostSpacing(host, popup) {
+        const composer = findRsComposerElement();
+        const wrapper = composer && (findComposerShell(composer) || composer.parentElement);
+        if (!(wrapper instanceof HTMLElement) || host === wrapper) {
+            host.classList.remove('igx-inline-overlay-pad');
+            popup?.style.removeProperty('top');
+            return;
+        }
+        const lineHeight = popup?.getBoundingClientRect().height || 20;
+        let offset = wrapper.getBoundingClientRect().top - host.getBoundingClientRect().top;
+        if (offset < lineHeight + RS_LINE_GAP && !host.classList.contains('igx-inline-overlay-pad')) {
+            host.classList.add('igx-inline-overlay-pad');
+            offset = wrapper.getBoundingClientRect().top - host.getBoundingClientRect().top;
+        }
+        const top = `${Math.max(0, Math.round(offset - lineHeight - RS_LINE_GAP))}px`;
+        if (popup && popup.style.getPropertyValue('top') !== top)
+            popup.style.setProperty('top', top, 'important');
     }
     function applyRadiosondeTheme() {
         const popup = document.getElementById('igx-live-popup');
@@ -20472,7 +20696,10 @@
             restartRsAutoTimer();
             return;
         }
-        const host = findRsInlineHost();
+        // Prefer the composer box itself: a line pinned 6px above it stays put when the site's scroll-to-bottom row
+        // above the box appears or collapses. Fall back to the outer area when the box clips its overflow.
+        const shellAnchor = findRsShellAnchor();
+        const host = shellAnchor || findRsInlineHost();
         if (!host)
             return;
         if (rsInlineHost !== host) {
@@ -20495,6 +20722,9 @@
             <button class="igx-btn btn-refresh" type="button" title="갱신" aria-label="라디오존데 갱신">↻</button>
           </div>
         </div>`;
+            // The line lives inside the composer box; keep its taps from reaching the box (and focusing the input).
+            for (const type of ['pointerdown', 'mousedown', 'click'])
+                popup.addEventListener(type, event => event.stopPropagation());
         }
         popup.classList.add('inline');
         bindRadiosondeRefreshButton(popup);
@@ -20502,6 +20732,14 @@
         if (popup.parentNode !== host) {
             host.appendChild(popup);
             renderRsLine();
+        }
+        popup.classList.toggle('igx-anchor-shell', host === shellAnchor);
+        if (host === shellAnchor) {
+            popup.style.removeProperty('top');
+            host.classList.remove('igx-inline-overlay-pad');
+        }
+        else {
+            syncRsHostSpacing(host, popup);
         }
         if (!RS.discovered) {
             RS.discovered = true;
@@ -20542,7 +20780,10 @@
         if (previous?.key === key && previous.first === line.firstChild && line.childElementCount === models.length)
             return;
         const frag = document.createDocumentFragment();
-        const scrollLeft = line.scrollLeft;
+        // Reading scrollLeft here forces a layout on every render; remember the user's own scrolling instead.
+        if (!line.onscroll)
+            line.onscroll = () => { RS.lineScrollLeft = line.scrollLeft; };
+        const scrollLeft = RS.lineScrollLeft || 0;
         for (const model of models) {
             const data = RS.last.get(model.slug) || { status: 'unknown', score: '—', lat: '—' };
             const item = document.createElement('span');
@@ -20557,7 +20798,8 @@
         }
         line.replaceChildren(frag);
         CMU_RS_LINE_RENDER.set(line, { key, first: line.firstChild });
-        line.scrollLeft = scrollLeft;
+        if (scrollLeft)
+            line.scrollLeft = scrollLeft;
     }
     function handleSameChatSelfClick(event) {
         if (!event || event.defaultPrevented)
@@ -20665,12 +20907,15 @@
         }
         BADGE.cacheKey = '';
         resetBadgeCacheIfNeeded();
+        cancelIgxRequests();
         RS.discovered = false;
         CMI.uiModeAt = 0;
         CMI.uiMode = '';
         DASH_SIDE.available = null;
         DASH_SIDE.availableAt = 0;
         resetAnimatedThumbRouteState();
+        // The previous room's DOM is detached once React swaps the chat area.
+        setTimeout(() => cmuPruneStaleQuoteWraps(true), 1500);
         scheduleInject('route');
         scheduleIntegratedSideButtonsRouteRefreshLite();
         scheduleMobileChatListPopoverLayoutSettle();
@@ -20684,6 +20929,7 @@
     }
     let cmuViewportFrame = 0;
     cmuListen(window, 'resize', () => {
+        cmuViewportWidthCache = 0;
         if (cmuViewportFrame) return;
         cmuViewportFrame = requestAnimationFrame(() => {
         cmuViewportFrame = 0;
@@ -26873,6 +27119,7 @@
     cmiInstallDeleteHooks();
     applyState();
     installCmuUserNoteStateWatch();
+    installCmuDialogTextTouchRelease();
     cmuResumeGlobalGestures('initial');
     bindEmptySendGuard();
     ensureSettingsPanelSilent();
