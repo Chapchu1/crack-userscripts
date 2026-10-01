@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.25
+// @version      0.5.27
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -23,8 +23,8 @@
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
 
-/* 0.5.25 · 홈 이동·대기 초수·작업 강조
- * 전달 설정·분량은 펼친 뒤 패널 내부의 해당 항목으로 직접 이동합니다.
+/* 0.5.27 · 홈 이동·대기 초수·작업 강조
+ * 전달 설정·분량은 홈 버튼 바로 아래에서 펼치고 접으며, 항목별 전달 설정을 즉시 저장합니다.
  * 요청 제한과 자동 재시도 초수는 보이는 상태에서 남은 시간을 갱신합니다.
  * 숫자 갱신은 API·저장·방 데이터 재조회 없이 수행합니다.
  * 확인 필요에는 경고 표시, 정리·도우미와 메뉴 아이콘에는 구별되는 색상을 적용합니다.
@@ -321,7 +321,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.25'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.27'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -8085,13 +8085,13 @@ if (btnTurnInfo && turnInfoPopover) {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if (window.__WISH_RP_MANAGER_LOADED__) return;
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.25-suite', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.27-suite', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Suite',
-    version: '0.5.25-suite',
+    version: '0.5.27-suite',
     dbName: 'WishRPManagerDB_v2',
     dbVersion: 2,
     storeName: 'rooms',
@@ -42359,8 +42359,19 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
       if(job.shouldRun){try{if(!job.shouldRun())return makeError('방이나 대상이 바뀌어 이전 AI 요청을 취소했습니다.','WISH_STALE');}catch{return makeError('AI 요청 대상을 다시 확인해 주세요.','WISH_STALE');}}
       if(Date.now()>=job.deadline)return timeoutError();return null;
     }
+    function requestTiming(job){
+      const now=Date.now(),elapsedMs=Math.max(0,now-job.enqueuedAt);
+      const requestMs=Math.min(elapsedMs,job.requestMs+(job.activeStartedAt==null?0:Math.max(0,now-job.activeStartedAt)));
+      return {elapsedMs,queueWaitMs:Math.max(0,elapsedMs-requestMs),requestMs,attempts:job.attempt};
+    }
     function settle(job,error,result){
-      if(job.done)return;job.done=true;clearTimeout(job.deadlineTimer);clearInterval(job.guardTimer);
+      if(job.done)return;
+      if(error&&typeof error==='object'){
+        const timing=requestTiming(job);
+        error.diagnostic={...error.diagnostic,...timing};
+        if(error.code==='AI_TIMEOUT')error.message=job.activeStartedAt!=null?'AI 처리·응답을 기다리다 전체 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.':timing.attempts?'AI 재시도 순서를 기다리다 전체 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.':'다른 AI 작업의 순서를 기다리다 전체 요청 제한 시간을 넘었습니다. API 요청은 시작하지 않았고 기존 기록은 유지됩니다.';
+      }
+      job.done=true;clearTimeout(job.deadlineTimer);clearInterval(job.guardTimer);
       job.signal?.removeEventListener?.('abort',job.onAbort);job.abortContext?.rejects?.delete(job.onAbort);
       if(job.identity&&same.get(job.identity)===job)same.delete(job.identity);
       const i=pending.indexOf(job);if(i>=0)pending.splice(i,1);
@@ -42374,7 +42385,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
         const error=valid(job);if(error){settle(job,error);return;}
         const ready=Math.max(job.notBefore||0,cooldowns.get(job.key)?.until||0);
         if(ready>now){earliest=Math.min(earliest,ready);continue;}
-        pending.splice(pending.indexOf(job),1);active=job;job.controller=new AbortController();job.attempt++;
+        pending.splice(pending.indexOf(job),1);active=job;job.controller=new AbortController();job.attempt++;job.activeStartedAt=now;
         try{job.onStatus?.({phase:job.attempt>1?'retry':'running',attempt:job.attempt,remainingMs:job.deadline-now});}catch{}
         Promise.resolve().then(()=>{const e=valid(job);if(e)throw e;return job.work({signal:job.controller.signal,timeoutMs:Math.max(1,job.deadline-Date.now()),deadline:job.deadline,attempt:job.attempt});}).then(value=>{
           if(job.done)return;const e=valid(job);if(e)return settle(job,e);
@@ -42383,6 +42394,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
           if(job.done)return;const e=valid(job);if(e)return settle(job,e);
           const c=cool(job,error),wait=Math.max(0,(job.notBefore||0)-Date.now());
           if(c.retry&&job.attempt<2&&job.deadline-Date.now()>wait+15000){
+            job.requestMs+=Math.max(0,Date.now()-job.activeStartedAt);job.activeStartedAt=null;
             active=null;job.notBefore=(job.notBefore||Date.now())+Math.floor(Math.random()*650);pending.push(job);
             try{job.onStatus?.({phase:'backoff',attempt:job.attempt,waitMs:job.notBefore-Date.now()});}catch{}pump();
           }else settle(job,error);
@@ -42398,7 +42410,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
       const cd=cooldowns.get(meta.key),remaining=(cd?.until||0)-Date.now();
       if(remaining>0)return Promise.reject(makeError('AI 연결이 잠시 쉬는 중입니다. '+Math.ceil(remaining/1000)+'초 뒤 다시 시도합니다.','AI_COOLDOWN',{retryAfterMs:remaining}));
       if(pending.length>=8)return Promise.reject(makeError('AI 작업이 이미 대기 중입니다. 진행 중인 작업이 끝난 뒤 다시 시도해 주세요.','AI_QUEUE_FULL'));
-      const job={...meta,identity,work,deadline:Date.now()+timeoutMs,notBefore:0,attempt:0,done:false};
+      const enqueuedAt=Date.now(),job={...meta,identity,work,enqueuedAt,deadline:enqueuedAt+timeoutMs,notBefore:0,attempt:0,requestMs:0,activeStartedAt:null,done:false};
       job.promise=new Promise((resolve,reject)=>{job.resolve=resolve;job.reject=reject;});
       job.onAbort=()=>settle(job,abortError());job.signal?.addEventListener?.('abort',job.onAbort,{once:true});job.abortContext?.rejects?.add(job.onAbort);
       job.deadlineTimer=setTimeout(()=>settle(job,timeoutError()),timeoutMs);
@@ -42938,7 +42950,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.25-suite';
+  const SCRIPT_VERSION = '0.5.27-suite';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -44361,7 +44373,7 @@ const WLOG=(()=>{
     if(error&&typeof error==='object'&&seen.has(error)){const prior=seen.get(error);for(const k of ['provider','model','finishReason'])if(!prior[k]&&details[k])prior[k]=clean(details[k]);try{GM_setValue(KEY,rows);}catch{}return;}
     const parse=error instanceof SyntaxError,message=parse?'JSON 파싱 실패 · 응답 형식을 확인할 수 없습니다.':clean(error?.message||error);
     const d={...error?.diagnostic,...details},now=Date.now();
-    const row={id:'err-'+now+'-'+(++seq),at:now,lastAt:now,count:1,operation:clean(operation||current()?.operation||'작업'),stage:clean(d.stage||current()?.label||''),message,code:clean(error?.code||d.code||''),provider:clean(d.provider||''),model:clean(d.model||''),httpStatus:Number(d.httpStatus)||0,responseChars:Number(d.responseChars)||0,inputChars:Number(d.inputChars)||0,elapsedMs:Number(d.elapsedMs)||0,timeoutMs:Number(d.timeoutMs)||0,finishReason:clean(d.finishReason||''),version:SCRIPT_VERSION,level:d.level==='warn'?'주의':'오류'};
+    const row={id:'err-'+now+'-'+(++seq),at:now,lastAt:now,count:1,operation:clean(operation||current()?.operation||'작업'),stage:clean(d.stage||current()?.label||''),message,code:clean(error?.code||d.code||''),provider:clean(d.provider||''),model:clean(d.model||''),httpStatus:Number(d.httpStatus)||0,responseChars:Number(d.responseChars)||0,inputChars:Number(d.inputChars)||0,elapsedMs:Number(d.elapsedMs)||0,timeoutMs:Number(d.timeoutMs)||0,queueWaitMs:Number.isFinite(d.queueWaitMs)?Math.max(0,d.queueWaitMs):null,requestMs:Number.isFinite(d.requestMs)?Math.max(0,d.requestMs):null,attempts:Number.isFinite(d.attempts)?Math.max(0,d.attempts):null,finishReason:clean(d.finishReason||''),version:SCRIPT_VERSION,level:d.level==='warn'?'주의':'오류'};
     const last=rows.at(-1);if(last&&last.operation===row.operation&&last.message===row.message&&now-last.lastAt<60000){last.count++;last.lastAt=now;}else rows.push(row);
     if(error&&typeof error==='object')seen.set(error,last&&last.operation===row.operation&&last.message===row.message&&now-last.lastAt<60000?last:row);
     rows=rows.slice(-LIMIT);try{GM_setValue(KEY,rows);}catch{}paint();
@@ -44946,6 +44958,13 @@ function aiGmRequestJson({ method='POST', url, headers={}, body=null, timeout=12
           return callGoogleAiStudio(cfg,systemPrompt,userPrompt,attempt);
         });
         return {...result,text:cleanAiGeneratedText(result.text),diagnostic:{provider:cfg.provider,model:getAiSelectedModel(cfg),finishReason:String(result.raw?.candidates?.[0]?.finishReason||result.raw?.choices?.[0]?.finish_reason||'')}};
+      }catch(error){
+        const timing=error?.diagnostic;
+        if(timing&&Number.isFinite(timing.queueWaitMs)&&Number.isFinite(timing.requestMs)){
+          Object.assign(details,{queueWaitMs:timing.queueWaitMs,requestMs:timing.requestMs,attempts:timing.attempts});
+          if(error.code==='AI_TIMEOUT')task.stage(label+' · 전체 경과 '+Math.round((Date.now()-started)/1000)+'초 · 큐·재시도 대기 '+Math.round(timing.queueWaitMs/1000)+'초 · API 처리 '+Math.round(timing.requestMs/1000)+'초 · 시도 '+timing.attempts+'회 · 전체 제한 '+Math.ceil(options.timeoutMs/1000)+'초');
+        }
+        throw error;
       }finally{timers.forEach(clearTimeout);details.elapsedMs=Date.now()-started;}
     },details);
   }
@@ -46604,11 +46623,42 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
   // Live catch-up goals survive reloads; they never move a committed source cursor.
   // A catch-up draft is separate from all live memory/injection stores.
   const draftId=room=>'wish-unified-draft:'+String(room.chatId);
-  function draftBasis(room,cog,packs){
+  // Object insertion order and connection-save timestamps are not memory edits.
+  // Keep every actual prompt/input value, source cursor and optimistic revision.
+  function draftCanonical(value){return Array.isArray(value)?value.map(draftCanonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,draftCanonical(value[k])])):value;}
+  function draftBasisParts(room,cog,packs){
     const u=room.unified||{};
-    return rawSignature({...room,unified:{memoryCursor:u.memoryCursor,observeCursor:u.observeCursor,memoryManifest:u.memoryManifest,observeManifest:u.observeManifest},_epoch:room._epoch},cog,packs)+'|'+String(room._epoch||'')+'|'+String(cog.rev||0);
+    return {...JSON.parse(rawSignature({...room,unified:{memoryCursor:u.memoryCursor,observeCursor:u.observeCursor,memoryManifest:u.memoryManifest,observeManifest:u.observeManifest},_epoch:room._epoch},cog,packs)),epoch:String(room._epoch||''),cognitionRevision:Number(cog.rev)||0};
   }
-  function draftSettingsStamp(){const s=copy(loadAiSettings());delete s.unifiedAutomation;return JSON.stringify([s,['apiCommon','apiMemory','apiObserve','apiSpeech','apiRelationships','apiDate','apiDelta'].map(getGuideText)]);}
+  function draftBasis(room,cog,packs){return JSON.stringify(draftCanonical(draftBasisParts(room,cog,packs)));}
+  function draftSettingsValue(stamp){
+    try{
+      const value=JSON.parse(stamp);
+      if(!Array.isArray(value)||value.length!==2||!value[0]||typeof value[0]!=='object'||Array.isArray(value[0])||!Array.isArray(value[1])||value[1].length!==7||value[1].some(v=>typeof v!=='string'))return null;
+      const s={...value[0]};
+      // These only control persistence provenance/scheduling, never extraction.
+      // Normalize old 0.5.27 records too; no draft, result or cursor is discarded.
+      for(const key of ['unifiedAutomation','connectionRevision','sharedConnection','autoMemoryEnabled','memoryMinTurns','memoryMaxTurns'])delete s[key];
+      return draftCanonical([s,value[1]]);
+    }catch{return null;}
+  }
+  function draftSettingsStamp(){return JSON.stringify(draftSettingsValue(JSON.stringify([loadAiSettings(),['apiCommon','apiMemory','apiObserve','apiSpeech','apiRelationships','apiDate','apiDelta'].map(getGuideText)])));}
+  function draftSettingsChanges(before,after){
+    const a=draftSettingsValue(before),b=draftSettingsValue(after);
+    if(!a||!b)return ['저장된 AI 설정 기준'];
+    const fields=new Set([...Object.keys(a[0]),...Object.keys(b[0])]),changed=[...fields].filter(k=>JSON.stringify(a[0][k])!==JSON.stringify(b[0][k]));
+    const labels=changed.map(k=>k==='provider'?'AI 제공자':/model/i.test(k)?'AI 모델':/key|config|json|url|location|project|backend|sdk/i.test(k)?'API 연결':'AI 생성 설정');
+    if(JSON.stringify(a[1])!==JSON.stringify(b[1]))labels.push('AI 지침');
+    return [...new Set(labels)];
+  }
+  function draftBasisChanges(before,after){
+    const a=JSON.parse(before),b=JSON.parse(after),labels={slots:'기억 본문·항목',speech:'호칭·말투',speechConfig:'호칭 설정',relationships:'관계·감정선',relationshipConfig:'관계 설정',relationshipBaseline:'관계 기준 원문',suite:'참고 카드',suiteAutomation:'정리 방식',u:'정리 기준 대화',economy:'기억 절약 설정',active:'사용 자료집',lore:'자료 설정',selection:'기억 선택',cog:'인물·인지',packs:'자료 내용',epoch:'복원 기준',cognitionRevision:'인지 저장 기준'};
+    return [...new Set([...Object.keys(a),...Object.keys(b)])].filter(k=>JSON.stringify(a[k])!==JSON.stringify(b[k])).map(k=>labels[k]||'기억 기준');
+  }
+  function draftChangedError(changes){
+    const reason=[...new Set(changes)].join('·')||'기억 기준',e=Error(reason+' 변경으로 임시 정리를 보류했습니다. 기존 기억과 임시 결과는 유지했어요. 새 기준으로 정리하려면 홈의 임시 정리 다시 시작을 눌러 주세요.');
+    e.code='WISH_DRAFT_CHANGED';e.draftChanged=reason;e.diagnostic={stage:'임시 정리 기준 확인 · '+reason+' 변경'};return e;
+  }
   async function readDraft(room){
     if(!state.db)return null;
     return new Promise((resolve,reject)=>{const tx=state.db.transaction(APP.runtimeStoreName,'readonly'),q=tx.objectStore(APP.runtimeStoreName).get(draftId(room));q.onsuccess=()=>resolve(q.result||null);q.onerror=()=>reject(q.error);});
@@ -46630,7 +46680,19 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
   }
   function restoreDeferredFailure(u,d){if(!d.deferredFailure)return;const f=d.deferredFailure;u.partialFailure=copy(f);u.lastError=f.message||'다른 묶음 검증 보류';u.lastErrorCode=f.code||'';u.failedKind=f.kind;u.retry=null;}
   async function persistDraft(room,d){await writeDraft(room,d);room.unified.draft=draftSummary(d);room.unified.lastError='';room.unified.lastErrorCode='';room.unified.failedKind='';room.unified.retry=null;delete room.unified.partialFailure;restoreDeferredFailure(room.unified,d);room.unified.status='임시 정리 저장 · 최종 검증 전 RP 미반영';await saveRoom(room);}
-  function draftStatus(room){const d=room.unified?.draft;if(!d)return '';if(room.unified.lastError&&!hasPartialFailure(room.unified))return '⚠️ 임시 정리 보류 · 기존 기억 유지 · 오류 확인 후 재시도';if(d.phase==='waiting')return '임시 정리 저장됨 · 목표가 미확정으로 변경됨 · 임시 정리 다시 시작 필요';if(d.phase==='paused')return '임시 정리 일시정지 · 지금 정리로 이어서 처리';return d.phase==='review'?'최종 원문 대조 '+d.reviewIndex+'/'+d.totalReviews+' · 통과 전 RP 미반영':'임시 정리 중 · 기억 '+d.processed.memory+'턴·인물 '+d.processed.observe+'턴 처리 · 최종 반영 대기';}
+  function draftStatus(room){
+    const u=room.unified||{},d=u.draft;if(!d)return '';
+    if(u.lastErrorCode==='WISH_DRAFT_CHANGED'||d.restartRequired)return '⚠️ '+(d.blockedBy||'기억·설정')+' 변경 · 임시 정리 다시 시작 필요 · 기존 기억 유지';
+    if(u.lastError&&!hasPartialFailure(u)&&active.has(room.chatId))return '임시 정리 재시도 중 · 기존 임시 결과에서 계속 처리 · RP 미반영';
+    if(u.lastError&&!hasPartialFailure(u)){
+      const cfg=settings(room),retryAt=cfg.enabled?Number(u.retry?.at)||0:0;
+      if(retryAt)return '임시 결과 보관 · '+(retryAt>Date.now()?Math.ceil((retryAt-Date.now())/1000)+'초 후 자동 재시도':'자동 재시도 준비 중')+' · 기존 기억 유지';
+      return '⚠️ 임시 정리 보류 · 기존 기억 유지 · 오류 확인 후 재시도';
+    }
+    if(d.phase==='waiting')return '임시 정리 저장됨 · 목표가 미확정으로 변경됨 · 임시 정리 다시 시작 필요';
+    if(d.phase==='paused')return '임시 정리 일시정지 · 이어서 정리·검증으로 계속 처리';
+    return d.phase==='review'?'최종 원문 대조 '+d.reviewIndex+'/'+d.totalReviews+' · 통과 전 RP 미반영':'임시 정리 중 · 기억 '+d.processed.memory+'턴·인물 '+d.processed.observe+'턴 처리 · 최종 반영 대기';
+  }
   function draftCanContinue(room){const d=room.unified?.draft,cfg=settings(room);return !!d&&cfg.enabled&&d.phase!=='waiting'&&d.phase!=='paused';}
   async function assertDraftReady(room){if(room?.pending&&await readDraft(room)){const e=Error('밀린 기억의 정리·검증이 아직 끝나지 않았습니다. 임시 기억은 주입하지 않아요. 홈에서 이어서 정리·검증을 눌러 주세요. 목표가 미확정으로 바뀌었거나 원문을 편집했다면 임시 정리 다시 시작을 눌러 주세요.');e.code='WISH_DRAFT_PENDING';throw e;}}
   async function restartDraft(room){
@@ -46663,8 +46725,9 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     const livePacks=()=>visibleLorePacksForRoom(room).filter(p=>(room.activeLorePackIds||[]).includes(p.scopeId));
     const basis=draftBasis(d.baseRoom,d.baseCog,d.basePacks),assertBasis=(cg,fr)=>{
       if(epoch!==localRestoreEpoch||state.currentRoom!==room||ExternalReplay.changed(apiChatIdOf(room),replay))throw Error('방 또는 복원 기준이 바뀌어 임시 정리를 보류했습니다.');
-      if(d.settingsStamp!==settingStamp||draftSettingsStamp()!==settingStamp||draftBasis(room,cg,livePacks())!==basis)throw Error('임시 정리 도중 기억·인지·설정이 바뀌었습니다. 기존 기억을 유지했어요. 임시 정리 다시 시작을 눌러 주세요.');
-      if(!sourceStillPresent(d.sourceManifest,fr.messages))throw Error('임시 정리의 기준 원문이 수정·삭제됐습니다. 기존 기억을 유지했어요. 임시 정리 다시 시작을 눌러 주세요.');
+      const configChanges=[...draftSettingsChanges(d.settingsStamp,settingStamp),...draftSettingsChanges(settingStamp,draftSettingsStamp())],liveBasis=draftBasis(room,cg,livePacks());
+      if(configChanges.length||liveBasis!==basis)throw draftChangedError([...configChanges,...(liveBasis!==basis?draftBasisChanges(basis,liveBasis):[])]);
+      if(!sourceStillPresent(d.sourceManifest,fr.messages))throw draftChangedError(['기준 원문 수정·삭제']);
     };
     assertBasis(cog,frame);
     if(!force&&!draftAllowed(room,d)){room.unified.draft={...draftSummary(d),phase:'paused'};return false;}
@@ -46685,7 +46748,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       d=advanceDraft(d,staged,p,frame);await persistDraft(room,d);return true;
     }
     const reviewSignature=rawSignature(d.room,d.cog,d.packs);
-    if(d.reviewIndex>0&&d.reviewSignature!==reviewSignature)throw Error('검증한 뒤 임시 기억이 바뀌었습니다. 임시 정리 다시 시작으로 새 내용을 확인해 주세요.');
+    if(d.reviewIndex>0&&d.reviewSignature!==reviewSignature)throw draftChangedError(['검증한 임시 기억']);
     d.phase='review';unifiedStage='최종 기억 검증 · 원문 묶음 '+(d.reviewIndex+1)+'/'+d.packets.length;room.unified.draft=draftSummary(d);renderModalIfIdle();
     if(d.reviewIndex<d.packets.length){
       const receipt=await reviewDraftPacket(d.room,d.cog,d.packs,d.packets[d.reviewIndex],d.reviewIndex,d.packets.length);
@@ -47160,7 +47223,7 @@ issue는 kind/ref/message/source_turn_key/source_quote 필드만 쓴다. message
   const authIntervals=[5000,15000,30000,60000,120000,300000];
   function authError(u){return !!u?.lastError&&isCrackAuthError({code:u.lastErrorCode,message:u.lastError});}
   function transientError(error){
-    if(error?.code==='WISH_RELATION_EVIDENCE'||['WISH_USER_ABORT','WISH_STALE'].includes(error?.code))return false;
+    if(error?.code==='WISH_RELATION_EVIDENCE'||['WISH_USER_ABORT','WISH_STALE','WISH_DRAFT_CHANGED'].includes(error?.code))return false;
     if(['AI_COOLDOWN','AI_QUEUE_FULL','AI_TIMEOUT'].includes(error?.code))return true;
     if(isCrackAuthError(error)||isHistoryReadChanged(error))return true;
     const text=String(error?.message||error||'');
@@ -47345,6 +47408,7 @@ issue는 kind/ref/message/source_turn_key/source_quote 필드만 쓴다. message
         if(state.currentRoom===room&&room.unified&&!localRestoreInProgress()){
           delete room.unified.partialFailure;
           room.unified.lastError=String(e.message||e);room.unified.lastErrorCode=String(e.code||'');room.unified.failedKind=jobKind;
+          if(e.code==='WISH_DRAFT_CHANGED'&&room.unified.draft)room.unified.draft={...room.unified.draft,restartRequired:true,blockedBy:String(e.draftChanged||'기억·설정')};
           const history=isHistoryReadChanged(e),auth=isCrackAuthError(e),count=force||auth&&room.unified.retry?.kind!=='auth'?0:Number(room.unified.retry?.count||0),delay=retryDelay(e,count);
           room.unified.retry={policy:history?4:auth?3:2,kind:history?'history':auth?'auth':'transport',count:Math.min(100,count+(queueWaiting?0:1)),at:delay?Date.now()+delay:0,after:Date.now()+(delay||900000),sourceKey:jobSourceKey};
           room.unified.status=history?'대화 갱신 감지 · 최신 기준으로 자동 재확인':auth?'로그인 확인 대기 · 확인되면 밀린 정리를 자동으로 이어갑니다.':delay?'일시 오류 · '+Math.ceil(delay/1000)+'초 후 자동 재시도':transientError(e)?'반복 오류 · 새 대화 또는 화면 복귀 시 자동 재개':'확인 필요 · 실패 기록을 확인해 주세요.';
@@ -47383,7 +47447,7 @@ issue는 kind/ref/message/source_turn_key/source_quote 필드만 쓴다. message
   function view(room) {
     const cfg=settings(room),n=counts.get(room)||{};
     return {...cfg,memoryPending:n.memory??autoMemoryState(room).committedTurns??0,observePending:n.observe??0,
-      draft:room.unified?.draft||null,error:room.unified?.lastError||'',blockedKind:hasPartialFailure(room.unified)?room.unified.partialFailure.kind:'',status:room.unified?.status||'',jobLabel:unifiedStage,running:active.has(room.chatId),...retryState(room)};
+      draft:room.unified?.draft||null,error:room.unified?.lastError||'',errorCode:room.unified?.lastErrorCode||'',blockedKind:hasPartialFailure(room.unified)?room.unified.partialFailure.kind:'',status:room.unified?.status||'',jobLabel:unifiedStage,running:active.has(room.chatId),...retryState(room)};
   }
   function updateCounts(room,frame) {
     if(!room?.unified)return;
@@ -57255,7 +57319,28 @@ body[data-theme="dark"] #wish-rp-root,body[data-theme="dark"] #wish-suite-editor
 }
 @media(max-width:400px){#wish-rp-root .m3-sheet{max-height:calc(100dvh - 12px)}#wish-rp-root .m3-dialog{padding:6px}}
 
-/* 0.5.25: distinguish task actions, helper entry and destination icons. */
+/* A single contextual action for the whole home memory workflow. */
+#wish-rp-root .m3-memory-primary-row{margin:12px 0}
+#wish-rp-root .m3-memory-primary-row>.m3-btn{width:100%;min-height:44px;justify-content:center;background:var(--m3-accent);color:var(--m3-accent-ink,#151824);border-color:var(--m3-accent);font-weight:700;font-size:13px}
+#wish-rp-root .m3-memory-work>.m3-fold2{margin:12px 0}
+#wish-rp-root .m3-memory-work>.m3-compact-status{line-height:1.65;overflow-wrap:anywhere}
+#wish-rp-root .m3-memory-note{font-size:12px;line-height:1.65;color:var(--m3-muted);margin:8px 0}
+/* Delivery settings expand exactly below their home action. */
+#wish-rp-root .m3-btn.m3-draft-restart-main{background:var(--m3-accent);color:var(--m3-accent-ink,#fff);font-weight:700;border-color:var(--m3-accent)}
+#wish-rp-root .m3-delivery-toggle[aria-expanded="true"]{background:var(--m3-accent-soft);border-color:var(--m3-accent-line);color:var(--m3-accent)}
+#wish-rp-root .m3-delivery-toggle>svg:last-child{width:14px;height:14px;transition:transform .15s}
+#wish-rp-root .m3-delivery-toggle[aria-expanded="true"]>svg:last-child{transform:rotate(90deg)}
+#wish-rp-root .m3-home-delivery{min-width:0;margin-top:14px;padding-top:14px;border-top:1px solid var(--m3-line);overflow-wrap:anywhere}
+#wish-rp-root .m3-home-delivery h3{font:inherit;font-weight:700;margin:0 0 8px}
+#wish-rp-root .m3-home-delivery>.m3-muted{margin:0 0 12px}
+#wish-rp-root .m3-delivery-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
+#wish-rp-root .m3-delivery-settings>.m3-toggle{min-height:44px;margin:0;padding:8px 0;border-bottom:1px solid var(--m3-line2)}
+#wish-rp-root .m3-delivery-recall{margin:12px 0 18px;padding:12px;border-radius:10px;background:var(--m3-card2)}
+#wish-rp-root .m3-delivery-recall>.m3-toggle{margin:0;min-height:44px}
+#wish-rp-root .m3-home-delivery>.m3-cap{padding:12px;margin:8px 0 12px}
+#wish-rp-root .m3-home-delivery>.m3-fold2{margin-bottom:8px}
+@container(max-width:480px){#wish-rp-root .m3-delivery-settings{grid-template-columns:minmax(0,1fr)}}
+/* 0.5.27: distinguish task actions, helper entry and destination icons. */
 #wish-rp-root{--wish-helper-bg:#e1f4ee;--wish-helper-fg:#116953;--wish-helper-line:#81baa8;--wish-nav-home:#6851ac;--wish-nav-memory:#27668c;--wish-nav-people:#24785c;--wish-nav-ai:#7b59a6;--wish-nav-settings:#92521f}
 body[data-theme="dark"] #wish-rp-root{--wish-helper-bg:#233e39;--wish-helper-fg:#9cdac7;--wish-helper-line:#4c8d7a;--wish-nav-home:#c7b8f7;--wish-nav-memory:#9dcdeb;--wish-nav-people:#91d9bf;--wish-nav-ai:#d3baf4;--wish-nav-settings:#ebc08c}
 @media(prefers-color-scheme:dark){body:not([data-theme]) #wish-rp-root{--wish-helper-bg:#233e39;--wish-helper-fg:#9cdac7;--wish-helper-line:#4c8d7a;--wish-nav-home:#c7b8f7;--wish-nav-memory:#9dcdeb;--wish-nav-people:#91d9bf;--wish-nav-ai:#d3baf4;--wish-nav-settings:#ebc08c}}
@@ -57513,19 +57598,47 @@ relation:'<circle cx="12" cy="5" r="2.4"/><circle cx="5.5" cy="19" r="2.4"/><cir
   function reviewPanel(r) {
     return `<section class="m3-panel" data-key="rv-${esc(r.id)}" style="--cc:${COL.cog}"><div class="m3-row">${kind(r.kind || '인지', COL.cog)}<b class="m3-grow">${esc(r.desc)}</b></div>${r.quote ? `<blockquote class="m3-quote">${esc(r.quote)}</blockquote>` : ''}${r.acceptLabel ? '' : '<p class="m3-muted" style="margin-top:8px">바로 확정하기 어려운 항목이라 먼저 내용을 확인합니다.</p>'}<div class="m3-row m3-card-actions">${r.acceptLabel ? btn(esc(r.acceptLabel), 'rvAccept', { arg: r.id, cls: 'primary mini', icon: 'check' }) : btn('확인하기', 'rvOpen', { arg: r.id, cls: 'mini', icon: 'eye' })}${btn('이 후보 제외', 'rvDismiss', { arg: r.id, cls: 'quiet mini' })}</div></section>`;
   }
+  function homeDeliveryToggle(){
+    const open=S.openSet.has('home-injection-details');
+    return `<button type="button" class="m3-btn quiet mini m3-delivery-toggle" data-act="homeDetails" aria-expanded="${open}" aria-controls="wish-home-delivery-content">${ic('book')}<span>전달 설정·분량</span>${ic('chev')}</button>`;
+  }
+  function homeDeliveryDetails(){
+    if(!S.openSet.has('home-injection-details'))return '';
+    return `<div class="m3-home-delivery" id="wish-home-delivery-content" data-key="home-delivery-content" role="region" aria-label="전달 설정과 분량"><h3>AI에 전달할 항목</h3><p class="m3-muted">이 방에 적용 · 변경 즉시 저장됩니다. 저장된 원문은 유지합니다.</p><div class="m3-delivery-settings">
+      ${tog('현재상태','pol.state',V.pol.state)}${tog('날짜별 기억','pol.log',V.pol.log)}${tog('인물 설정','pol.char',V.pol.char)}${tog('인물별 인지','cogInclude',V.pol.cog!=='off')}${tog('관계·감정선','relationships.on',V.relationships.on)}${tog('호칭·말투','speech.on',V.speech.on)}${tog('자료집','pol.lore',V.pol.lore)}${tog('진행 규칙·OOC','pol.extra',V.pol.extra)}
+      </div><div class="m3-delivery-recall">${tog('필요한 기억만 자동 호출','recall.selective',V.recall?.selective,'최근 대화에 관련된 사건·자료를 고릅니다. 고정·필수 정보와 최근 날짜 기억은 유지합니다.')}</div>
+      <h3>전달 분량</h3>${capCard()}${fold('home-injection-items','포함·제외 항목 상세',injRows())}<div class="m3-card-actions">${btn('전달 설정 접기','homeDetails',{cls:'quiet mini',icon:'close'})}</div></div>`;
+  }
+  function homeMemoryCard(u,s,isSuite,ready){
+    const autoOn=isSuite?s.enabled:u.enabled&&(u.memoryEnabled||u.observeEnabled);
+    const suiteBusy=!!(isSuite&&WSUITE.suite?.busy?.()),busy=!!V.job||u.running||suiteBusy;
+    const restartRequired=!!(u.draft&&(u.draft.restartRequired||u.draft.phase==='waiting'||u.errorCode==='WISH_DRAFT_CHANGED'));
+    const modeMismatch=!!(isSuite&&u.draft);
+    let label='지금 정리',action='autoRun',arg,icon='refresh';
+    if(busy){label=u.running||suiteBusy?'정리 중…':'AI 작업 중…';icon='clock';}
+    else if(modeMismatch){label='정리 방식 확인';action='unifiedRoute';arg='ai:automation';icon='set';}
+    else if(!ready){label='API 연결하기';action='api';icon='key';}
+    else if(restartRequired){label='임시 정리 다시 시작';action='draftRestart';}
+    else if(!isSuite&&u.draft){label='이어서 정리·검증';action='unifiedRetry';}
+    else if(!isSuite&&u.error){label='다시 정리';action='unifiedRetry';}
+    const status=isSuite?(modeMismatch?'⚠️ 이전 방식의 임시 정리가 남아 있어요. 정리 방식을 확인해 이어가세요.':busy?'카드별 기억 정리 진행 중':autoOn?'자동 정리 켜짐':'자동 정리 꺼짐'):retryStatusText(u)||(autoOn?'자동 정리 켜짐':'자동 정리 꺼짐');
+    const draftNote=u.draft?`<p class="m3-memory-note">임시 결과는 원문 검증 후 한 번에 반영합니다.${V.inj.armed?' 완료 전에는 대화 전송을 기다립니다.':''}</p>`:'';
+    const controls=`<div class="m3-card-actions">${btn(autoOn?'자동 정리 일시정지':'자동 정리 켜기','autoToggle',{cls:'quiet mini',dis:busy||!ready||modeMismatch,icon:autoOn?'pause':'play'})}${btn('주기·항목 설정','unifiedRoute',{arg:'ai:automation',cls:'quiet mini',icon:'set'})}</div>`;
+    const error=!isSuite&&u.error?`<p class="m3-error-detail">${esc(u.error)}</p>`:'';
+    const recovery=!isSuite&&u.draft&&!restartRequired?`<p class="m3-muted">임시 결과를 버리고 원문부터 다시 처리해야 할 때만 사용하세요. 현재 적용된 기억은 유지됩니다.</p>${btn('임시 결과를 버리고 다시 시작','draftRestart',{cls:'quiet mini',dis:busy||!ready,icon:'refresh'})}`:'';
+    const details=fold('home-memory-details','설정·작업 상세',controls+error+`<div class="m3-card-actions">${btn('실패·주의 기록','errorLogs',{cls:'quiet mini',icon:'doc'})}</div>`+recovery);
+    return `<section class="m3-panel m3-home-auto m3-memory-work${!isSuite&&(u.error||u.draft)?' m3-alert':''}" data-key="home-automation"><div class="m3-row m3-sp"><b>기억 정리</b>${tag(busy?'진행 중':autoOn?'자동 켜짐':'자동 꺼짐',autoOn?'ok':'')}</div><p class="m3-muted">${isSuite?`카드별 갱신 · 기억 ${s.memoryEvery||10}턴 / 인물 ${s.peopleEvery||1}턴`:`기억 ${V.memory.committed}턴 · 인물 ${u.observePending||0}턴 미처리`}</p><p class="m3-compact-status"${isSuite?'':' data-unified-retry-status'}>${esc(status)}</p>${draftNote}${requestStatusCard(true)}<div class="m3-memory-primary-row">${btn(label,action,{arg,cls:'mini m3-memory-primary',dis:busy,icon})}</div>${details}<small class="m3-muted">${isSuite?'최신 턴 처리 범위는 자동 정리 설정을 따릅니다.':'최신 1턴은 다음 답변 뒤 확정됩니다.'}</small></section>`;
+  }
   function vCheck(){
-    const u=V.unified||{},I=V.inj,s=WSUITE.suite?.summary()||{},isSuite=WSUITE.host.automation(state.currentRoom)==='suite',autoOn=isSuite?s.enabled:u.enabled&&(u.memoryEnabled||u.observeEnabled),ready=!!WSUITE.host.aiReady?.();
-    const busy=!!V.job||u.running,status=u.draft?'기존 기억 유지 · 최신 정리 미완료':I.armed?(I.authWaiting?'로그인 확인 대기':I.verified?'AI에 전달할 기억 저장 확인됨':I.error?'기억 전달 확인 필요':'기억 전달 확인 중'):'기억 전달 꺼짐';
+    const u=V.unified||{},I=V.inj,s=WSUITE.suite?.summary()||{},isSuite=WSUITE.host.automation(state.currentRoom)==='suite',ready=!!WSUITE.host.aiReady?.();
+    const status=u.draft?'기존 기억 유지 · 최신 정리 미완료':I.armed?(I.authWaiting?'로그인 확인 대기':I.verified?'AI에 전달할 기억 저장 확인됨':I.error?'기억 전달 확인 필요':'기억 전달 확인 중'):'기억 전달 꺼짐';
     const fresh=V.fresh?.show?`<section class="m3-panel m3-focus" data-key="home-fresh"><b>${esc(V.fresh.title||'새 방 시작 설정')}</b><p>${esc(V.fresh.desc||'')}</p>${btn('나중에','freshSkip',{cls:'quiet mini'})}${btn('적용','freshApply',{cls:'mini'})}</section>`:'';
     const pending=V.reviews.length+(s.pending||0);
-    return pageHead('홈')+fresh+(!ready?`<section class="m3-panel m3-onboarding" data-key="first-connection"><b>처음에는 두 가지만 확인하세요</b><ol><li>사용할 API와 모델을 연결해요.</li><li>자동 정리할 항목과 주기를 정해요.</li></ol><div class="m3-card-actions">${btn('1. API 연결','api',{cls:'mini',icon:'key'})}${btn('2. 자동 정리 설정','unifiedRoute',{arg:'ai:automation',cls:'mini',icon:'set'})}</div><p class="m3-muted">설정 화면을 여는 것만으로 자동 실행을 켜지 않습니다.</p></section>`:'')+
-      `<section class="m3-panel m3-home-status" data-key="home-status"><div class="m3-row m3-sp"><b class="${status.includes('확인 필요')?'m3-attention-status':''}">${esc(warningStatusText(status))}</b><span class="m3-tag ${I.verified?'ok':''}">${fmt(I.total)} / ${fmt(I.max||40000)}자</span></div>${capMeter()}<div class="m3-card-actions">${btn('기억 미리보기','preview',{cls:'mini',icon:'eye'})}${btn('전달 설정·분량','homeDetails',{cls:'quiet mini',icon:'book'})}</div></section>`+
-      (u.draft?`<section class="m3-panel m3-alert" data-key="memory-draft"><b>⚠️ 최신 기억 정리 미완료</b><p>분할 결과는 임시 저장 중입니다. 원문 대조를 모두 통과한 뒤 한 번에 반영합니다. 주입이 켜져 있으면 완료 전 대화 전송을 기다립니다.</p><p>${esc(u.retryStatus||'')}</p><div class="m3-card-actions">${btn('이어서 정리·검증','unifiedRetry',{cls:'mini',dis:busy||!ready})}${btn('임시 정리 다시 시작','draftRestart',{cls:'quiet mini',dis:busy})}</div></section>`:'')+
-      unifiedHomeCards()+
-      `<section class="m3-panel m3-home-auto" data-key="home-automation"><div class="m3-row m3-sp"><b>자동 정리</b>${tag(busy?'진행 중':autoOn?'켜짐':'꺼짐',autoOn?'ok':'')}</div><p class="m3-muted">${isSuite?`카드별 갱신 · 기억 ${s.memoryEvery||10}턴 / 인물 ${s.peopleEvery||1}턴`:`기억 ${V.memory.committed}턴 · 인물 ${u.observePending||0}턴 미처리`}</p>${u.retryStatus?`<p class="m3-muted m3-compact-status${String(u.retryStatus||'').includes('확인 필요')?' m3-attention-status':''}" data-unified-retry-status>${esc(retryStatusText(u))}</p>`:''}${requestStatusCard(true)}<div class="m3-card-actions">${btn('지금 정리','autoRun',{cls:'mini',dis:busy||!ready,icon:'refresh'})}${btn(autoOn?'일시정지':'자동 정리 시작','autoToggle',{cls:'quiet mini',dis:busy||!ready,icon:autoOn?'pause':'play'})}${btn('주기·항목 설정','unifiedRoute',{arg:'ai:automation',cls:'quiet mini',icon:'set'})}</div><small class="m3-muted">${isSuite?'최신 턴 처리 범위는 자동 정리 설정을 따릅니다.':'최신 1턴은 다음 답변 뒤 확정됩니다.'}</small></section>`+
-      (I.error||u.error?`<section class="m3-panel m3-alert" data-key="home-attention"><b>${I.authWaiting||u.authWaiting?'로그인 확인 대기':'⚠️ 확인 필요'}</b><p class="m3-muted">${I.authWaiting||u.authWaiting?'사이트 로그인 상태를 확인한 뒤 이어갑니다. 저장된 기억은 유지합니다.':'작업 상태에서 실패 원인과 재시도 대기를 확인할 수 있어요.'}</p><div class="m3-card-actions">${btn('작업 상태 보기','unifiedRoute',{arg:'ai:connection',cls:'mini',icon:'clock'})}${I.error?btn('기억 전달 재검증','reverify',{cls:'mini',dis:busy}):''}${u.error?btn('오류 확인·재시도','unifiedRetry',{cls:'mini',dis:busy}):''}</div></section>`:'')+
+    const deliveryNotice=I.error?`<p class="m3-memory-note m3-attention-status">${I.authWaiting?'⚠️ 사이트 로그인 확인 후 하단의 서버 재검증을 눌러 주세요.':'⚠️ 기억 전달 확인이 필요해요. 하단의 서버 재검증에서 다시 확인할 수 있습니다.'}</p>`:'';
+    return pageHead('홈')+fresh+(!ready?`<section class="m3-panel m3-onboarding" data-key="first-connection"><b>처음에는 두 가지만 확인하세요</b><ol><li>사용할 API와 모델을 연결해요.</li><li>자동 정리할 항목과 주기를 정해요.</li></ol><p class="m3-muted">아래 API 연결하기로 시작하세요. 연결 뒤 설정·작업 상세에서 정리 주기를 정할 수 있습니다.</p></section>`:'')+
+      `<section class="m3-panel m3-home-status" data-key="home-status"><div class="m3-row m3-sp"><b class="${status.includes('확인 필요')?'m3-attention-status':''}">${esc(warningStatusText(status))}</b><span class="m3-tag ${I.verified?'ok':''}">${fmt(I.total)} / ${fmt(I.max||40000)}자</span></div>${capMeter()}${deliveryNotice}<div class="m3-card-actions">${btn('기억 미리보기','preview',{cls:'mini',icon:'eye'})}${homeDeliveryToggle()}</div>${homeDeliveryDetails()}</section>`+
+      homeMemoryCard(u,s,isSuite,ready)+unifiedHomeCards()+
       (pending?`<section class="m3-panel" data-key="home-review"><b>검토할 변경 ${pending}건</b><p class="m3-muted">보류된 변경만 한곳에서 확인하고 적용합니다.</p>${btn('변경 검토','unifiedRoute',{arg:'cognition:review',cls:'mini',icon:'eye'})}</section>`:'')+
-      fold('home-injection-details','기억 전달 상세 · 분량과 포함 항목',capCard()+injRows())+
       fold('first-steps','메뉴 사용 안내',`<dl class="m3-menu-guide"><dt>기억·자료</dt><dd>현재상태, 날짜별 기억, 자료집과 진행 규칙</dd><dt>인물</dt><dd>인물 설정, 인지, 호칭과 관계</dd><dt>AI·자동화</dt><dd>API 연결, 자동 정리, 응답 교정과 사용 기록</dd><dt>설정</dt><dd>화면, 백업·복원과 재구축</dd></dl>`);
   }
 
@@ -58596,7 +58709,7 @@ function discardPanelDrafts(){
 
     errorLogs(d){
       const all=V.diagnostics||[],level=r=>/error|오류/i.test(r.level)?'error':/warn|주의/i.test(r.level)?'warn':'other',filter=S.diagnosticFilter||'all',rows=all.filter(r=>filter==='all'||level(r)===filter);
-      const body=unifiedTabs([['all',`전체 ${all.length}`],['error',`오류 ${all.filter(r=>level(r)==='error').length}`],['warn',`주의 ${all.filter(r=>level(r)==='warn').length}`]],filter,'diagnosticFilter')+`<p class="m3-muted">제목을 누르면 원인·단계·응답 시간을 펼쳐 볼 수 있어요. 원래 기록은 모두 보존됩니다.</p>`+rows.map(row=>card('diagnostic-'+row.id,esc(row.operation),esc(new Date(row.lastAt||row.at).toLocaleString('ko-KR'))+' · '+esc(row.level)+(row.count>1?' · '+row.count+'회':''),(row.stage?'<p>단계: '+esc(row.stage)+'</p>':'')+'<p class="m3-error-detail">'+esc(row.message)+'</p><p class="m3-muted">'+[row.code,row.provider,row.model,row.httpStatus?'HTTP '+row.httpStatus:'',row.inputChars?'입력 '+fmt(row.inputChars)+'자':'',row.elapsedMs?'경과 '+Math.round(row.elapsedMs/1000)+'초':'',row.timeoutMs?'제한 '+Math.ceil(row.timeoutMs/1000)+'초':'',row.responseChars?'응답 '+fmt(row.responseChars)+'자':'',row.finishReason,'v'+row.version].filter(Boolean).map(esc).join(' · ')+'</p>')).join('');
+      const body=unifiedTabs([['all',`전체 ${all.length}`],['error',`오류 ${all.filter(r=>level(r)==='error').length}`],['warn',`주의 ${all.filter(r=>level(r)==='warn').length}`]],filter,'diagnosticFilter')+`<p class="m3-muted">제목을 누르면 원인·단계·응답 시간을 펼쳐 볼 수 있어요. 원래 기록은 모두 보존됩니다.</p>`+rows.map(row=>card('diagnostic-'+row.id,esc(row.operation),esc(new Date(row.lastAt||row.at).toLocaleString('ko-KR'))+' · '+esc(row.level)+(row.count>1?' · '+row.count+'회':''),(row.stage?'<p>단계: '+esc(row.stage)+'</p>':'')+'<p class="m3-error-detail">'+esc(row.message)+'</p><p class="m3-muted">'+[row.code,row.provider,row.model,row.httpStatus?'HTTP '+row.httpStatus:'',row.inputChars?'입력 '+fmt(row.inputChars)+'자':'',row.elapsedMs?'경과 '+Math.round(row.elapsedMs/1000)+'초':'',Number.isFinite(row.queueWaitMs)?'큐·재시도 대기 '+Math.round(row.queueWaitMs/1000)+'초':'',Number.isFinite(row.requestMs)?'API 처리 '+Math.round(row.requestMs/1000)+'초':'',Number.isFinite(row.attempts)?'시도 '+row.attempts+'회':'',row.timeoutMs?'제한 '+Math.ceil(row.timeoutMs/1000)+'초':'',row.responseChars?'응답 '+fmt(row.responseChars)+'자':'',row.finishReason,'v'+row.version].filter(Boolean).map(esc).join(' · ')+'</p>')).join('');
       return sheet(d,{title:'실패·주의 기록',desc:'이 브라우저의 최근 100개 · 최신순',body:body+(rows.length?'':empty('이 분류에 기록이 없습니다.')),foot:btn('기록 복사','errorLogsCopy',{cls:'mini',icon:'copy'})+btn('기록 비우기','errorLogsClear',{cls:'danger mini',icon:'trash'})+SP+closeBtn(d)});
     },
     advanced(d){const a=d.draft;return sheet(d,{title:'추가 연결 설정',body:`${field('Firebase 위치',inp(D(d,'firebaseLocation'),a.firebaseLocation||''))}${fold('advanced-sdk','SDK 세부 설정',field('Firebase SDK 버전',inp(D(d,'firebaseSdkVersion'),a.firebaseSdkVersion||'')))}`,foot:`${SP}${closeBtn(d)}${saveBtn(d)}`});},
@@ -58856,30 +58969,11 @@ kvList(d){const c=WishKoofr.view(),groups=new Map();d.draft.pick||={};const sele
   function tween(el, from, to) { if (REDUCED || !Number.isFinite(to) || !Number.isFinite(from)) return; const t0 = performance.now(), dur = 800; const f = now => { const k = Math.min(1, (now - t0) / dur); if (el.firstChild) el.firstChild.nodeValue = fmt(Math.round(from + (to - from) * (1 - (1 - k) ** 3))); if (k < 1 && el.isConnected) requestAnimationFrame(f); }; requestAnimationFrame(f); }
   function fxInit(r) { r.querySelectorAll('[data-count]:not([data-fx-c])').forEach(el => { el.setAttribute('data-fx-c', ''); tween(el, 0, Number(el.getAttribute('data-count'))); }); }
   let root = null, raf = 0, modelDirty = true;
-  let homeDetailsJump = null;
-  function requestHomeDetailsJump(){
-    S.openSet.add('home-injection-details');
+  function toggleHomeDeliveryDetails(){
+    const key='home-injection-details';
+    if(S.openSet.has(key))S.openSet.delete(key);else S.openSet.add(key);
     S.scrollTop=false;S.suiteReturnScroll=null;
-    homeDetailsJump={path:location.pathname,room:state.currentRoom};
     paint(false);
-  }
-  function consumeHomeDetailsJump(){
-    const jump=homeDetailsJump;if(!jump)return;
-    homeDetailsJump=null;
-    if(!S.open||S.leaving||S.tab!=='check'||jump.path!==location.pathname||jump.room!==state.currentRoom)return;
-    const main=root?.querySelector('.m3-main');
-    const details=main?.querySelector('[data-open="home-injection-details"]');
-    const heading=details?.querySelector('summary');
-    if(!main||!details||!heading)return;
-    // Resolve after the details body is rendered. Scroll only this panel;
-    // browser scrollIntoView can choose an outer scroller or keep a tall
-    // nearest-aligned details block stationary on mobile layouts.
-    details.open=true;
-    const viewport=main.getBoundingClientRect(),target=heading.getBoundingClientRect();
-    const scale=main.offsetHeight?viewport.height/main.offsetHeight:1;
-    const top=main.scrollTop+(target.top-viewport.top)/(scale||1)-12;
-    main.scrollTop=Math.max(0,Math.min(top,main.scrollHeight-main.clientHeight));
-    heading.focus({preventScroll:true});
   }
   function ensureRoot() {
     if (root && root.isConnected) return;
@@ -58897,7 +58991,6 @@ kvList(d){const c=WishKoofr.view(),groups=new Map();d.draft.pick||={};const sele
       const main=root.querySelector('.m3-main');
       if(main){main.scrollTop=S.suiteReturnScroll;S.suiteReturnScroll=null;}
     }
-    consumeHomeDetailsJump();
     if (S.wantFocus) { S.wantFocus = false; const el = root.querySelector('.wish-dlg-layer>.m3-dialog:last-child [data-autofocus]'); if (el) el.focus({ preventScroll: true }); }
   }
   function paint(refreshModel = true) { if(refreshModel)modelDirty=true; if (!raf) raf = requestAnimationFrame(render); }
@@ -58999,7 +59092,7 @@ kvList(d){const c=WishKoofr.view(),groups=new Map();d.draft.pick||={};const sele
     secondaryClear:id=>{const d=findDlg(id);if(d&&!d.busy)ask('압축본을 모두 해제할까요?','등록된 압축 표현만 해제합니다. 저장 원문과 사건은 삭제하지 않습니다.','압축본 해제',()=>SecondaryRebuild.change(id,'clear'));},
 
     diagnosticFilter:a=>{S.diagnosticFilter=['all','error','warn'].includes(a)?a:'all';},
-    homeDetails:requestHomeDetailsJump,
+    homeDetails:toggleHomeDeliveryDetails,
     memoryGroup:a=>unifiedNavigate('memory',a==='reference'?'lorePacks':a==='rules'?'extra':S.mem),
     aiSub:a=>unifiedNavigate('ai',a),
     nav:a=>unifiedNavigate(a),
