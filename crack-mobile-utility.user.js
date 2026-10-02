@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.3
-// @description  4.6.0.3: 글 감싸기 수동 호출·복사 메뉴 충돌 완화, 통합 기능 접이식 ON/OFF, 라존데 상태 아이콘 6종, 상황 이미지 바로가기 보완, 모델 선택창 포커스·키보드·중복 동작 안정화.
+// @version      4.6.0.4
+// @description  4.6.0.4: 모델 선택창을 미니사이드바 버튼 위에 배치·키보드 크기 변화 대응. 글 감싸기 수동 호출·복사 메뉴 충돌 완화, 통합 기능 접이식 ON/OFF, 라존데 상태 아이콘 6종, 상황 이미지 바로가기 보완, 모델 선택창 포커스·키보드·중복 동작 안정화.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -36,13 +36,14 @@
 // ==/UserScript==
 
 /*
+ * 4.6.0.4 변경: 모델 선택창을 누른 버튼 위에 배치하고 화면 경계·키보드 변화·스크롤에 맞춰 재배치.
  * 4.6.0.3 배포: 기존 GitHub 4.6.0.2보다 높은 버전으로 배포하고 본체/메타 업데이트 주소 동기화.
  * 4.6.0.2 변경: 글 선택 후 미니사이드바 아이콘으로 감싸기 도구 호출.
  * 기존 자동 팝업 기본 설정은 1회 수동 전환하고, 이후 사용자의 자동 팝업 선택은 보존.
  * 대시보드에 통합 기능 접이식 ON/OFF, 동일 설정 스위치 간 상태 동기화.
  * 라존데 상태 아이콘 6종(기본/하트/별/팔분음표/꽃모양/날개), 기존 6px·색상 유지. 날개는 둥근 말림이 있는 한쪽 날개.
  * 상황 이미지 보기 스위치 탐색·중복 클릭 방지·결과 확인과 실패 안내 보완.
- * 모델 선택창 중앙 배치, 화면 크기 변경 재배치, 원본 메뉴 포커스와 비동기 닫힘 경합 보완.
+ * 모델 선택창 화면 크기 변경 재배치, 원본 메뉴 포커스와 비동기 닫힘 경합 보완.
  * 검증: JavaScript 구문 검사·최소 DOM/VM 회귀 검사. 실제 Android Edge 화면은 미검증.
  * 4.6.0.1 변경: 원작자 4.6.0 공통 코어·캐릭터/분기방·전송·초안 정리 개선과 DOM/캐시 최적화 반영.
  * 신규 라존데 전송/요청 큐·취소·캐시·최신 모델 탐색을 반영하고 사용자 모델 정렬/이전값 표시 보존.
@@ -193,7 +194,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.6.0.3';
+    const VERSION = '4.6.0.4';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -13460,19 +13461,34 @@
     }
     function positionCompactModelPicker() {
         const menu = COMPACT_MODEL.menu;
-        if (!(menu instanceof HTMLElement) || !menu.isConnected) return;
+        const anchor = COMPACT_MODEL.anchor;
+        if (!(menu instanceof HTMLElement) || !menu.isConnected ||
+            !(anchor instanceof HTMLElement) || !anchor.isConnected) return;
         const vv = window.visualViewport;
         const left = Number(vv?.offsetLeft || 0);
         const top = Number(vv?.offsetTop || 0);
         const width = Math.max(1, Number(vv?.width || window.innerWidth || 1));
         const height = Math.max(1, Number(vv?.height || window.innerHeight || 1));
-        const menuWidth = Math.min(190, Math.max(1, width - 24));
-        const available = Math.min(360, Math.max(40, height - 24));
+        const rect = anchor.getBoundingClientRect();
+        const insetX = Math.min(12, Math.max(0, (width - 1) / 2));
+        const insetY = Math.min(12, Math.max(0, (height - 1) / 2));
+        const minLeft = left + insetX;
+        const minTop = top + insetY;
+        const bottom = top + height - insetY;
+        const menuWidth = Math.min(190, width - insetX * 2);
+        const gap = 8;
+        const spaceAbove = Math.max(0, Math.min(bottom, rect.top - gap) - minTop);
+        const spaceBelow = Math.max(0, bottom - Math.max(minTop, rect.bottom + gap));
+        // Keep the list beside its trigger, including while the mobile keyboard resizes.
+        // Prefer above the sidebar; a trigger near the top opens downward instead.
+        const placeAbove = spaceAbove >= 112 || spaceAbove >= spaceBelow;
+        const available = Math.min(360, Math.max(1, placeAbove ? spaceAbove : spaceBelow));
         menu.style.width = `${Math.round(menuWidth)}px`;
         menu.style.maxHeight = `${Math.round(available)}px`;
-        const measuredHeight = Math.min(menu.scrollHeight || available, available);
-        menu.style.left = `${Math.round(left + (width - menuWidth) / 2)}px`;
-        menu.style.top = `${Math.round(top + Math.max(8, (height - measuredHeight) / 2))}px`;
+        const measuredHeight = Math.min(menu.getBoundingClientRect().height || available, available);
+        const targetTop = placeAbove ? rect.top - gap - measuredHeight : rect.bottom + gap;
+        menu.style.left = `${Math.round(Math.max(minLeft, Math.min(rect.left, left + width - insetX - menuWidth)))}px`;
+        menu.style.top = `${Math.round(Math.max(minTop, Math.min(targetTop, bottom - measuredHeight)))}px`;
         menu.style.visibility = 'visible';
     }
     function unbindCompactModelPickerEvents() {
@@ -13482,9 +13498,12 @@
             document.removeEventListener('keydown', COMPACT_MODEL.keyHandler, true);
         if (COMPACT_MODEL.resizeHandler) {
             window.removeEventListener('resize', COMPACT_MODEL.resizeHandler);
+            window.removeEventListener('scroll', COMPACT_MODEL.resizeHandler, true);
             window.visualViewport?.removeEventListener?.('resize', COMPACT_MODEL.resizeHandler);
             window.visualViewport?.removeEventListener?.('scroll', COMPACT_MODEL.resizeHandler);
         }
+        cancelAnimationFrame(COMPACT_MODEL.positionFrame);
+        COMPACT_MODEL.positionFrame = 0;
         COMPACT_MODEL.outsideHandler = COMPACT_MODEL.keyHandler = COMPACT_MODEL.resizeHandler = null;
     }
     function compactModelClearNativeLiveMarks(shell = null) {
@@ -13700,10 +13719,18 @@
             event.preventDefault();
             closeCompactModelPicker({ closeNative: true });
         };
-        COMPACT_MODEL.resizeHandler = positionCompactModelPicker;
+        COMPACT_MODEL.resizeHandler = () => {
+            positionCompactModelPicker();
+            cancelAnimationFrame(COMPACT_MODEL.positionFrame);
+            COMPACT_MODEL.positionFrame = requestAnimationFrame(() => {
+                COMPACT_MODEL.positionFrame = 0;
+                positionCompactModelPicker();
+            });
+        };
         document.addEventListener('pointerdown', COMPACT_MODEL.outsideHandler, true);
         document.addEventListener('keydown', COMPACT_MODEL.keyHandler, true);
         window.addEventListener('resize', COMPACT_MODEL.resizeHandler, { passive: true });
+        window.addEventListener('scroll', COMPACT_MODEL.resizeHandler, { passive: true, capture: true });
         window.visualViewport?.addEventListener?.('resize', COMPACT_MODEL.resizeHandler, { passive: true });
         window.visualViewport?.addEventListener?.('scroll', COMPACT_MODEL.resizeHandler, { passive: true });
     }

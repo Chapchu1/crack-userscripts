@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         🖼️ Crack Custom Room Image Background (배경 이미지&테마)
 // @namespace    crack-custom-room-background
-// @version      4.3.0.1
-// @description  기존 테마·방별 이미지·사용자 디자인과 최적화를 보존하고 NYANG 5종·사이트 전체 웹폰트를 추가한 4.3.0.1 통합판.
+// @version      4.3.0.2
+// @description  기존 테마·방별 이미지·사용자 디자인과 최적화를 보존하고 NYANG 5종·사이트 전체 웹폰트를 추가한 4.3.0.2 통합판.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        none
@@ -52,7 +52,7 @@
   }
 
   const SCRIPT_NAME = 'Custom Room Image Background';
-  const VERSION = '4.3.0.1';
+  const VERSION = '4.3.0.2';
   const SGB_MUTATION_BATCH_MS = 32;
 
   /**
@@ -1322,8 +1322,8 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     return count;
   }
   const UI_STYLE_VALUES = new Set(['botanical', 'normal', 'borderless', 'glass', 'pixel', 'sticker', 'candy', 'cozy', 'codepad', 'najeon', 'starjar', 'newsprint', 'jazzbar', 'cloud', 'rubric', 'vitrail', 'solarium', 'trench', 'hoemun', 'hangar', 'dogtag', 'cyber', 'haunt', 'aoi', 'pearlwave', 'dossier', 'blueknot', 'rift', 'photolab', 'scrapbook', 'floppy', 'reliquary', 'retroweb', 'grimoire', 'vesper', 'imessage', 'arcana', 'cinnamusic', 'cinnaboard', 'cinnadream', 'cinnacushion', 'cinnaribbon', 'cinnawizard', 'cinnapuff', 'chiiv', 'chiijudy', 'chiihula', 'chiifairy', 'xiaocard', 'xiaosanta', 'cherrystaff', 'kerodream', 'kiraramono', 'sailormoon', 'cherryxiaolang', 'nyang']);
-  // 기본 제공 테마 목록은 고정한다. 이후 추가되는 테마는 자동으로 추가 테마에 배치한다.
-  const BUILTIN_UI_STYLE_VALUES = new Set(['botanical', 'normal', 'borderless', 'glass', 'pixel', 'sticker', 'candy', 'cozy', 'codepad', 'najeon', 'starjar', 'newsprint', 'jazzbar', 'cloud', 'rubric', 'vitrail', 'solarium', 'trench', 'hoemun', 'hangar', 'dogtag', 'cyber', 'haunt', 'aoi', 'dossier', 'rift', 'photolab', 'scrapbook', 'floppy', 'reliquary', 'retroweb', 'grimoire', 'vesper', 'imessage', 'arcana']);
+  // 원작자 테마는 새로 추가된 테마도 모두 기존 테마에 등록합니다. 추가 테마는 커스텀 제작 테마용입니다.
+  const BUILTIN_UI_STYLE_VALUES = new Set(['botanical', 'normal', 'borderless', 'glass', 'pixel', 'sticker', 'candy', 'cozy', 'codepad', 'najeon', 'starjar', 'newsprint', 'jazzbar', 'cloud', 'rubric', 'vitrail', 'solarium', 'trench', 'hoemun', 'hangar', 'dogtag', 'cyber', 'haunt', 'aoi', 'dossier', 'rift', 'photolab', 'scrapbook', 'floppy', 'reliquary', 'retroweb', 'grimoire', 'vesper', 'imessage', 'arcana', 'nyang']);
 
 
   function normalizeUiStyle(value, fallback = 'borderless') {
