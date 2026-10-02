@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.2
-// @description  4.6.0.1 통합: 원작자 4.6.0의 9/30 개편 대응·캐릭터/분기방·전송/초안·라존데 복구·문체 버튼·정보바 애니메이션·반복작업/메모리 최적화. 기존 키보드 보정·단축어 편집·대화 프로필·설정 디자인·작은 모델창 유지.
+// @version      4.6.0.3
+// @description  4.6.0.3: 글 감싸기 수동 호출·복사 메뉴 충돌 완화, 통합 기능 접이식 ON/OFF, 라존데 상태 아이콘 6종, 상황 이미지 바로가기 보완, 모델 선택창 포커스·키보드·중복 동작 안정화.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -36,6 +36,14 @@
 // ==/UserScript==
 
 /*
+ * 4.6.0.3 배포: 기존 GitHub 4.6.0.2보다 높은 버전으로 배포하고 본체/메타 업데이트 주소 동기화.
+ * 4.6.0.2 변경: 글 선택 후 미니사이드바 아이콘으로 감싸기 도구 호출.
+ * 기존 자동 팝업 기본 설정은 1회 수동 전환하고, 이후 사용자의 자동 팝업 선택은 보존.
+ * 대시보드에 통합 기능 접이식 ON/OFF, 동일 설정 스위치 간 상태 동기화.
+ * 라존데 상태 아이콘 6종(기본/하트/별/팔분음표/꽃모양/날개), 기존 6px·색상 유지. 날개는 둥근 말림이 있는 한쪽 날개.
+ * 상황 이미지 보기 스위치 탐색·중복 클릭 방지·결과 확인과 실패 안내 보완.
+ * 모델 선택창 중앙 배치, 화면 크기 변경 재배치, 원본 메뉴 포커스와 비동기 닫힘 경합 보완.
+ * 검증: JavaScript 구문 검사·최소 DOM/VM 회귀 검사. 실제 Android Edge 화면은 미검증.
  * 4.6.0.1 변경: 원작자 4.6.0 공통 코어·캐릭터/분기방·전송·초안 정리 개선과 DOM/캐시 최적화 반영.
  * 신규 라존데 전송/요청 큐·취소·캐시·최신 모델 탐색을 반영하고 사용자 모델 정렬/이전값 표시 보존.
  * 문체 바로가기·정보바 숫자 애니메이션·전체화면/펼치기 SVG 및 유저노트 선택 보완.
@@ -185,7 +193,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.6.0.1';
+    const VERSION = '4.6.0.3';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -431,6 +439,7 @@
         themeMarkdown: true,
         radiosonde: true,
         radiosondeLatency: true,
+        radiosondeShape: 'circle',
         dashboard: true,
         dashboardNumberAnimation: true,
         dashboardSidebar: true,
@@ -758,6 +767,8 @@
     function normalizeCmuSettings(raw = {}) {
         const source = raw && typeof raw === 'object' ? raw : {};
         const merged = { ...DEFAULTS, ...source };
+        merged.radiosondeShape = ['circle', 'heart', 'star', 'note', 'flower', 'wings'].includes(source.radiosondeShape)
+            ? source.radiosondeShape : 'circle';
         merged.keyboardComposerMode = source.keyboardComposerMode === 'manual' ? 'manual' : 'auto';
         merged.keyboardComposerMotionGuard = source.keyboardComposerMotionGuard !== false;
         let captureRules = normalizeLogCaptureRules(source.logCaptureRules ?? merged.logCaptureRules);
@@ -3600,14 +3611,53 @@
     #igx-live-popup.inline .bdot {
       width: 6px !important;
       height: 6px !important;
-      border-radius: 999px;
+      border-radius: 0 !important;
       display: inline-block;
       color: var(--rs-score-color) !important;
-      background: var(--rs-score-color) !important;
-      background-color: var(--rs-score-color) !important;
+      background: transparent !important;
+      background-color: transparent !important;
       flex: 0 0 auto;
+      line-height: 0 !important;
     }
-
+    #igx-live-popup.inline .bdot > svg {
+      display: block !important;
+      width: 100% !important;
+      height: 100% !important;
+      fill: currentColor !important;
+      overflow: visible;
+    }
+    #cmu-settings-panel .qputil .qcard .cmu-rs-shape-row {
+      display: block;
+      padding: 0 !important;
+    }
+    #cmu-settings-panel .cmu-rs-shape-row > summary {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 48px;
+      padding: 10px 13px;
+      box-sizing: border-box;
+      cursor: pointer;
+      list-style: none;
+      touch-action: manipulation;
+    }
+    #cmu-settings-panel .cmu-rs-shape-row > summary::-webkit-details-marker { display: none; }
+    #cmu-settings-panel .cmu-rs-shape-row > summary::after { content: '⌄'; flex: 0 0 auto; opacity: .7; }
+    #cmu-settings-panel .cmu-rs-shape-row[open] > summary::after { content: '⌃'; }
+    #cmu-settings-panel .cmu-rs-shape-current { margin-left: auto; font-size: 12px; opacity: .75; white-space: nowrap; }
+    #cmu-settings-panel .cmu-rs-shape-choices {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 0 13px 12px;
+    }
+    #cmu-settings-panel .cmu-rs-shape-choices .chip { min-height: 34px !important; }
+    #cmu-settings-panel .cmu-rs-shape-choices .cmu-rs-shape-icon {
+      width: 14px !important;
+      height: 14px !important;
+      flex: 0 0 auto;
+      fill: currentColor;
+    }
     .cmu-message-badge {
       flex: 0 0 auto;
       width: fit-content;
@@ -7963,6 +8013,10 @@
         const empty = panel.querySelector('.cmu-search-empty');
         if (!q) {
             panel.querySelectorAll('.cmu-page .subrow').forEach(r => r.classList.remove('cmu-hit-off'));
+            panel.querySelectorAll('details[data-cmu-search-open]').forEach(details => {
+                details.open = details.dataset.cmuSearchOpen === '1';
+                delete details.dataset.cmuSearchOpen;
+            });
             if (empty)
                 empty.hidden = true;
             return;
@@ -7973,6 +8027,12 @@
             r.classList.toggle('cmu-hit-off', !ok);
             if (ok)
                 hit++;
+        });
+        panel.querySelectorAll('.cmu-page details').forEach(details => {
+            if (!details.matches('.subrow:not(.cmu-hit-off)') && !details.querySelector('.subrow:not(.cmu-hit-off)')) return;
+            if (!Object.prototype.hasOwnProperty.call(details.dataset, 'cmuSearchOpen'))
+                details.dataset.cmuSearchOpen = details.open ? '1' : '0';
+            details.open = true;
         });
         if (empty)
             empty.hidden = hit > 0;
@@ -9257,6 +9317,16 @@
     function syncQToggleElement(el, value) {
         if (!el)
             return;
+        // One feature may also appear in the integrated-features quick list.
+        const panel = el.closest('.qputil');
+        if (panel && el.dataset.key) {
+            panel.querySelectorAll(`.sw[data-key="${CSS.escape(el.dataset.key)}"]`).forEach(peer => {
+                peer.classList.toggle('on', !!value);
+                peer.setAttribute('aria-checked', value ? 'true' : 'false');
+                const group = peer.dataset.group && panel.querySelector(`#${CSS.escape(peer.dataset.group)}`);
+                group?.classList.toggle('off', !value);
+            });
+        }
         el.classList.toggle('on', !!value);
         el.setAttribute('aria-checked', value ? 'true' : 'false');
         const groupId = el.dataset.group;
@@ -9275,7 +9345,7 @@
     ];
     const SIDE_PART_LABELS = [
         ['modelButton', '모델'], ['themeButton', '라이트/다크'], ['episodeModeButton', '소설/채팅'], ['inputWrapperButton', '글 감싸기'], ['guideButton', '가이드'], ['profileButton', '프로필'], ['profileBoxButton', '프로필 박스'], ['noteButton', '노트'],
-        ['proseStyleButton', '문체'], ['outputButton', '출력'], ['summaryButton', '요약'], ['imageButton', '이미지'], ['archiveButton', '보관함'],
+        ['proseStyleButton', '문체'], ['outputButton', '출력'], ['summaryButton', '요약'], ['imageButton', '상황 이미지'], ['archiveButton', '보관함'],
         ['roomBackgroundButton', '이미지 테마'], ['scenePainterButton', '모바일 삽화'], ['wishManagerButton', 'Wish RP'], ['sceneBlurButton', 'CSP 테마'],
         ['startButton', '시작'], ['loreButton', '로어'], ['translatorButton', '번역'], ['aiSummaryButton', 'AI 요약'], ['aiWriterButton', 'AI 답변'], ['gameHudButton', '게임 HUD']
     ];
@@ -9324,6 +9394,23 @@
         return getAvailableSideEntries().map(([key, label]) =>
             qChip('q-side-chip', key, label, visible[key] !== false, false, sidePartSettingIcon(key))
         ).join('');
+    }
+    const CMU_RS_SHAPES = [
+        ['circle', '기본', '<circle cx="12" cy="12" r="12"/>'],
+        ['heart', '하트', '<path d="M12 23C8 19 0 13 0 6.8 0 .2 8-2 12 3.8 16-2 24 .2 24 6.8 24 13 16 19 12 23Z"/>'],
+        ['star', '별', '<path d="m12 0 3.7 7.7L24 9l-6 6 .9 9-6.9-4.5L5.1 24l.9-9-6-6 8.3-1.3Z"/>'],
+        ['note', '팔분음표', '<path d="M11 0h3c0 3.4 8 4 8 9.5 0 3.4-2.5 5.5-5.6 5.7 2.9-3.4 2.3-6.8-2.4-8.2v11.5c0 3.2-2.8 5.5-6.8 5.5C.4 24 .4 15 7.2 15c1.5 0 2.8.3 3.8.9Z"/>'],
+        ['flower', '꽃모양', '<path d="M12 0c3.8 0 5.2 3 4.3 6.1C20 4.3 24 6.4 24 10s-2.5 5.3-5.5 5c2.8 2.6 2 6.2-1 8-3 1.6-5.1-.6-5.5-3.4-.4 2.8-2.5 5-5.5 3.4-3-1.8-3.8-5.4-1-8-3 .3-5.5-1.4-5.5-5s4-5.7 7.7-3.9C6.8 3 8.2 0 12 0Z"/>'],
+        ['wings', '날개', '<path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" transform="translate(.65 .6) scale(.94)" d="M3 1.5C1.5 1.4 1 3.8 1.2 6.5c.1 1.4.6 2.7 1.3 3.7C1 11.8 1.6 14.3 3.8 16.1c-.6 3.9 3.7 6.9 8.4 5.8 2.8 1.7 6.4 1.1 8.7-1.3 3.7-3.9 2.4-9.8-1.8-12.3-2.5-1.5-4.6-1-7.7-1.9C7.5 5.4 5.1 3.3 4 1.9c-.3-.4-.7-.5-1-.4ZM2.5 10.2c1.2 1.4 2.7 2 4.6 2.2M3.8 16.1c1 .6 2.1.9 3.2 1.1M12.2 21.9c-3.1-2.8-2.8-7.2.4-8.4 2.5-1 5 1 4.9 3.2"/>'],
+    ];
+    function rsShapeSvg(shape = settings.radiosondeShape) {
+        const selected = CMU_RS_SHAPES.find(([key]) => key === shape) || CMU_RS_SHAPES[0];
+        return `<svg class="cmu-rs-shape-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor">${selected[2]}</svg>`;
+    }
+    function renderRsShapePicker() {
+        const selected = CMU_RS_SHAPES.find(([key]) => key === settings.radiosondeShape) || CMU_RS_SHAPES[0];
+        const chips = CMU_RS_SHAPES.map(([key, label]) => `<button type="button" class="chip ${key === selected[0] ? 'ck' : ''}" data-action="q-rs-shape" data-key="${key}" aria-pressed="${key === selected[0] ? 'true' : 'false'}">${rsShapeSvg(key)}${label}</button>`).join('');
+        return `<details class="subrow cmu-rs-shape-row" data-search="라존데 표시 상태 아이콘 모양 기본 하트 별 팔분음표 꽃모양 날개"><summary><span class="lbl">상태 아이콘</span><span class="cmu-rs-shape-current">${selected[1]}</span></summary><div class="cmu-rs-shape-choices" role="group" aria-label="라존데 상태 아이콘">${chips}</div></details>`;
     }
     function loadRsVisibility() {
         try {
@@ -9498,7 +9585,7 @@
 
       <div class="sec">글쓰기 도구</div>
       ${qCard(`
-        ${qSwitch('inputWrapper', '선택한 글 감싸기', '따옴표·괄호·마크다운을 선택한 글 양쪽에 넣어요.')}
+        ${qSwitch('inputWrapper', '선택한 글 감싸기', '글 선택 → 미니 사이드바의 감싸기 아이콘을 누르세요.')}
         <div class="subrow"><div class="lbl">감싸기 도구 편집<div class="note">기호 추가 · 순서 변경 · 선택 유지 설정</div></div><button type="button" class="cmu-action-btn" data-action="wrapper-settings">도구 편집</button></div>
         ${qSwitch('selectionTextCounter', '선택 글자수 표시', '선택한 부분의 글자수를 화면 아래에 작게 표시해요.')}
       `)}
@@ -10085,6 +10172,7 @@
       ${qCard(`
         ${qSwitch('radiosonde', '라존데 표시', '채팅창 삽입형 · 내부 자동 갱신')}
         ${qSwitch('radiosondeLatency', '응답속도 표시', '모델 뒤의 2.11s 같은 응답 시간', { dep: 'radiosonde' })}
+        ${renderRsShapePicker()}
       `)}
 
       <div class="sec">표시할 모델</div>
@@ -10142,11 +10230,49 @@
         ${qSwitch('dashboardNumberAnimation', '숫자 변화 애니메이션', '값이 바뀔 때만 잠깐 올라가는 효과 · 기기의 동작 줄이기 설정을 따름', { dep: 'dashboard' })}
       `)}
       ${sideSection}
+      ${renderIntegratedFeatureSettings()}
       <div class="sec">연동 가능한 확장</div>
       ${qCard(qSwitch('showUnavailableIntegrations', '미설치·미감지 확장 목록 표시', '끄면 아래 목록을 접어 설정 공간을 줄여요'))}
       <div id="cmu-unavailable-integrations" class="cmu-unavailable-integrations" ${settings.showUnavailableIntegrations ? '' : 'hidden'}>${settings.showUnavailableIntegrations ? renderUnavailableIntegrations() : ''}</div>
     `);
     }
+    function renderIntegratedFeatureSettings() {
+        const features = [
+            ['inputWrapper', '글 감싸기', '선택한 글에 따옴표·괄호·마크다운 넣기'],
+            ['outputLayout', '출력 설정창 정리', '답변 길이·생각 조절 창을 작은 화면에 맞춤'],
+            ['memoryUi', '요약메모리 편집창', '요약 편집 공간 확대와 스크롤 개선'],
+            ['userNoteUi', '유저노트 편집창', '노트 편집 공간을 화면과 키보드에 맞춤'],
+            ['memoryDraftOverflow', '메모리 긴 초안 편집', '긴 초안을 다듬은 뒤 저장 · 초과 분량 안내'],
+            ['shortcutEditor', '단축어 편집기', '/ 단축어의 선택·전체 선택·삭제 도구'],
+            ['editTextCleaner', '수정창 단어 정리', '치환·삭제·미리보기·되돌리기'],
+            ['editPasteFix', '수정창 줄바꿈 보존', '붙여넣을 때 빈 줄이 늘어나는 현상 보정'],
+            ['selectionTextCounter', '선택 글자수', '선택한 부분의 글자수 표시'],
+            ['messageDoubleClickEdit', '더블클릭 수정', '메시지를 두 번 눌러 수정창 열기'],
+            ['messageLongPressMenu', '메시지 길게 누르기 메뉴', '수정·삭제·분기·복사 메뉴'],
+            ['themeSkin', '합본 기본 테마', '대사·강조·코드블록 꾸미기'],
+            ['radiosonde', '라존데', '모델 상태·점수 표시'],
+            ['badgeChars', '답변 글자수 배지', '메시지 아래 글자수 표시'],
+            ['badgeTime', '생성 시간 배지', '메시지 아래 생성 시간 표시'],
+            ['answerCost', '답변별 크래커', '실제 측정된 답변 사용량 표시'],
+            ['logCapture', '로그 캡처', '선택한 대화를 긴 이미지로 저장'],
+        ];
+        return `<div class="sec">통합 기능</div>
+        <details class="qcard cmu-integrated-features">
+          <summary>합쳐진 기능 켜기·끄기<span class="cmu-feature-chevron" aria-hidden="true">⌄</span></summary>
+          <div class="cmu-feature-help">끄면 해당 합본 기능이 멈춰요. 미니사이드바 아이콘 표시는 위에서 따로 선택할 수 있어요.</div>
+          <div class="cmu-feature-scroll">${features.map(([key, label, note]) => qSwitch(key, label, note)).join('')}</div>
+        </details>`;
+    }
+    addStyle(`
+      #${ID.panel} .cmu-integrated-features > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 13px; cursor: pointer; list-style: none; font-weight: 700; font-size: 13px; }
+      #${ID.panel} .cmu-integrated-features > summary::-webkit-details-marker { display: none; }
+      #${ID.panel} .cmu-integrated-features > summary:focus-visible { outline: 2px solid currentColor; outline-offset: -3px; border-radius: 12px; }
+      #${ID.panel} .cmu-feature-chevron { transition: transform .15s ease; }
+      #${ID.panel} .cmu-integrated-features[open] .cmu-feature-chevron { transform: rotate(180deg); }
+      #${ID.panel} .cmu-feature-help { padding: 0 13px 11px; font-size: 11px; line-height: 1.6; opacity: .7; }
+      #${ID.panel} .cmu-feature-scroll { max-height: min(45dvh, 360px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+      #${ID.panel} .cmu-feature-scroll .subrow { padding: 11px 13px; }
+    `);
     function renderSettingsBadgePage() {
         const uiMode = cmuThemeUiModeForSettings();
         const modelIconNovel = uiMode === 'novel';
@@ -10431,6 +10557,22 @@
                 sideSaveVisible();
                 applySideVisible();
                 syncSideMenu();
+                return true;
+            }
+            if (action === 'q-rs-shape' && key) {
+                const selected = CMU_RS_SHAPES.find(([id]) => id === key);
+                if (!selected) return true;
+                settings.radiosondeShape = key;
+                saveSettings();
+                const row = target.closest('.cmu-rs-shape-row');
+                row?.querySelectorAll('[data-action="q-rs-shape"]').forEach(chip => {
+                    const on = chip.dataset.key === key;
+                    chip.classList.toggle('ck', on);
+                    chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+                });
+                const current = row?.querySelector('.cmu-rs-shape-current');
+                if (current) current.textContent = selected[1];
+                renderRsLine();
                 return true;
             }
             if (action === 'q-rs-group' && key) {
@@ -11767,8 +11909,12 @@
         revealTimer: 0,
         closeTimer: 0,
         opening: false,
+        closing: false,
+        selecting: false,
+        focusGuard: null,
         toggleLockUntil: 0,
     };
+    CMU_RESOURCES.cleanups.push(compactModelReleaseFocusGuard);
     CMU_RESOURCES.cleanups.push(() => closeCompactModelPicker({ closeNative: true }));
     function sideLoadVisible() {
         if (DASH_SIDE.visible)
@@ -11975,19 +12121,65 @@
             window.__SGB_BACKGROUND_LAYER_0950_BORDERLESS_LOADED__ ||
             window.__SGB_BACKGROUND_LAYER_0949_DIALOGUE_BRACKETS_QUOTES_LOADED__);
     }
+    const CMU_SITUATION_IMAGE_SWITCH = '[role="switch"], input[type="checkbox"], [role="checkbox"]';
+    function getNativeSituationImageInfoLite(target) {
+        if (!(target instanceof Element) || isOwnElement(target) ||
+            target.closest('#eic-modal-content, [data-message-group-id], [contenteditable="true"]')) return null;
+        const labelMatches = text => /상황\s*이미지\s*(?:보기|표시)/.test(String(text || ''));
+        const direct = target.closest(CMU_SITUATION_IMAGE_SWITCH);
+        if (direct instanceof HTMLElement) {
+            const labelledBy = String(direct.getAttribute('aria-labelledby') || '').split(/\s+/)
+                .filter(Boolean).map(id => document.getElementById(id)?.textContent || '').join(' ');
+            const labels = Array.from(direct.labels || []).map(label => label.textContent || '').join(' ');
+            if (labelMatches(`${direct.getAttribute('aria-label') || ''} ${labelledBy} ${labels} ${direct.title || ''}`)) {
+                return { toggle: direct, row: direct };
+            }
+        }
+        // A native setting can be a plain flex row, a label, or a dialog portal.
+        // Accept only a short row containing this label and one switch, never an entire menu.
+        let row = direct || target;
+        for (let depth = 0; row instanceof HTMLElement && depth < 5; depth++, row = row.parentElement) {
+            if (row === document.body || row === document.documentElement || isOwnElement(row)) break;
+            const text = String(row.textContent || '').replace(/\s+/g, ' ').trim();
+            if (text.length > 200) break;
+            if (!labelMatches(text)) continue;
+            const switches = Array.from(row.querySelectorAll(CMU_SITUATION_IMAGE_SWITCH));
+            if (row.matches(CMU_SITUATION_IMAGE_SWITCH)) switches.unshift(row);
+            // Some switch libraries include an associated hidden checkbox.
+            const candidates = switches.filter(el => !(el instanceof HTMLInputElement) ||
+                !(el.hidden || el.getAttribute('aria-hidden') === 'true' || getComputedStyle(el).display === 'none') ||
+                !switches.some(other => other !== el && other.getAttribute('role') === 'switch'));
+            if (candidates.length === 1 && candidates[0] instanceof HTMLElement &&
+                (!direct || candidates[0] === direct)) return { toggle: candidates[0], row };
+        }
+        return null;
+    }
     function isNativeSituationImageToggleLite(target) {
-        if (!(target instanceof Element))
-            return false;
-        const switchButton = target.closest('button[role="switch"], [role="switch"]');
-        const row = target.closest('[role="button"]');
-        if (!(row instanceof HTMLElement))
-            return false;
-        if (isOwnElement(row) || row.closest('[role="dialog"], #eic-modal-content'))
-            return false;
-        const text = String(row.textContent || '').replace(/\s+/g, ' ').trim();
-        if (!text.includes('상황 이미지 보기'))
-            return false;
-        return !!(switchButton || row.querySelector('button[role="switch"], [role="switch"]'));
+        return !!getNativeSituationImageInfoLite(target);
+    }
+    function isNativeSituationImageVisibleLite(target) {
+        if (!(target instanceof HTMLElement) || !target.isConnected || isOwnElement(target) ||
+            target.matches(':disabled, [aria-disabled="true"]') ||
+            target.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+        const rect = target.getBoundingClientRect();
+        const vw = window.innerWidth || document.documentElement.clientWidth;
+        const vh = window.innerHeight || document.documentElement.clientHeight;
+        if (rect.width <= 0 || rect.height <= 0 || rect.right <= 0 || rect.bottom <= 0 ||
+            rect.left >= vw || rect.top >= vh) return false;
+        for (let el = target; el instanceof HTMLElement; el = el.parentElement) {
+            const style = getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' ||
+                style.pointerEvents === 'none' || Number(style.opacity) === 0) return false;
+        }
+        return true;
+    }
+    function readNativeSituationImageStateLite(target) {
+        if (!(target instanceof HTMLElement)) return null;
+        if (target instanceof HTMLInputElement && target.type === 'checkbox') return target.checked;
+        const state = target.getAttribute('aria-checked') ?? target.getAttribute('data-state');
+        if (state === 'true' || state === 'checked' || state === 'on') return true;
+        if (state === 'false' || state === 'unchecked' || state === 'off') return false;
+        return null;
     }
     function handleNativeSituationImageToggleLite(target) {
         if (!isNativeSituationImageToggleLite(target) || isCmuExternalThemeActive()) return false;
@@ -12011,60 +12203,77 @@
         const main = document.querySelector('main');
         if (main instanceof HTMLElement && main !== roomPanel)
             roots.push(main);
-        if (!roots.length)
-            roots.push(document.body || document.documentElement);
+        // Native dialogs may be portalled outside <main>.
+        roots.push(document.body || document.documentElement);
         const seen = new Set();
         for (const root of roots) {
             if (!(root instanceof Element))
                 continue;
-            const rows = [];
-            if (root.matches?.('[role="button"]'))
-                rows.push(root);
-            root.querySelectorAll?.('[role="button"]').forEach(row => rows.push(row));
-            for (const row of rows) {
-                if (!(row instanceof HTMLElement) || seen.has(row))
-                    continue;
-                seen.add(row);
-                if (!isNativeSituationImageToggleLite(row))
-                    continue;
-                const toggle = row.querySelector('button[role="switch"], [role="switch"]');
-                const target = toggle instanceof HTMLElement ? toggle : row;
-                if (!visibleOnly || visibleClickable(target) || visibleClickable(row))
-                    return target;
+            for (const toggle of root.querySelectorAll(CMU_SITUATION_IMAGE_SWITCH)) {
+                if (seen.has(toggle)) continue;
+                seen.add(toggle);
+                const info = getNativeSituationImageInfoLite(toggle);
+                if (info && (!visibleOnly || isNativeSituationImageVisibleLite(info.toggle))) return info.toggle;
             }
         }
         return null;
     }
     function openNativeSituationImageToggleLite() {
-        const tryToggle = () => {
-            const target = getNativeSituationImageToggleLite(true) || getNativeSituationImageToggleLite(false);
-            return target ? fireClickSequence(target) : false;
+        if (!shouldRun()) return false;
+        if (!isChatRoomPath()) {
+            showToast('상황 이미지는 채팅방 안에서 켜고 끌 수 있어요.');
+            return false;
+        }
+        // A second tap while the native panel mounts must not toggle it back off.
+        if (openNativeSituationImageToggleLite._pending) return true;
+        const operation = { path: location.pathname };
+        openNativeSituationImageToggleLite._pending = operation;
+        const alive = () => openNativeSituationImageToggleLite._pending === operation &&
+            shouldRun() && location.pathname === operation.path && isChatRoomPath();
+        const finish = message => {
+            const current = alive();
+            if (openNativeSituationImageToggleLite._pending === operation)
+                openNativeSituationImageToggleLite._pending = null;
+            if (current && message) showToast(message);
         };
-        if (tryToggle())
-            return true;
-        const openRoomMenu = () => {
-            if (isCmuRoomPanelOpen())
-                return true;
-            const toggle = findCmuRoomMenuToggle();
-            if (!toggle)
+        const clickToggle = target => {
+            const before = readNativeSituationImageStateLite(target);
+            handleNativeSituationImageToggleLite(target);
+            try { target.click(); }
+            catch (_) { finish('상황 이미지 설정을 누르지 못했어요. 채팅방 설정에서 확인해 주세요.'); return; }
+            let checks = 0;
+            const confirm = () => {
+                if (!alive()) { finish(); return; }
+                const current = getNativeSituationImageToggleLite(true);
+                const after = readNativeSituationImageStateLite(current);
+                if (before !== null && after === !before) {
+                    finish(after ? '상황 이미지를 켰어요.' : '상황 이미지를 껐어요.');
+                    return;
+                }
+                if (++checks < 7) setTimeout(confirm, 180);
+                else finish('상황 이미지 변경을 확인하지 못했어요. 채팅방 설정의 ‘상황 이미지 보기’를 확인해 주세요.');
+            };
+            setTimeout(confirm, 60);
+        };
+        const target = getNativeSituationImageToggleLite(true);
+        if (target) { clickToggle(target); return true; }
+        if (!isCmuRoomPanelOpen()) {
+            const menuToggle = findCmuRoomMenuToggle();
+            if (!menuToggle || !fireClickSequence(menuToggle)) {
+                finish('상황 이미지 설정을 찾지 못했어요. 채팅방 설정에서 지원 여부를 확인해 주세요.');
                 return false;
-            const ok = fireClickSequence(toggle);
-            if (ok)
-                scheduleCmuEdgeMenuStateSync();
-            return ok;
+            }
+            scheduleCmuEdgeMenuStateSync();
+        }
+        let attempts = 0;
+        const seek = () => {
+            if (!alive()) { finish(); return; }
+            const next = getNativeSituationImageToggleLite(true);
+            if (next) { clickToggle(next); return; }
+            if (++attempts < 8) setTimeout(seek, 180);
+            else finish('이 채팅방에서 ‘상황 이미지 보기’를 찾지 못했어요. 채팅방 설정에서 확인해 주세요.');
         };
-        openRoomMenu();
-        let opened = false;
-        const waits = [80, 180, 340, 600, 950, 1450];
-        waits.forEach((ms, index) => setTimeout(() => {
-            if (opened)
-                return;
-            if (index === 2 && !isCmuRoomPanelOpen())
-                openRoomMenu();
-            opened = tryToggle();
-            if (!opened && index === waits.length - 1)
-                showToast('상황 이미지 보기 버튼을 찾지 못함');
-        }, ms));
+        setTimeout(seek, 80);
         return true;
     }
     function getNativeImageArchiveTriggerLite() {
@@ -13142,91 +13351,128 @@
         return false;
     }
     async function compactModelDismissNativeMenu(nativeButton, initialShell) {
-        const markedShells = new Set();
-        const mark = shell => {
-            if (!(shell instanceof HTMLElement))
-                return shell;
-            shell.setAttribute('data-cmu-compact-model-native', '1');
-            markedShells.add(shell);
-            return shell;
-        };
-        let nativeShell = mark(initialShell);
-        const refreshShell = () => {
-            try {
-                const fresh = compactModelSnapshot()?.shell;
-                if (fresh)
-                    nativeShell = mark(fresh);
+        const shells = new Set();
+        let shell = initialShell;
+        const refresh = () => {
+            const current = compactModelFastSnapshot()?.shell;
+            if (current) shell = current;
+            if (shell instanceof HTMLElement) {
+                shell.setAttribute('data-cmu-compact-model-native', '1');
+                shells.add(shell);
             }
-            catch (_) { }
-            return nativeShell;
         };
-        await new Promise(resolve => setTimeout(resolve, 55));
-        refreshShell();
-        if (compactModelNativeIsOpen(nativeButton, nativeShell))
-            compactModelDispatchEscape(nativeShell);
-        await new Promise(resolve => setTimeout(resolve, 95));
-        refreshShell();
-        if (compactModelNativeIsOpen(nativeButton, nativeShell) &&
-            nativeButton?.getAttribute?.('aria-expanded') === 'true') {
-            compactModelClickOnce(nativeButton);
-        }
-        await new Promise(resolve => setTimeout(resolve, 180));
-        refreshShell();
-        if (compactModelNativeIsOpen(nativeButton, nativeShell)) {
-            compactModelDispatchEscape(nativeShell);
-            await new Promise(resolve => setTimeout(resolve, 140));
-            refreshShell();
-        }
-        const stillOpen = compactModelNativeIsOpen(nativeButton, nativeShell);
-        const reveal = () => {
-            document.documentElement.classList.remove('cmu-compact-model-selecting');
-            markedShells.forEach(shell => {
-                try { shell.removeAttribute('data-cmu-compact-model-native'); } catch (_) { }
-            });
-            document.querySelectorAll('[data-cmu-compact-model-native="1"]').forEach(shell => {
-                try { shell.removeAttribute('data-cmu-compact-model-native'); } catch (_) { }
-            });
-        };
-        if (!stillOpen) {
-            reveal();
-            return true;
-        }
-        setTimeout(() => {
-            const shell = refreshShell();
-            if (compactModelNativeIsOpen(nativeButton, shell)) {
+        refresh();
+        if (compactModelNativeIsOpen(nativeButton, shell)) compactModelDispatchEscape(shell);
+        for (const delay of [35, 65, 100, 140]) {
+            await new Promise(resolve => setTimeout(resolve, delay));
+            refresh();
+            if (!compactModelNativeIsOpen(nativeButton, shell)) break;
+            // Await every fallback before another picker operation can start.
+            // A delayed toggle from an earlier close must never close a newly opened menu.
+            if (delay === 65 && nativeButton?.getAttribute?.('aria-expanded') === 'true')
+                compactModelClickOnce(nativeButton);
+            else if (delay === 140)
                 compactModelDispatchEscape(shell);
-                if (nativeButton?.getAttribute?.('aria-expanded') === 'true')
-                    setTimeout(() => compactModelClickOnce(nativeButton), 80);
+        }
+        const closed = !compactModelNativeIsOpen(nativeButton, shell);
+        document.documentElement.classList.remove('cmu-compact-model-selecting', 'cmu-compact-model-probing');
+        shells.forEach(el => {
+            compactModelClearNativeLiveMarks(el);
+            // On failure reveal the real menu so the user can still dismiss it.
+            el.removeAttribute('data-cmu-compact-model-native');
+        });
+        if (!closed) compactModelReleaseFocusGuard();
+        return closed;
+    }
+    function compactModelReleaseFocusGuard() {
+        COMPACT_MODEL.focusGuard?.release?.();
+        COMPACT_MODEL.focusGuard = null;
+    }
+    function compactModelHoldFocus(anchor, nativeButton) {
+        compactModelReleaseFocusGuard();
+        const scrollPositions = new Map();
+        for (const origin of [anchor, nativeButton, document.activeElement, document.scrollingElement]) {
+            for (let node = origin; node instanceof HTMLElement; node = node.parentElement) {
+                if (!scrollPositions.has(node) && (node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth))
+                    scrollPositions.set(node, { top: node.scrollTop, left: node.scrollLeft });
             }
-            setTimeout(reveal, 260);
-        }, 420);
-        return false;
+        }
+        let active = true;
+        let redirecting = false;
+        let releaseTimer = 0;
+        const restoreScroll = () => {
+            if (!active) return;
+            scrollPositions.forEach((pos, node) => {
+                if (!node.isConnected) return;
+                if (node.scrollTop !== pos.top) node.scrollTop = pos.top;
+                if (node.scrollLeft !== pos.left) node.scrollLeft = pos.left;
+            });
+        };
+        const focusAnchor = () => {
+            if (!active || redirecting || !anchor?.isConnected) return;
+            redirecting = true;
+            try { anchor.focus({ preventScroll: true }); } catch (_) { }
+            restoreScroll();
+            redirecting = false;
+        };
+        const onFocus = event => {
+            const target = event.target;
+            if (target === anchor || COMPACT_MODEL.menu?.contains(target)) return;
+            if (target?.closest?.('[data-radix-menu-content], [data-radix-popper-content-wrapper]')) {
+                // Radix may trap focus inside its hidden native menu while it is open.
+                // Let that focus remain inside; only undo the resulting page scroll.
+                restoreScroll();
+                requestAnimationFrame(restoreScroll);
+                return;
+            }
+            if (target === nativeButton || target?.matches?.('textarea, input, [contenteditable="true"]')) {
+                focusAnchor();
+                requestAnimationFrame(restoreScroll);
+            }
+        };
+        const release = () => {
+            if (!active) return;
+            active = false;
+            clearTimeout(releaseTimer);
+            document.removeEventListener('focusin', onFocus, true);
+            document.removeEventListener('pointerdown', onPointer, true);
+            document.removeEventListener('wheel', onWheel, true);
+        };
+        const onPointer = event => {
+            if (!event.isTrusted) return;
+            if (COMPACT_MODEL.menu?.contains(event.target) || anchor?.contains(event.target)) return;
+            // A deliberate tap outside may focus the composer normally.
+            release();
+        };
+        const onWheel = event => { if (event.isTrusted) release(); };
+        const guard = {
+            release,
+            deferRelease() { clearTimeout(releaseTimer); releaseTimer = setTimeout(release, 350); },
+        };
+        COMPACT_MODEL.focusGuard = guard;
+        document.addEventListener('focusin', onFocus, true);
+        document.addEventListener('pointerdown', onPointer, true);
+        document.addEventListener('wheel', onWheel, { capture: true, passive: true });
+        // The sidebar normally prevents focus on pointerdown. Move focus explicitly before
+        // probing Radix, so its close autofocus cannot restore the textarea / mobile keyboard.
+        focusAnchor();
+        return guard;
     }
     function positionCompactModelPicker() {
         const menu = COMPACT_MODEL.menu;
-        const anchor = COMPACT_MODEL.anchor;
-        if (!(menu instanceof HTMLElement) || !(anchor instanceof HTMLElement) || !anchor.isConnected)
-            return;
+        if (!(menu instanceof HTMLElement) || !menu.isConnected) return;
         const vv = window.visualViewport;
-        const viewportLeft = Number(vv?.offsetLeft || 0);
-        const viewportTop = Number(vv?.offsetTop || 0);
-        const viewportWidth = Math.max(1, Number(vv?.width || window.innerWidth || 1));
-        const viewportHeight = Math.max(1, Number(vv?.height || window.innerHeight || 1));
-        const rect = anchor.getBoundingClientRect();
-        const width = Math.min(170, Math.max(132, viewportWidth - 20));
-        const spaceAbove = Math.max(0, rect.top - viewportTop - 8);
-        const spaceBelow = Math.max(0, viewportTop + viewportHeight - rect.bottom - 8);
-        const placeAbove = spaceAbove >= 112 || spaceAbove >= spaceBelow;
-        const available = Math.max(92, Math.min(340, placeAbove ? spaceAbove : spaceBelow));
-        menu.style.width = `${Math.round(width)}px`;
+        const left = Number(vv?.offsetLeft || 0);
+        const top = Number(vv?.offsetTop || 0);
+        const width = Math.max(1, Number(vv?.width || window.innerWidth || 1));
+        const height = Math.max(1, Number(vv?.height || window.innerHeight || 1));
+        const menuWidth = Math.min(190, Math.max(1, width - 24));
+        const available = Math.min(360, Math.max(40, height - 24));
+        menu.style.width = `${Math.round(menuWidth)}px`;
         menu.style.maxHeight = `${Math.round(available)}px`;
         const measuredHeight = Math.min(menu.scrollHeight || available, available);
-        let top = placeAbove ? rect.top - measuredHeight - 8 : rect.bottom + 8;
-        top = Math.max(viewportTop + 8, Math.min(top, viewportTop + viewportHeight - measuredHeight - 8));
-        let left = rect.left;
-        left = Math.max(viewportLeft + 8, Math.min(left, viewportLeft + viewportWidth - width - 8));
-        menu.style.left = `${Math.round(left)}px`;
-        menu.style.top = `${Math.round(top)}px`;
+        menu.style.left = `${Math.round(left + (width - menuWidth) / 2)}px`;
+        menu.style.top = `${Math.round(top + Math.max(8, (height - measuredHeight) / 2))}px`;
         menu.style.visibility = 'visible';
     }
     function unbindCompactModelPickerEvents() {
@@ -13237,6 +13483,7 @@
         if (COMPACT_MODEL.resizeHandler) {
             window.removeEventListener('resize', COMPACT_MODEL.resizeHandler);
             window.visualViewport?.removeEventListener?.('resize', COMPACT_MODEL.resizeHandler);
+            window.visualViewport?.removeEventListener?.('scroll', COMPACT_MODEL.resizeHandler);
         }
         COMPACT_MODEL.outsideHandler = COMPACT_MODEL.keyHandler = COMPACT_MODEL.resizeHandler = null;
     }
@@ -13275,105 +13522,48 @@
     }
     function closeCompactModelPicker(options = {}) {
         const closeNative = options.closeNative !== false;
-        const deferNativeReveal = options.deferNativeReveal === true;
         const preserveNativeHidden = options.preserveNativeHidden === true;
         COMPACT_MODEL.seq += 1;
         COMPACT_MODEL.opening = false;
         COMPACT_MODEL.toggleLockUntil = Math.max(COMPACT_MODEL.toggleLockUntil || 0, Date.now() + 180);
-        document.documentElement.classList.remove('cmu-compact-model-probing');
-        if (!preserveNativeHidden)
-            document.documentElement.classList.remove('cmu-compact-model-selecting');
         COMPACT_MODEL.menu?.remove();
         COMPACT_MODEL.menu = null;
         unbindCompactModelPickerEvents();
-        if (COMPACT_MODEL.revealTimer) {
-            clearTimeout(COMPACT_MODEL.revealTimer);
-            COMPACT_MODEL.revealTimer = 0;
-        }
-        if (COMPACT_MODEL.closeTimer) {
-            clearTimeout(COMPACT_MODEL.closeTimer);
-            COMPACT_MODEL.closeTimer = 0;
-        }
-        let nativeShell = COMPACT_MODEL.nativeShell;
+        clearTimeout(COMPACT_MODEL.revealTimer);
+        clearTimeout(COMPACT_MODEL.closeTimer);
+        COMPACT_MODEL.revealTimer = COMPACT_MODEL.closeTimer = 0;
+        const nativeShell = COMPACT_MODEL.nativeShell;
         const nativeButton = COMPACT_MODEL.nativeButton;
-        const isLiveNative = nativeShell?.hasAttribute?.('data-cmu-compact-native-live');
-        if (!nativeShell?.isConnected) {
-            try {
-                nativeShell = compactModelSnapshot()?.shell || nativeShell;
-            }
-            catch (_) { }
-        }
-        if (isLiveNative || nativeShell?.hasAttribute?.('data-cmu-compact-native-live')) {
-            const wasOpen = compactModelNativeIsOpen(nativeButton, nativeShell);
-
-            /* 4.3.0.10:
-             * 두 번째 탭으로 닫을 때 compact CSS를 먼저 벗기면, Radix 원본 메뉴가
-             * 닫히기 전 1~수 프레임 동안 큰 메뉴로 그대로 노출된다. 기기에 따라
-             * 그 상태가 남기도 했다. 닫힘 요청이 끝날 때까지 원본 shell을 숨긴 뒤
-             * 마지막에만 compact 표식을 정리한다. */
-            if (closeNative && wasOpen && nativeButton?.isConnected) {
-                document.documentElement.classList.add('cmu-compact-model-selecting');
-                try { nativeShell?.setAttribute?.('data-cmu-compact-model-native', '1'); } catch (_) { }
-                compactModelDispatchEscape(nativeShell);
-                setTimeout(() => {
-                    try {
-                        if (compactModelNativeIsOpen(nativeButton, nativeShell) &&
-                            nativeButton.getAttribute('aria-expanded') === 'true') {
-                            compactModelClickOnce(nativeButton);
-                        }
-                    }
-                    catch (_) { }
-                }, 70);
-                COMPACT_MODEL.closeTimer = setTimeout(() => {
-                    compactModelClearNativeLiveMarks(nativeShell);
-                    try { nativeShell?.removeAttribute?.('data-cmu-compact-model-native'); } catch (_) { }
-                    document.documentElement.classList.remove('cmu-compact-model-selecting');
-                    COMPACT_MODEL.closeTimer = 0;
-                }, 280);
-            }
-            else {
-                compactModelClearNativeLiveMarks(nativeShell);
-                try { nativeShell?.removeAttribute?.('data-cmu-compact-model-native'); } catch (_) { }
-            }
-            COMPACT_MODEL.nativeShell = null;
-            COMPACT_MODEL.nativeButton = null;
-            COMPACT_MODEL.anchor = null;
+        const guard = COMPACT_MODEL.focusGuard;
+        COMPACT_MODEL.nativeShell = COMPACT_MODEL.nativeButton = COMPACT_MODEL.anchor = null;
+        if (CMU_RUNTIME.disposed) {
+            // Tracked timers stop before dispose cleanups. Restore synchronously here.
+            compactModelReleaseFocusGuard();
+            if (closeNative) compactModelDispatchEscape(nativeShell);
+            compactModelClearNativeLiveMarks(nativeShell);
+            nativeShell?.removeAttribute?.('data-cmu-compact-model-native');
+            document.querySelectorAll('[data-cmu-compact-model-native="1"]').forEach(el => {
+                compactModelClearNativeLiveMarks(el);
+                el.removeAttribute('data-cmu-compact-model-native');
+            });
+            document.documentElement.classList.remove('cmu-compact-model-selecting', 'cmu-compact-model-probing');
+            COMPACT_MODEL.closing = COMPACT_MODEL.selecting = false;
             return;
         }
-        const revealNative = () => {
-            try { nativeShell?.removeAttribute('data-cmu-compact-model-native'); } catch (_) { }
-        };
-        if (closeNative && nativeButton?.isConnected &&
-            (nativeShell?.isConnected || nativeButton.getAttribute('aria-expanded') === 'true')) {
-            /* 닫는 동안 원본 메뉴가 순간적으로 커져 보이지 않게 계속 숨긴다. */
-            try { nativeShell?.setAttribute?.('data-cmu-compact-model-native', '1'); } catch (_) { }
+        if (closeNative && (nativeShell?.isConnected || nativeButton?.getAttribute?.('aria-expanded') === 'true')) {
+            COMPACT_MODEL.closing = true;
             document.documentElement.classList.add('cmu-compact-model-selecting');
-            compactModelDispatchEscape(nativeShell);
-            setTimeout(() => {
-                try {
-                    if (nativeButton.getAttribute('aria-expanded') === 'true')
-                        compactModelClickOnce(nativeButton);
-                }
-                catch (_) { }
-            }, 70);
-            COMPACT_MODEL.revealTimer = setTimeout(() => {
-                revealNative();
-                document.documentElement.classList.remove('cmu-compact-model-selecting');
-                COMPACT_MODEL.revealTimer = 0;
-            }, 280);
-        }
-        else if (deferNativeReveal) {
-            COMPACT_MODEL.revealTimer = setTimeout(() => {
-                revealNative();
-                COMPACT_MODEL.revealTimer = 0;
-            }, 320);
+            compactModelDismissNativeMenu(nativeButton, nativeShell).finally(() => {
+                COMPACT_MODEL.closing = false;
+                guard?.deferRelease?.();
+            });
         }
         else if (!preserveNativeHidden) {
-            revealNative();
+            document.documentElement.classList.remove('cmu-compact-model-selecting', 'cmu-compact-model-probing');
+            compactModelClearNativeLiveMarks(nativeShell);
+            nativeShell?.removeAttribute?.('data-cmu-compact-model-native');
+            guard?.deferRelease?.();
         }
-        COMPACT_MODEL.nativeShell = null;
-        COMPACT_MODEL.nativeButton = null;
-        COMPACT_MODEL.anchor = null;
     }
     function compactModelFreezeNativeButton(nativeButton) {
         if (!(nativeButton instanceof HTMLElement) || !nativeButton.isConnected)
@@ -13426,10 +13616,12 @@
         nativeButton.style.setProperty('z-index', '2147483001', 'important');
 
         let released = false;
-        return () => {
+        const release = () => {
             if (released)
                 return;
             released = true;
+            const cleanupIndex = CMU_RESOURCES.cleanups.indexOf(release);
+            if (cleanupIndex >= 0) CMU_RESOURCES.cleanups.splice(cleanupIndex, 1);
             try {
                 placeholder?.remove?.();
             }
@@ -13446,6 +13638,8 @@
             }
             catch (_) { }
         };
+        CMU_RESOURCES.cleanups.push(release);
+        return release;
     }
     async function compactModelHiddenSnapshotForSelection(nativeButton) {
         if (!(nativeButton instanceof HTMLElement) || !nativeButton.isConnected)
@@ -13506,11 +13700,12 @@
             event.preventDefault();
             closeCompactModelPicker({ closeNative: true });
         };
-        COMPACT_MODEL.resizeHandler = () => closeCompactModelPicker({ closeNative: true });
+        COMPACT_MODEL.resizeHandler = positionCompactModelPicker;
         document.addEventListener('pointerdown', COMPACT_MODEL.outsideHandler, true);
         document.addEventListener('keydown', COMPACT_MODEL.keyHandler, true);
         window.addEventListener('resize', COMPACT_MODEL.resizeHandler, { passive: true });
         window.visualViewport?.addEventListener?.('resize', COMPACT_MODEL.resizeHandler, { passive: true });
+        window.visualViewport?.addEventListener?.('scroll', COMPACT_MODEL.resizeHandler, { passive: true });
     }
     function renderCompactModelPicker(snapshot, anchor, nativeButton) {
         const menu = document.createElement('div');
@@ -13552,13 +13747,16 @@
             check.className = 'cmu-compact-model-check';
             check.textContent = entry.token === currentToken ? '✓' : '';
             option.append(icon, label, recommend, check);
-            option.addEventListener('pointerdown', event => event.stopPropagation());
+            option.addEventListener('pointerdown', event => { event.preventDefault(); event.stopPropagation(); });
             option.addEventListener('click', async event => {
                 event.preventDefault();
                 event.stopPropagation();
-                if (option.dataset.selecting === '1')
+                if (COMPACT_MODEL.selecting || option.dataset.selecting === '1')
                     return;
                 option.dataset.selecting = '1';
+                COMPACT_MODEL.selecting = true;
+                const selectionSeq = COMPACT_MODEL.seq;
+                const focusGuard = COMPACT_MODEL.focusGuard;
                 menu.querySelectorAll('button').forEach(button => button.disabled = true);
 
                 // 4.5.0.4.11:
@@ -13568,6 +13766,10 @@
                 try {
                     const freshSnapshot = await compactModelHiddenSnapshotForSelection(nativeButton);
                     const nativeShell = freshSnapshot?.shell || snapshot.shell;
+                    if (selectionSeq !== COMPACT_MODEL.seq) {
+                        await compactModelDismissNativeMenu(nativeButton, nativeShell);
+                        return;
+                    }
                     const target = freshSnapshot?.entries?.find(candidate => candidate.token === entry.token)?.item ||
                         (entry.item?.isConnected ? entry.item : null);
 
@@ -13592,9 +13794,15 @@
                         ensureInlineBlocks();
                     }, 180);
                 }
+                catch (_) {
+                    closeCompactModelPicker({ closeNative: false, preserveNativeHidden: true });
+                    await compactModelDismissNativeMenu(nativeButton, compactModelFastSnapshot()?.shell || snapshot.shell);
+                    showToast('모델 선택을 완료하지 못했어요 · 다시 눌러 주세요');
+                }
                 finally {
-                    // 원본 메뉴가 완전히 닫힌 뒤 한 프레임 여유를 두고 원래 레이아웃으로 복귀.
-                    setTimeout(releaseNativeButtonFreeze, 90);
+                    releaseNativeButtonFreeze();
+                    COMPACT_MODEL.selecting = false;
+                    focusGuard?.deferRelease?.();
                 }
             });
             menu.appendChild(option);
@@ -13966,7 +14174,7 @@
            원본 Radix 버튼이 open→close→open으로 다시 토글되며 큰 원본 메뉴가
            새어 나올 수 있다. 열기 진행 중/직후의 중복 탭은 무시한다. */
         const now = Date.now();
-        if (COMPACT_MODEL.opening || now < Number(COMPACT_MODEL.toggleLockUntil || 0))
+        if (COMPACT_MODEL.opening || COMPACT_MODEL.closing || COMPACT_MODEL.selecting || now < Number(COMPACT_MODEL.toggleLockUntil || 0))
             return true;
 
         // 4.5.0.4.8: Crack 모델 메뉴 DOM/UI 변경 대응.
@@ -13986,6 +14194,7 @@
         }
 
         COMPACT_MODEL.opening = true;
+        const focusGuard = compactModelHoldFocus(anchor, nativeButton);
         COMPACT_MODEL.toggleLockUntil = now + 180;
         let releaseOpenButtonFreeze = null;
         try {
@@ -14012,7 +14221,6 @@
             }
             if (seq !== COMPACT_MODEL.seq)
                 return true;
-            document.documentElement.classList.remove('cmu-compact-model-probing');
             if (!snapshot?.entries?.length) {
                 /* 4.3.0.17: 원본 모델 메뉴는 폴백으로 노출하지 않는다.
                  * probing 상태를 유지한 채 원본 Radix 메뉴를 닫고 빠른 선택기만 유지한다. */
@@ -14037,6 +14245,12 @@
             try {
                 compactModelClearNativeLiveMarks(snapshot.shell);
                 snapshot.shell?.setAttribute?.('data-cmu-compact-model-native', '1');
+                const parked = await compactModelDismissNativeMenu(nativeButton, snapshot.shell);
+                if (seq !== COMPACT_MODEL.seq) return true;
+                if (!parked) {
+                    showToast('모델 메뉴가 남아 있어요 · 목록 밖을 눌러 닫아 주세요');
+                    return false;
+                }
                 renderCompactModelPicker(snapshot, anchor, nativeButton);
                 COMPACT_MODEL.nativeShell = snapshot.shell;
                 COMPACT_MODEL.nativeButton = nativeButton;
@@ -14045,11 +14259,11 @@
 
                 // 원본 모델 메뉴는 목록 정보만 읽고 즉시 닫는다.
                 // 이렇게 해야 Crack 업데이트 후 상단 모델 버튼 위치가 열림 상태 스타일에 끌려가지 않는다.
-                compactModelParkNativeMenu(nativeButton, snapshot.shell);
+                // Dismissal above is awaited; no stale timer can toggle a later selection.
                 if (releaseOpenButtonFreeze) {
                     const release = releaseOpenButtonFreeze;
                     releaseOpenButtonFreeze = null;
-                    setTimeout(release, 320);
+                    release();
                 }
             }
             catch (_) {
@@ -14061,10 +14275,11 @@
         }
         finally {
             COMPACT_MODEL.opening = false;
+            if (!COMPACT_MODEL.menu?.isConnected) focusGuard?.deferRelease?.();
             if (releaseOpenButtonFreeze) {
                 const release = releaseOpenButtonFreeze;
                 releaseOpenButtonFreeze = null;
-                setTimeout(release, 320);
+                release();
             }
         }
     }
@@ -14447,7 +14662,7 @@
                 themeButton: makeSideButton('themeButton', 'chud-theme-btn', '라이트/다크 테마 전환', QUICK_MODE_ICON[getQuickThemeMode()], toggleQuickTheme),
                 episodeModeButton: makeSideButton('episodeModeButton', 'chud-episode-mode-btn', '소설형/채팅형 전환', QUICK_MODE_ICON[getQuickEpisodeMode()], toggleQuickEpisodeMode),
 
-                inputWrapperButton: makeSideButton('inputWrapperButton', 'chud-input-wrapper-btn', '글 감싸기 도구 설정', SIDE_ICON.inputWrapper, () => CMU_TEXT_TOOLS.wrapper?.open()),
+                inputWrapperButton: makeSideButton('inputWrapperButton', 'chud-input-wrapper-btn', '선택한 글 감싸기', SIDE_ICON.inputWrapper, () => CMU_TEXT_TOOLS.wrapper?.show()),
                 guideButton: makeSideButton('guideButton', 'chud-guide-btn', '플레이 가이드', SIDE_ICON.guide, () => clickFirst([/플레이\s*가이드/, /가이드/], '플레이 가이드')),
                 profileButton: makeSideButton('profileButton', 'chud-native-profile-btn', '크랙 기본 프로필', SIDE_ICON.profile, () => clickFirst([/대화\s*프로필/, /프로필/], '대화 프로필')),
                 profileBoxButton: makeSideButton('profileBoxButton', 'chud-profile-box-btn', '프로필 박스', SIDE_ICON.profileBox, openProfileBoxLite),
@@ -14455,7 +14670,7 @@
                 proseStyleButton: makeSideButton('proseStyleButton', 'chud-prose-style-btn', '문체 변경', SIDE_ICON.proseStyle, () => clickFirst([/문체\s*변경/], '문체 변경')),
                 outputButton: makeSideButton('outputButton', 'chud-output-btn', '답변 길이 및 생각 조절', SIDE_ICON.output, openOutputSettingsLite),
                 summaryButton: makeSideButton('summaryButton', 'chud-summary-btn', '요약 메모리', SIDE_ICON.summary, openSummaryMemoryLite),
-                imageButton: makeSideButton('imageButton', 'chud-image-btn', '이미지 ON/OFF', SIDE_ICON.image, openNativeSituationImageToggleLite),
+                imageButton: makeSideButton('imageButton', 'chud-image-btn', '상황 이미지 표시 켜기/끄기', SIDE_ICON.image, openNativeSituationImageToggleLite),
                 archiveButton: makeSideButton('archiveButton', 'chud-archive-btn', '이미지 보관함', SIDE_ICON.archive, () => clickFirst([/이미지\s*보관함/], '이미지 보관함')),
                 roomBackgroundButton: makeSideButton('roomBackgroundButton', 'chud-room-bg-btn', '일반 이미지 테마 설정', SIDE_ICON.roomBackground, () => openExternalThemeSettingsLite('custom-room')),
                 scenePainterButton: makeSideButton('scenePainterButton', 'chud-scene-painter-btn', 'AI 삽화 생성 · 모바일 Scene Painter', SIDE_ICON.scenePainter, openMobileScenePainterLite),
@@ -20772,7 +20987,7 @@
             if (line.textContent !== '표시할 모델 없음 · 설정에서 선택') line.textContent = '표시할 모델 없음 · 설정에서 선택';
             return;
         }
-        const key = JSON.stringify([settings.radiosondeLatency !== false, models.map(model => {
+        const key = JSON.stringify([settings.radiosondeLatency !== false, settings.radiosondeShape, models.map(model => {
             const data = RS.last.get(model.slug);
             return [model.slug, model.label, model.short, data?.status, data?.score, data?.lat, data?.fetchedAt, data?.stale];
         })]);
@@ -20793,7 +21008,7 @@
             const latency = settings.radiosondeLatency !== false
                 ? `<span class="blat">${data.lat ?? '—'}s</span>`
                 : '';
-            item.innerHTML = `<span class="bdot"></span><span class="bname">${escapeHtml(model.short)}</span><b class="bscore">${data.score ?? '—'}${data.stale ? ' (이전)' : ''}</b>${latency}`;
+            item.innerHTML = `<span class="bdot" aria-hidden="true">${rsShapeSvg()}</span><span class="bname">${escapeHtml(model.short)}</span><b class="bscore">${data.score ?? '—'}${data.stale ? ' (이전)' : ''}</b>${latency}`;
             frag.appendChild(item);
         }
         line.replaceChildren(frag);
@@ -25548,8 +25763,9 @@
   ];
 
   const DEFAULT_SETTINGS = {
-    showOnSelection: true,
-    keepInnerSelected: false
+    showOnSelection: false,
+    keepInnerSelected: false,
+    selectionModeVersion: 1
   };
 
   let tools = loadTools();
@@ -25558,6 +25774,8 @@
   let savedRange = null;
   let savedEditor = null;
   let savedText = '';
+  let manualSelectionBar = false;
+  let wrappingSelection = false;
   let hideTimer = 0;
   let scanTimer = 0;
   let routeKey = location.href;
@@ -25607,7 +25825,20 @@
   }
 
   function loadSettings() {
-    return Object.assign({}, DEFAULT_SETTINGS, safeJsonParse(localStorage.getItem(SETTINGS_KEY), {}) || {});
+    const stored = safeJsonParse(localStorage.getItem(SETTINGS_KEY), {}) || {};
+    const loaded = Object.assign({}, DEFAULT_SETTINGS, stored);
+    // Older versions enabled selection popups by default, colliding with Android's
+    // copy/paste menu. Migrate once; later explicit opt-ins remain unchanged.
+    if (stored.selectionModeVersion !== DEFAULT_SETTINGS.selectionModeVersion) {
+      loaded.showOnSelection = false;
+      loaded.selectionModeVersion = DEFAULT_SETTINGS.selectionModeVersion;
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(loaded)); } catch (_) {}
+      // Make the new explicit entry point reachable even when the old settings
+      // shortcut was hidden. User changes after this one-time migration stick.
+      sideLoadVisible().inputWrapperButton = true;
+      sideSaveVisible();
+    }
+    return loaded;
   }
 
   function saveSettings() {
@@ -25660,7 +25891,7 @@
 
   function isOwnUiNode(node) {
     const el = node && (node.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement);
-    return !!el?.closest?.(`#${SELECTION_BAR_ID}, #${SETTINGS_ID}, #${TOAST_ID}, #${TOOLBAR_WRAPPER_ID}`);
+    return !!el?.closest?.(`#${SELECTION_BAR_ID}, #${SETTINGS_ID}, #${TOAST_ID}, #${TOOLBAR_WRAPPER_ID}, #chud-input-wrapper-btn`);
   }
 
   function closestElement(node) {
@@ -25743,8 +25974,23 @@
     return info;
   }
 
+  function clearSavedSelection() {
+    savedRange = savedEditor = null;
+    savedText = '';
+  }
+
+  function getSavedSelectionInfo() {
+    if (!savedRange || !savedText || !isAllowedEditor(savedEditor)) return null;
+    try {
+      if (!savedEditor.contains(savedRange.startContainer) || !savedEditor.contains(savedRange.endContainer) || savedRange.toString() !== savedText) return null;
+      return { range: savedRange, editor: savedEditor, text: savedText };
+    } catch (_) {
+      return null;
+    }
+  }
+
   function restoreSelection() {
-    if (!savedRange || !savedEditor || !savedEditor.isConnected) return false;
+    if (!getSavedSelectionInfo()) return false;
 
     try {
       savedEditor.focus?.({ preventScroll: true });
@@ -25800,11 +26046,14 @@
 
     if (!selectedBefore || !restoreSelection()) {
       hideSelectionBar();
+      clearSavedSelection();
+      toast('감쌀 글을 다시 선택해 주세요.');
       return;
     }
 
     const editor = savedEditor;
     const wrapped = `${tool.pre}${selectedBefore}${tool.suf}`;
+    wrappingSelection = true;
 
     let ok = false;
 
@@ -25830,9 +26079,12 @@
       }
 
       hideSelectionBar();
+      if (settings.keepInnerSelected) saveCurrentSelection();
+      else clearSavedSelection();
     } else {
       toast('감싸기 실패');
     }
+    wrappingSelection = false;
   }
 
   function trySelectInnerText(editor, prefixLen, innerLen) {
@@ -25873,7 +26125,8 @@
     const bar = getSelectionBar();
     if (!bar || !info?.range) return;
 
-    const rect = getRangeRect(info.range);
+    const launcher = manualSelectionBar && document.getElementById('chud-input-wrapper-btn');
+    const rect = (launcher && isVisible(launcher) ? launcher.getBoundingClientRect() : null) || getRangeRect(info.range);
     if (!rect) {
       hideSelectionBar();
       return;
@@ -25905,7 +26158,7 @@
     left = Math.max(offX + 8, Math.min(left, offX + vw - bw - 8));
     top = Math.max(offY + 8, Math.min(top, offY + vh - bh - 8));
 
-    // absolute 기준이므로 document 좌표로 변환(스크롤 보정 유지)
+    // Fixed/popover coordinates stay within the visible viewport.
     bar.style.left = `${left}px`;
     bar.style.top = `${top}px`;
     bar.style.visibility = 'visible';
@@ -25923,7 +26176,26 @@
     return null;
   }
 
+  function openSelectionBarManually() {
+    if (!isChatRoomPage()) return;
+    if (manualSelectionBar) { hideSelectionBar(); return; }
+    const info = getSelectedRangeInfo() ? saveCurrentSelection() : getSavedSelectionInfo();
+    if (!info) {
+      toast('입력창의 글을 선택한 뒤 감싸기 아이콘을 눌러 주세요.');
+      return;
+    }
+    clearTimeout(hideTimer);
+    clearTimeout(handleSelectionEvent._timer);
+    manualSelectionBar = true;
+    // Only an explicit toolbar tap dismisses the native selection menu. The
+    // saved Range remains separate, so wrapping restores the exact selection.
+    try { window.getSelection()?.removeAllRanges(); } catch (_) {}
+    renderSelectionBar();
+    positionSelectionBar(info);
+  }
+
   function showSelectionBarForCurrentSelection() {
+    if (manualSelectionBar) return;
     if (!settings.showOnSelection || !isChatRoomPage()) {
       hideSelectionBar();
       return;
@@ -25941,6 +26213,8 @@
   }
 
   function hideSelectionBar(delay = 0) {
+    manualSelectionBar = false;
+    clearTimeout(handleSelectionEvent._timer);
     clearTimeout(hideTimer);
 
     hideTimer = setTimeout(() => {
@@ -25955,6 +26229,8 @@
     if (!bar) {
       bar = document.createElement('div');
       bar.id = SELECTION_BAR_ID;
+      bar.setAttribute('role', 'toolbar');
+      bar.setAttribute('aria-label', '선택한 글 감싸기');
       document.body.appendChild(bar);
 
       bar.addEventListener('mousedown', e => e.preventDefault());
@@ -25995,6 +26271,19 @@
       openSettingsModal();
     });
     bar.appendChild(edit);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = `${NS}-sel-btn ${NS}-sel-settings`;
+    close.title = '감싸기 도구 닫기';
+    close.setAttribute('aria-label', close.title);
+    close.textContent = '×';
+    close.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      hideSelectionBar();
+    });
+    bar.appendChild(close);
   }
 
   function syncSidebarLauncher() {
@@ -26020,6 +26309,7 @@
 
   function openSettingsModal() {
     if (!cmuTextToolEnabled('inputWrapper')) return;
+    hideSelectionBar();
     let overlay = document.getElementById(SETTINGS_ID);
     if (overlay) return;
 
@@ -26033,14 +26323,14 @@
         <div class="ciw-modal-head">
           <div class="ciw-modal-title">
             <strong>✍️ 입력 감싸기 도구</strong>
-            <span>드래그한 텍스트를 기호로 감쌉니다</span>
+            <span>글 선택 → 미니 사이드바 감싸기 아이콘</span>
           </div>
           <button type="button" class="ciw-close" data-ciw-action="close">✕</button>
         </div>
 
         <div class="ciw-options">
           <label class="ciw-chip"><input type="checkbox" id="ciw-opt-toolbar"> 미니 사이드바 아이콘</label>
-          <label class="ciw-chip"><input type="checkbox" id="ciw-opt-selection"> 드래그 선택 팝업</label>
+          <label class="ciw-chip"><input type="checkbox" id="ciw-opt-selection"> 선택 시 자동 팝업 (복사 메뉴와 겹칠 수 있어요)</label>
           <label class="ciw-chip"><input type="checkbox" id="ciw-opt-keep-selected"> 감싼 뒤 내부 텍스트 다시 선택</label>
         </div>
 
@@ -26191,6 +26481,7 @@
         sideLoadVisible().inputWrapperButton = optToolbar.checked;
         sideSaveVisible();
         settings.showOnSelection = optSelection.checked;
+        settings.selectionModeVersion = DEFAULT_SETTINGS.selectionModeVersion;
         settings.keepInnerSelected = optKeepSelected.checked;
 
         saveTools();
@@ -26208,7 +26499,13 @@
 
   function handleSelectionEvent() {
     clearTimeout(handleSelectionEvent._timer);
-    handleSelectionEvent._timer = setTimeout(showSelectionBarForCurrentSelection, 80);
+    handleSelectionEvent._timer = setTimeout(() => {
+      if (manualSelectionBar || document.getElementById(SETTINGS_ID)) return;
+      // Keep a valid selection for the sidebar tap, without opening anything
+      // during native long-press copy/paste interaction.
+      if (getSelectedRangeInfo()) saveCurrentSelection();
+      showSelectionBarForCurrentSelection();
+    }, 80);
   }
 
   function handleRouteChange() {
@@ -26242,21 +26539,38 @@
       setTimeout(handleSelectionEvent, 80);
     }, true);
 
-    cmuListen(document, 'mousedown', event => {
-      const bar = getSelectionBar();
-      if (!bar || bar.style.display === 'none') return;
-
-      // bar 자체(버튼/설정) 클릭은 유지 — savedRange 복원으로 감싸기 동작.
+    cmuListen(document, 'pointerdown', event => {
+      if (event.target?.closest?.('#chud-input-wrapper-btn')) {
+        if (getSelectedRangeInfo()) saveCurrentSelection();
+        return;
+      }
       if (isOwnUiNode(event.target)) return;
-
-      // 그 외 어디든(에디터 내부 재클릭 포함) 누르면 기존 선택을 즉시 해제.
-      // 선택을 안 지우면 80ms 뒤 handleSelectionEvent가 bar를 되살려 '깜빡임 + 미해제'가 생김.
-      const sel = window.getSelection();
-      if (sel && !sel.isCollapsed) sel.removeAllRanges();
-
-      bar.removeAttribute('popover');
-      bar.style.display = 'none';
+      // Dismiss our own toolbar without clearing the browser's selection.
+      // Removing native ranges here used to disrupt copy/paste and selection handles.
+      hideSelectionBar();
+      clearSavedSelection();
     }, true);
+
+    cmuListen(document, 'input', event => {
+      if (wrappingSelection || !savedEditor || !savedEditor.contains(event.target)) return;
+      // A previous selection must never wrap text that was edited afterwards.
+      if (!getSavedSelectionInfo()) {
+        hideSelectionBar();
+        clearSavedSelection();
+      }
+    }, true);
+
+    const repositionManualBar = () => {
+      if (!manualSelectionBar) return;
+      const info = getSavedSelectionInfo();
+      if (info) positionSelectionBar(info);
+      else hideSelectionBar();
+    };
+    cmuListen(window, 'resize', repositionManualBar, { passive: true });
+    if (window.visualViewport) {
+      cmuListen(window.visualViewport, 'resize', repositionManualBar, { passive: true });
+      cmuListen(window.visualViewport, 'scroll', repositionManualBar, { passive: true });
+    }
 
     cmuListen(document, 'keydown', event => {
       if (!event.altKey || event.ctrlKey || event.metaKey) return;
@@ -26796,11 +27110,12 @@
   }
 
   function clearUi() {
-    clearTimeout(hideTimer); clearTimeout(scanTimer);
+    clearTimeout(hideTimer); clearTimeout(scanTimer); clearTimeout(handleSelectionEvent._timer);
+    manualSelectionBar = false;
     for (const id of [TOOLBAR_WRAPPER_ID, SELECTION_BAR_ID, SETTINGS_ID, TOAST_ID]) document.getElementById(id)?.remove();
     savedRange = savedEditor = null; savedText = '';
   }
-  CMU_TEXT_TOOLS.wrapper = { reset: clearUi, open: openSettingsModal, sync() {
+  CMU_TEXT_TOOLS.wrapper = { reset: clearUi, open: openSettingsModal, show: openSelectionBarManually, sync() {
     if (!isChatRoomPage()) clearUi();
     else handleRouteChange();
     syncSidebarLauncher();

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.2
-// @description  4.6.0.1 통합: 원작자 4.6.0의 9/30 개편 대응·캐릭터/분기방·전송/초안·라존데 복구·문체 버튼·정보바 애니메이션·반복작업/메모리 최적화. 기존 키보드 보정·단축어 편집·대화 프로필·설정 디자인·작은 모델창 유지.
+// @version      4.6.0.3
+// @description  4.6.0.3: 글 감싸기 수동 호출·복사 메뉴 충돌 완화, 통합 기능 접이식 ON/OFF, 라존데 상태 아이콘 6종, 상황 이미지 바로가기 보완, 모델 선택창 포커스·키보드·중복 동작 안정화.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
