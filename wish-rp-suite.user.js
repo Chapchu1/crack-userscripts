@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.31
+// @version      0.5.32
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -24,6 +24,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.32 · 기억 정리·대화 전송 상태 공유 수정
+ * 전송 대기열을 기억 정리와 WebSocket 전송이 함께 접근하는 상위 영역으로 옮겼습니다.
+ * sendPreparationQueues 미정의 오류를 수정하고, 같은 방의 전송 중 기억 반영 보류를 유지합니다.
+ * 0.5.31의 저장 공간 분리·정리 재개·대화 허용 기능과 기존 데이터 형식은 유지합니다.
+ */
 
 /* 0.5.31 · 로어 저장 공간 대응·설정 바로가기
  * 로어 저장 시 브라우저 용량 초과가 발생하면 해당 기록을 확장 전용 저장소에 재시도합니다.
@@ -346,7 +352,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.31'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.32'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -8670,13 +8676,13 @@ if (btnTurnInfo && turnInfoPopover) {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if (window.__WISH_RP_MANAGER_LOADED__) return;
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.31-suite', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.32-suite', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Suite',
-    version: '0.5.31-suite',
+    version: '0.5.32-suite',
     dbName: 'WishRPManagerDB_v2',
     dbVersion: 2,
     storeName: 'rooms',
@@ -43535,7 +43541,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.31-suite';
+  const SCRIPT_VERSION = '0.5.32-suite';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -45605,6 +45611,8 @@ function aiGmRequestJson({ method='POST', url, headers={}, body=null, timeout=12
     return assertAiSourcesUnchanged(room,[meta]);
   }
   const generationGates=new Map();
+  // Shared by U3 publication guards and the nested cognition WebSocket hook.
+  const sendPreparationQueues=new Map();
   // Server completion can precede Crack's typewriter display. This gate delays
   // background work only; it never changes transport completion or blocks send.
   const WishDisplayDrain=(()=>{
@@ -57117,7 +57125,6 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
   }
 
   const previousSend = W.WebSocket.prototype.send;
-  const sendPreparationQueues=new Map();
   W.WebSocket.prototype.send = function (data) {
     watchSocket(this);
     const parsed=parseFrame(data),rid=String(parsed?.payload?.chatId||'');
