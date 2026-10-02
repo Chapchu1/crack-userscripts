@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.28
+// @version      0.5.29
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -23,7 +23,7 @@
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
 
-/* 0.5.28 · 홈 이동·대기 초수·작업 강조
+/* 0.5.29 · 홈 이동·대기 초수·작업 강조
  * 전달 설정·분량은 홈 버튼 바로 아래에서 펼치고 접으며, 항목별 전달 설정을 즉시 저장합니다.
  * 요청 제한과 자동 재시도 초수는 보이는 상태에서 남은 시간을 갱신합니다.
  * 숫자 갱신은 API·저장·방 데이터 재조회 없이 수행합니다.
@@ -321,7 +321,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.28'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.29'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -8085,13 +8085,13 @@ if (btnTurnInfo && turnInfoPopover) {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if (window.__WISH_RP_MANAGER_LOADED__) return;
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.28-suite', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.29-suite', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Suite',
-    version: '0.5.28-suite',
+    version: '0.5.29-suite',
     dbName: 'WishRPManagerDB_v2',
     dbVersion: 2,
     storeName: 'rooms',
@@ -42950,7 +42950,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.28-suite';
+  const SCRIPT_VERSION = '0.5.29-suite';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -46663,7 +46663,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       if(!Array.isArray(value)||value.length!==2||!value[0]||typeof value[0]!=='object'||Array.isArray(value[0])||!Array.isArray(value[1])||value[1].length!==7||value[1].some(v=>typeof v!=='string'))return null;
       const s={...value[0]};
       // These only control persistence provenance/scheduling, never extraction.
-      // Normalize old 0.5.28 records too; no draft, result or cursor is discarded.
+      // Normalize old 0.5.29 records too; no draft, result or cursor is discarded.
       for(const key of ['unifiedAutomation','connectionRevision','sharedConnection','autoMemoryEnabled','memoryMinTurns','memoryMaxTurns'])delete s[key];
       return draftCanonical([s,value[1]]);
     }catch{return null;}
@@ -57426,6 +57426,11 @@ body[data-theme="dark"] #wish-rp-root,body[data-theme="dark"] #wish-suite-editor
 }
 @media(max-width:400px){#wish-rp-root .m3-sheet{max-height:calc(100dvh - 12px)}#wish-rp-root .m3-dialog{padding:6px}}
 
+/* Keep pending turns beside the user's actual automatic cadence. */
+#wish-rp-root .m3-memory-cadence{display:grid;gap:7px;margin:12px 0;color:var(--m3-muted);font-size:12px;line-height:1.6}
+#wish-rp-root .m3-memory-cadence-row{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px}
+#wish-rp-root .m3-memory-cadence-row b{color:var(--m3-fg)}
+#wish-rp-root .m3-cadence-target{padding:2px 8px;border-radius:7px;background:var(--m3-card2);color:var(--m3-accent);font-size:11px;white-space:nowrap}
 /* A single contextual action for the whole home memory workflow. */
 #wish-rp-root .m3-memory-primary-row{margin:12px 0}
 #wish-rp-root .m3-memory-primary-row>.m3-btn{width:100%;min-height:44px;justify-content:center;background:var(--m3-accent);color:var(--m3-accent-ink,#151824);border-color:var(--m3-accent);font-weight:700;font-size:13px}
@@ -57447,7 +57452,7 @@ body[data-theme="dark"] #wish-rp-root,body[data-theme="dark"] #wish-suite-editor
 #wish-rp-root .m3-home-delivery>.m3-cap{padding:12px;margin:8px 0 12px}
 #wish-rp-root .m3-home-delivery>.m3-fold2{margin-bottom:8px}
 @container(max-width:480px){#wish-rp-root .m3-delivery-settings{grid-template-columns:minmax(0,1fr)}}
-/* 0.5.28: distinguish task actions, helper entry and destination icons. */
+/* 0.5.29: distinguish task actions, helper entry and destination icons. */
 #wish-rp-root{--wish-helper-bg:#e1f4ee;--wish-helper-fg:#116953;--wish-helper-line:#81baa8;--wish-nav-home:#6851ac;--wish-nav-memory:#27668c;--wish-nav-people:#24785c;--wish-nav-ai:#7b59a6;--wish-nav-settings:#92521f}
 body[data-theme="dark"] #wish-rp-root{--wish-helper-bg:#233e39;--wish-helper-fg:#9cdac7;--wish-helper-line:#4c8d7a;--wish-nav-home:#c7b8f7;--wish-nav-memory:#9dcdeb;--wish-nav-people:#91d9bf;--wish-nav-ai:#d3baf4;--wish-nav-settings:#ebc08c}
 @media(prefers-color-scheme:dark){body:not([data-theme]) #wish-rp-root{--wish-helper-bg:#233e39;--wish-helper-fg:#9cdac7;--wish-helper-line:#4c8d7a;--wish-nav-home:#c7b8f7;--wish-nav-memory:#9dcdeb;--wish-nav-people:#91d9bf;--wish-nav-ai:#d3baf4;--wish-nav-settings:#ebc08c}}
@@ -57729,12 +57734,16 @@ relation:'<circle cx="12" cy="5" r="2.4"/><circle cx="5.5" cy="19" r="2.4"/><cir
     else if(!isSuite&&u.draft){label='이어서 정리·검증';action='unifiedRetry';}
     else if(!isSuite&&u.error){label='다시 정리';action='unifiedRetry';}
     const status=isSuite?(modeMismatch?'⚠️ 이전 방식의 임시 정리가 남아 있어요. 정리 방식을 확인해 이어가세요.':busy?'카드별 기억 정리 진행 중':autoOn?'자동 정리 켜짐':'자동 정리 꺼짐'):retryStatusText(u)||(autoOn?'자동 정리 켜짐':'자동 정리 꺼짐');
+    const cadenceRow=(label,pending,every,enabled)=>`<div class="m3-memory-cadence-row"><span>${label} <b>${fmt(pending)}턴</b> 미처리</span><span class="m3-cadence-target">${fmt(every)}턴${enabled?'마다 자동 정리':' 주기 · 자동 꺼짐'}</span></div>`;
+    const cadence=isSuite?`<p class="m3-muted">카드별 갱신 · 기억 ${fmt(s.memoryEvery||10)}턴 / 인물 ${fmt(s.peopleEvery||1)}턴 주기</p>`:
+      `<div class="m3-memory-cadence">${cadenceRow('기억',u.memoryPending??V.memory.committed,u.memoryEvery||V.memory.target||10,u.enabled&&u.memoryEnabled)}${cadenceRow('인물',u.observePending||0,u.observeEvery||V.cog.every||1,u.enabled&&u.observeEnabled)}</div>`;
+    const cadenceHelp=!isSuite&&ready&&autoOn&&!busy&&!u.error&&!u.draft?`<p class="m3-memory-note">자동 정리가 켜진 항목은 설정한 턴수가 쌓이면 처리돼요. 미리 정리할 때만 ‘지금 정리’를 누르세요.</p>`:'';
     const draftNote=u.draft?`<p class="m3-memory-note">임시 결과는 원문 검증 후 한 번에 반영합니다.${V.inj.armed?' 완료 전에는 대화 전송을 기다립니다.':''}</p>`:'';
     const controls=`<div class="m3-card-actions">${btn(autoOn?'자동 정리 일시정지':'자동 정리 켜기','autoToggle',{cls:'quiet mini',dis:busy||!ready||modeMismatch,icon:autoOn?'pause':'play'})}${btn('주기·항목 설정','unifiedRoute',{arg:'ai:automation',cls:'quiet mini',icon:'set'})}</div>`;
     const error=!isSuite&&u.error?`<p class="m3-error-detail">${esc(u.error)}</p>`:'';
     const recovery=!isSuite&&u.draft&&!restartRequired?`<p class="m3-muted">임시 결과를 버리고 원문부터 다시 처리해야 할 때만 사용하세요. 현재 적용된 기억은 유지됩니다.</p>${btn('임시 결과를 버리고 다시 시작','draftRestart',{cls:'quiet mini',dis:busy||!ready,icon:'refresh'})}`:'';
     const details=fold('home-memory-details','설정·작업 상세',controls+error+`<div class="m3-card-actions">${btn('실패·주의 기록','errorLogs',{cls:'quiet mini',icon:'doc'})}</div>`+recovery);
-    return `<section class="m3-panel m3-home-auto m3-memory-work${!isSuite&&(u.error||u.draft)?' m3-alert':''}" data-key="home-automation"><div class="m3-row m3-sp"><b>기억 정리</b>${tag(busy?'진행 중':autoOn?'자동 켜짐':'자동 꺼짐',autoOn?'ok':'')}</div><p class="m3-muted">${isSuite?`카드별 갱신 · 기억 ${s.memoryEvery||10}턴 / 인물 ${s.peopleEvery||1}턴`:`기억 ${V.memory.committed}턴 · 인물 ${u.observePending||0}턴 미처리`}</p><p class="m3-compact-status"${isSuite?'':' data-unified-retry-status'}>${esc(status)}</p>${draftNote}${requestStatusCard(true)}<div class="m3-memory-primary-row">${btn(label,action,{arg,cls:'mini m3-memory-primary',dis:busy,icon})}</div>${details}<small class="m3-muted">${isSuite?'최신 턴 처리 범위는 자동 정리 설정을 따릅니다.':'최신 1턴은 다음 답변 뒤 확정됩니다.'}</small></section>`;
+    return `<section class="m3-panel m3-home-auto m3-memory-work${!isSuite&&(u.error||u.draft)?' m3-alert':''}" data-key="home-automation"><div class="m3-row m3-sp"><b>기억 정리</b>${tag(busy?'진행 중':autoOn?'자동 켜짐':'자동 꺼짐',autoOn?'ok':'')}</div>${cadence}${cadenceHelp}<p class="m3-compact-status"${isSuite?'':' data-unified-retry-status'}>${esc(status)}</p>${draftNote}${requestStatusCard(true)}<div class="m3-memory-primary-row">${btn(label,action,{arg,cls:'mini m3-memory-primary',dis:busy,icon})}</div>${details}<small class="m3-muted">${isSuite?'최신 턴 처리 범위는 자동 정리 설정을 따릅니다.':'최신 1턴은 다음 답변 뒤 확정됩니다.'}</small></section>`;
   }
   function vCheck(){
     const u=V.unified||{},I=V.inj,s=WSUITE.suite?.summary()||{},isSuite=WSUITE.host.automation(state.currentRoom)==='suite',ready=!!WSUITE.host.aiReady?.();
