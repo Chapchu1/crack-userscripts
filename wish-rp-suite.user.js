@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.32
+// @version      0.5.33
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -24,6 +24,14 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.33 · 정리 대기 중 불필요한 반복 실행 수정
+ * 이미 시작한 정리 실행은 재개 상태만 확인하고 같은 작업을 다시 예약하지 않습니다.
+ * 대화 생성 등으로 대기할 때 0.1초 또는 기한이 지난 재시도의 즉시 예약이
+ * 정상 3초 대기 예약보다 우선하여 반복되던 문제를 수정했습니다.
+ * 화면 복귀·온라인 전환 재개와 오류별 재시도 간격, 사용자 일시정지는 유지합니다.
+ * 저장 공간 분리·기존 기억·정리 중 대화 및 완료 묶음 저장 방식은 유지합니다.
+ */
 
 /* 0.5.32 · 기억 정리·대화 전송 상태 공유 수정
  * 전송 대기열을 기억 정리와 WebSocket 전송이 함께 접근하는 상위 영역으로 옮겼습니다.
@@ -352,7 +360,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.32'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.33'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -8676,13 +8684,13 @@ if (btnTurnInfo && turnInfoPopover) {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if (window.__WISH_RP_MANAGER_LOADED__) return;
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.32-suite', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.33-suite', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Suite',
-    version: '0.5.32-suite',
+    version: '0.5.33-suite',
     dbName: 'WishRPManagerDB_v2',
     dbVersion: 2,
     storeName: 'rooms',
@@ -43541,7 +43549,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.32-suite';
+  const SCRIPT_VERSION = '0.5.33-suite';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -48193,9 +48201,11 @@ issue는 kind/ref/message/source_turn_key/source_quote 필드만 쓴다. message
     const retry=transientError(error)?retryIntervals[Math.min(4,Math.max(0,Number(count)||0))]||0:0;
     return retry?Math.max(retry,wait):0;
   }
-  function wake(room,reason='poll',sourceKey=''){
+  function wake(room,reason='poll',sourceKey='',enqueue=true){
     if(!room||room!==state.currentRoom||WSUITE.host?.automation(room)==='suite'||!automationEnabled(room)||room.unified?.userPaused||navigator.onLine===false||running.has(room.chatId))return;
-    const u=room.unified;if(!u?.lastError){if(u?.draft&&draftCanContinue(room)){checked.delete(room);schedule(room,100);}return;}if(!transientError({code:u.lastErrorCode,message:u.lastError}))return;
+    // An executing run owns its next timer; external wake events may enqueue.
+    const queue=delay=>{if(enqueue)schedule(room,delay);};
+    const u=room.unified;if(!u?.lastError){if(u?.draft&&draftCanContinue(room)){checked.delete(room);queue(100);}return;}if(!transientError({code:u.lastErrorCode,message:u.lastError}))return;
     let r=u.retry,changed=false;
     if(isHistoryReadChanged({code:u.lastErrorCode,message:u.lastError})){
       if(r?.kind!=='history'||!r.at){
@@ -48203,7 +48213,7 @@ issue는 kind/ref/message/source_turn_key/source_quote 필드만 쓴다. message
         u.status='최신 대화 확인 대기';
         void saveRoom(room).catch(e=>console.warn('[Wish] 대화 재확인 예약 저장 실패',e));
       }
-      schedule(room,Math.max(0,r.at-Date.now()));return;
+      queue(Math.max(0,r.at-Date.now()));return;
     }
     if(authError(u)){
       refreshCrackAuthCookie();watchCrackAuth();
@@ -48214,14 +48224,14 @@ issue는 kind/ref/message/source_turn_key/source_quote 필드만 쓴다. message
         const at=Math.max(Date.now()+500,crackAuthState.retryAt);if(at<r.at){r.at=at;r.count=0;changed=true;}
       }
       if(changed){u.status='로그인 확인 후 밀린 정리 자동 재개';void saveRoom(room).catch(e=>console.warn('[Wish] 로그인 대기 상태 저장 실패',e));}
-      schedule(room,Math.max(0,r.at-Date.now()));return;
+      queue(Math.max(0,r.at-Date.now()));return;
     }
     if(r?.policy!==2){r=u.retry={policy:2,count:0,at:Date.now()+retryIntervals[0],after:0,sourceKey};changed=true;}
     else if(!r.at&&((sourceKey&&sourceKey!==r.sourceKey)||reason==='visible'||reason==='online'||reason==='settings')){
       r.count=0;r.at=Math.max(Date.now()+1000,Number(r.after)||0);r.sourceKey=sourceKey||r.sourceKey;changed=true;
     }
     if(changed){u.status='일시 오류 · 자동 재개 대기';void saveRoom(room).catch(e=>console.warn('[Wish] 자동 재개 상태 저장 실패',e));}
-    if(r.at>0)schedule(room,Math.max(0,r.at-Date.now()));
+    if(r.at>0)queue(Math.max(0,r.at-Date.now()));
   }
   function retryState(room){
     const u=room.unified||{},r=u.retry||{},authWaiting=authError(u),temporary=transientError({code:u.lastErrorCode,message:u.lastError}),on=automationEnabled(room);
@@ -48239,7 +48249,8 @@ issue는 kind/ref/message/source_turn_key/source_quote 필드만 쓴다. message
     if(running.has(room.chatId))return running.get(room.chatId);
     if(!force&&(!automationEnabled(room)||room.unified?.userPaused||navigator.onLine===false))return false;
     if(force&&isCrackAuthError({code:room.unified?.lastErrorCode,message:room.unified?.lastError}))crackAuthState.retryAt=0;
-    wake(room);
+    // Update retry state without an earlier timer overriding the busy delay.
+    wake(room,'poll','',false);
     const retry=room.unified?.retry,retrying=!force&&room.unified?.lastError&&Number(retry?.at)>0;
     if(!force&&room.unified?.lastError&&!retrying&&!hasPartialFailure(room.unified))return false;
     if(retrying&&Date.now()<retry.at){schedule(room,retry.at-Date.now());return false;}
