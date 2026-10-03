@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.5
-// @description  4.6.0.5: 단축어 순서 정렬·핀셋 부분 수정 통합, 개별 ON/OFF·미니사이드바 바로가기, 선택 메뉴 충돌 방지·반복 감시 축소. 기존 모델·테마·키보드·프로필 기능 유지.
+// @version      4.6.0.6
+// @description  4.6.0.6: 설정 톱니바퀴를 입력창 하단 원래 버튼 줄에 복원. 단축어 정렬 아이콘을 순정 단축어로 오인하던 문제 수정. 단축어 정렬·핀셋·개별 ON/OFF 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -45,8 +45,8 @@
     'use strict';
     if (window.top !== window.self) return;
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.0.5' || page.__CMU_4605_BOOT_PENDING__) return;
-    page.__CMU_4605_BOOT_PENDING__ = true;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.0.6' || page.__CMU_4606_BOOT_PENDING__) return;
+    page.__CMU_4606_BOOT_PENDING__ = true;
     function earlySorterEnabled() {
         for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
             try {
@@ -899,6 +899,9 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
     // Always-on work is only a URL check for XHR opens; no timers, DOM scans, or background requests.
     CMU_EARLY_SORTER.start();
 /*
+ * 4.6.0.6 수정: 단축어 정렬 아이콘을 순정 단축어 버튼으로 오인하던 설정 위치 오류 수정.
+ * 현재 입력창 안의 순정 버튼만 기준으로 찾아 설정 톱니바퀴를 하단 버튼 줄에 배치.
+ * 감시기·타이머 추가 없이 기존 재배치 경로 사용.
  * 4.6.0.5 통합: 혀노 Crack Shortcut Sorter 1.0.0 / Crack Pinset 0.1.5.
  * 단축어 정렬: 기존 localStorage 순서 유지, 개인 항목만 같은 고정 그룹에서 이동.
  * 핀셋: 부분 수정·수정 흔적·기록·되돌리기, 개별 OFF 시 이벤트·감시·UI 정리.
@@ -1065,7 +1068,7 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
 
 function cmuMain() {
     'use strict';
-    const VERSION = '4.6.0.5';
+    const VERSION = '4.6.0.6';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -5689,26 +5692,45 @@ function cmuMain() {
     function findToolbarInfo(chatInput) {
         if (!chatInput)
             return null;
-        const shortcutBtn = document.querySelector('button[aria-label*="단축어"]');
-        if (shortcutBtn?.parentElement && !shortcutBtn.closest(`#${ID.panel}`)) {
-            return { toolbar: shortcutBtn.parentElement, scope: shortcutBtn.closest('form') || shortcutBtn.parentElement.parentElement || shortcutBtn.parentElement };
-        }
-        const captureBtn = document.getElementById('capture-action-button');
-        if (captureBtn?.parentElement && !captureBtn.closest(`#${ID.panel}`)) {
-            return { toolbar: captureBtn.parentElement, scope: captureBtn.closest('form') || captureBtn.parentElement.parentElement || captureBtn.parentElement };
-        }
-        const sendBtn = getSendButton();
-        if (sendBtn?.parentElement && !sendBtn.closest(`#${ID.panel}`)) {
-            return { toolbar: sendBtn.parentElement, scope: sendBtn.closest('form') || sendBtn.parentElement.parentElement || sendBtn.parentElement };
-        }
-        let current = chatInput;
-        for (let i = 0; i < 10 && current; i++) {
-            const candidate = current.querySelector?.('.flex.items-center.space-x-2') ||
-                current.querySelector?.('.flex.items-center.gap-2') ||
-                current.querySelector?.('[class*="items-center"]');
-            if (candidate && !candidate.closest(`#${ID.panel}`)) {
-                return { toolbar: candidate, scope: current };
+        // Resolve only the current composer's native controls. "단축어 정렬" in
+        // our mini sidebar is not the site's native "/" shortcut launcher.
+        const scope = chatInput.closest('form') || findComposerFallbackHost(chatInput);
+        if (!(scope instanceof HTMLElement))
+            return null;
+        const nativeControl = el => el instanceof HTMLElement && el.isConnected &&
+            scope.contains(el) && !isOwnElement(el) &&
+            !el.closest('[data-side-key], [data-cmu-toolbar-button], .cmu-sce-ui, [data-cmu-sce-root], [role="dialog"], [aria-modal="true"], [data-radix-popper-content-wrapper]');
+        const infoFor = button => {
+            const toolbar = button?.parentElement;
+            return nativeControl(button) && button.getClientRects().length > 0 && nativeControl(toolbar)
+                ? { toolbar, scope } : null;
+        };
+        for (const selector of ['button[aria-label*="단축어"]', '#capture-action-button']) {
+            for (const button of scope.querySelectorAll(selector)) {
+                const info = infoFor(button);
+                if (info) return info;
             }
+        }
+        const sendButton = getSendButton();
+        // Some layouts omit the shortcut's label. Prefer the native left action
+        // group over the outer row containing a separate send-button group.
+        for (const button of scope.querySelectorAll('button')) {
+            if (button === sendButton || !isNativeToolbarButton(button)) continue;
+            const info = infoFor(button);
+            if (info) return info;
+        }
+        const sendInfo = infoFor(sendButton);
+        if (sendInfo)
+            return sendInfo;
+        let current = chatInput;
+        for (let i = 0; i < 10 && current && scope.contains(current); i++) {
+            const candidates = current.querySelectorAll('.flex.items-center.space-x-2, .flex.items-center.gap-2, [class*="items-center"]');
+            for (const candidate of candidates) {
+                if (nativeControl(candidate) && !candidate.contains(chatInput) &&
+                    Array.from(candidate.querySelectorAll('button')).some(button => nativeControl(button) && button.getClientRects().length > 0))
+                    return { toolbar: candidate, scope };
+            }
+            if (current === scope) break;
             current = current.parentElement;
         }
         return null;
@@ -5728,6 +5750,7 @@ function cmuMain() {
         root.querySelectorAll?.('*').forEach(el => clean(el));
     }
     function isNativeToolbarButton(btn) {
+        if (isOwnElement(btn) || btn?.closest?.('[data-side-key], .cmu-sce-ui, [data-cmu-sce-root]')) return false;
         if (!(btn instanceof HTMLButtonElement))
             return false;
         if (btn.id === ID.settingsButton || btn.id === ID.fullscreenButton || btn.id === ID.composerExpandButton || btn.id === ID.logCaptureButton ||
@@ -31081,7 +31104,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
 }
 
     function startCmuOnce() {
-        delete page.__CMU_4605_BOOT_PENDING__;
+        delete page.__CMU_4606_BOOT_PENDING__;
         try { cmuMain(); }
         catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
     }

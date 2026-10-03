@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.5
-// @description  4.6.0.5: 단축어 순서 정렬·핀셋 부분 수정 통합, 개별 ON/OFF·미니사이드바 바로가기, 선택 메뉴 충돌 방지·반복 감시 축소. 기존 모델·테마·키보드·프로필 기능 유지.
+// @version      4.6.0.6
+// @description  4.6.0.6: 설정 톱니바퀴를 입력창 하단 원래 버튼 줄에 복원. 단축어 정렬 아이콘을 순정 단축어로 오인하던 문제 수정. 단축어 정렬·핀셋·개별 ON/OFF 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
