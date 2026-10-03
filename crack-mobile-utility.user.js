@@ -1,18 +1,24 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.4
-// @description  4.6.0.4: 모델 선택창을 미니사이드바 버튼 위에 배치·키보드 크기 변화 대응. 글 감싸기 수동 호출·복사 메뉴 충돌 완화, 통합 기능 접이식 ON/OFF, 라존데 상태 아이콘 6종, 상황 이미지 바로가기 보완, 모델 선택창 포커스·키보드·중복 동작 안정화.
+// @version      4.6.0.5
+// @description  4.6.0.5: 단축어 순서 정렬·핀셋 부분 수정 통합, 개별 ON/OFF·미니사이드바 바로가기, 선택 메뉴 충돌 방지·반복 감시 축소. 기존 모델·테마·키보드·프로필 기능 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.meta.js
 // @match        *://crack.wrtn.ai/*
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @grant        unsafeWindow
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_addValueChangeListener
+// @grant        GM_removeValueChangeListener
+// @noframes
 // @connect      old.rs.igx.kr
 // @connect      rs.igx.kr
 // @connect      igx-radiosonde-api-striker.b-cdn.net
@@ -35,7 +41,872 @@
 // @connect      p4m.uk
 // ==/UserScript==
 
+(() => {
+    'use strict';
+    if (window.top !== window.self) return;
+    const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.0.5' || page.__CMU_4605_BOOT_PENDING__) return;
+    page.__CMU_4605_BOOT_PENDING__ = true;
+    function earlySorterEnabled() {
+        for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
+            try {
+                const raw = page.localStorage.getItem(key);
+                if (!raw) continue;
+                const config = JSON.parse(raw);
+                if (config && typeof config === 'object' && !Array.isArray(config))
+                    return config.enabled !== false && config.shortcutSorterEnabled !== false;
+            } catch (_) {}
+        }
+        return true;
+    }
+    let initialSorterEnabled = earlySorterEnabled();
+    const CMU_EARLY_BRIDGE = { isEnabled: () => initialSorterEnabled, notify: null, onStateChange: null };
+// Integrated from Crack Shortcut Sorter 1.0.0 (author: 혀노).
+// Lazy editor; no pollers, body observers, auto network requests or extra floating button.
+function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, onStateChange = () => {},
+  pageWindow = typeof getPublicWindow === 'function' ? getPublicWindow() : (typeof unsafeWindow !== 'undefined' ? unsafeWindow : globalThis.window) } = {}) {
+  const window = pageWindow;
+  const document = window.document;
+  const AbortController = window.AbortController;
+  const GUARD = '__CRACK_SHORTCUT_SORTER_7f3a_v1__';
+  const STORAGE_KEY = '__crack_shortcut_sorter_v1__';
+  const API_ORIGIN = 'https://crack-api.wrtn.ai';
+  const ME_PATH = '/crack-gen/shortcut-commands/me';
+  const CHAT_PATH = /^\/crack-gen\/shortcut-commands\/chats\/[^/]+$/;
+  const PREFIX = '[CrackShortcutSorter]';
+  const guardOwner = { source: 'cmu-shortcut-sorter' };
+  let running = false;
+  let destroyed = false;
+  let blockedNoticeShown = false;
+  let hookPatches = [];
+  let hookPrototype = null;
+  const enabled = () => { try { return isEnabled() !== false; } catch { return false; } };
+  const publish = () => { try { onStateChange(); } catch {} };
+  const say = message => { try { notify(message); } catch {} };
+
+  const warned = new Set();
+  function warnOnce(code, message) {
+    if (warned.has(code)) return;
+    warned.add(code);
+    try { console.warn(`${PREFIX} ${message}`); } catch { /* No sensitive diagnostics. */ }
+  }
+
+  const defaults = () => ({ schemaVersion: 1, enabled: false, masterOrder: [] });
+  const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const isID = value => typeof value === 'string' && value.length > 0 && value.trim() === value;
+
+  function validateSettings(value) {
+    if (!isRecord(value) || value.schemaVersion !== 1 || typeof value.enabled !== 'boolean') return null;
+    const order = value.masterOrder === undefined && !value.enabled ? [] : value.masterOrder;
+    if (!Array.isArray(order) || !order.every(isID) || new Set(order).size !== order.length) return null;
+    return { schemaVersion: 1, enabled: value.enabled, masterOrder: order.slice() };
+  }
+
+  function loadSettings() {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw === null) return defaults();
+      const value = validateSettings(JSON.parse(raw));
+      if (value) return value;
+    } catch { /* Corrupt or inaccessible storage must never affect Crack. */ }
+    warnOnce('storage-read', 'invalid or unavailable stored settings; using default order');
+    return defaults();
+  }
+
+  function buildRankMap(order) {
+    return new Map(order.map((id, index) => [id, index]));
+  }
+
+  let settings = loadSettings();
+  let ranks = buildRankMap(settings.masterOrder);
+  let orderVersion = 0;
+  let hookActive = false;
+  let latestMeSnapshot = null;
+  let latestMeSequence = -1;
+  let latestSnapshotSource = '';
+  let requestSequence = 0;
+  let activeEditor = null;
+
+  function applySettings(next) {
+    settings = next;
+    ranks = buildRankMap(next.masterOrder);
+    orderVersion += 1;
+  }
+
+  function saveSettings(next) {
+    const checked = validateSettings(next);
+    if (!checked) return false;
+    // On failure, do not change the live order or close the editor.
+    try {
+      const serialised = JSON.stringify(next);
+      window.localStorage.setItem(STORAGE_KEY, serialised);
+      if (window.localStorage.getItem(STORAGE_KEY) !== serialised) throw new Error('storage');
+    } catch {
+      warnOnce('storage-write', 'settings could not be saved');
+      return false;
+    }
+    applySettings(checked);
+    publish();
+    return true;
+  }
+
+  function sortingEnabled() {
+    return running && enabled() && hookActive && settings.enabled && ranks.size > 0;
+  }
+
+  function validPersonalArray(items) {
+    if (!Array.isArray(items)) return false;
+    const ids = new Set();
+    for (const item of items) {
+      if (!isRecord(item) || !isID(item._id) || typeof item.isPinned !== 'boolean' || ids.has(item._id)) return false;
+      ids.add(item._id);
+    }
+    return true;
+  }
+
+  function rankItems(items, rankMap) {
+    return items.map((item, index) => ({ item, index, rank: rankMap.get(item._id) ?? Infinity }))
+      .sort((a, b) => (a.rank === b.rank ? a.index - b.index : a.rank < b.rank ? -1 : 1))
+      .map(entry => entry.item);
+  }
+
+  // Sort only selected slots with exactly the same boolean pin state.
+  // Item objects are never modified, copied, or transferred between groups.
+  function reorderSamePinSlots(items, rankMap, selected = () => true) {
+    const pinned = [];
+    const normal = [];
+    for (const item of items) {
+      if (selected(item)) (item.isPinned ? pinned : normal).push(item);
+    }
+    const groups = [rankItems(normal, rankMap), rankItems(pinned, rankMap)];
+    const cursors = [0, 0];
+    let changed = false;
+    const reordered = items.map(item => {
+      if (!selected(item)) return item;
+      const group = item.isPinned ? 1 : 0;
+      const next = groups[group][cursors[group]++];
+      if (next !== item) changed = true;
+      return next;
+    });
+    return changed ? reordered : items;
+  }
+
+  function reorderTotalPersonalSlots(total, personalIds, rankMap) {
+    return reorderSamePinSlots(total, rankMap, item => personalIds.has(item._id));
+  }
+
+  function transformMePayload(body, rankMap) {
+    if (!isRecord(body) || !isRecord(body.data) || !validPersonalArray(body.data.items)) return body;
+    const items = reorderSamePinSlots(body.data.items, rankMap);
+    return items === body.data.items ? body : { ...body, data: { ...body.data, items } };
+  }
+
+  function transformChatPayload(body, rankMap) {
+    if (!isRecord(body) || !isRecord(body.data) || !validPersonalArray(body.data.personal)) return body;
+    const data = body.data;
+    const personalIds = new Set(data.personal.map(item => item._id));
+    // If total is absent, personal remains independently supported. A present
+    // but malformed total makes this entire payload fail open.
+    if (Object.prototype.hasOwnProperty.call(data, 'total')) {
+      if (!Array.isArray(data.total)) return body;
+      const seen = new Set();
+      for (const item of data.total) {
+        if (!isRecord(item) || !isID(item._id) || seen.has(item._id)) return body;
+        seen.add(item._id);
+        if (personalIds.has(item._id) && typeof item.isPinned !== 'boolean') return body;
+      }
+    }
+    const personal = reorderSamePinSlots(data.personal, rankMap);
+    const total = Array.isArray(data.total) ? reorderTotalPersonalSlots(data.total, personalIds, rankMap) : data.total;
+    if (personal === data.personal && total === data.total) return body;
+    const next = { ...data, personal };
+    if (Array.isArray(data.total)) next.total = total;
+    return { ...body, data: next };
+  }
+
+  function identifyTargetRequest(method, input) {
+    // Avoid coercing arbitrary caller objects a second time: native open owns
+    // their WebIDL conversion and exceptions. Crack uses string URLs.
+    if (typeof method !== 'string' || method.toUpperCase() !== 'GET' || typeof input !== 'string') return null;
+    try {
+      const url = new URL(input, document.baseURI);
+      if (url.origin !== API_ORIGIN) return null;
+      if (url.pathname === ME_PATH) return 'me';
+      if (CHAT_PATH.test(url.pathname)) return 'chat';
+    } catch { /* Native open still decides whether the URL is acceptable. */ }
+    return null;
+  }
+
+  function captureLatestMeSnapshot(body, sequence, target) {
+    if (sequence < latestMeSequence) return;
+    latestMeSequence = sequence;
+    latestSnapshotSource = target;
+    const items = isRecord(body) && isRecord(body.data) ? (target === 'me' ? body.data.items : body.data.personal) : null;
+    if (!validPersonalArray(items)) {
+      latestMeSnapshot = null;
+      return;
+    }
+    latestMeSnapshot = items.map(item => ({
+      _id: item._id,
+      name: typeof item.name === 'string' ? item.name : '',
+      description: typeof item.description === 'string' ? item.description : '',
+      isPinned: item.isPinned,
+    }));
+  }
+
+  function transformPayload(body, meta) {
+    if (!sortingEnabled()) return body;
+    return meta.target === 'me' ? transformMePayload(body, ranks) : transformChatPayload(body, ranks);
+  }
+
+  function installXHRHook() {
+    const requests = new WeakMap();
+    let proto, openDescriptor, textDescriptor, responseDescriptor;
+    try {
+      proto = window.XMLHttpRequest.prototype;
+      openDescriptor = Object.getOwnPropertyDescriptor(proto, 'open');
+      textDescriptor = Object.getOwnPropertyDescriptor(proto, 'responseText');
+      responseDescriptor = Object.getOwnPropertyDescriptor(proto, 'response');
+      if (!openDescriptor || typeof openDescriptor.value !== 'function' ||
+          (!openDescriptor.configurable && !openDescriptor.writable) ||
+          !textDescriptor?.configurable || typeof textDescriptor.get !== 'function' || textDescriptor.set) {
+        throw new Error('descriptor');
+      }
+    } catch {
+      warnOnce('hook', 'sorter interceptor unavailable; using Crack default order');
+      return false;
+    }
+
+    const originalOpen = openDescriptor.value;
+    const originalText = textDescriptor.get;
+    const originalResponse = responseDescriptor?.get;
+
+    function eligible(xhr, meta) {
+      if (!running || !enabled() || !hookActive || !meta || xhr.readyState !== 4 || xhr.status < 200 || xhr.status >= 300) return false;
+      // A redirect to any other endpoint must not receive this transformation.
+      if (xhr.responseURL && identifyTargetRequest('GET', xhr.responseURL) !== meta.target) return false;
+      return true;
+    }
+
+    function readText(xhr, raw) {
+      const meta = requests.get(xhr);
+      if (!eligible(xhr, meta)) return raw;
+      if (meta.textCache?.raw === raw && meta.textCache.version === orderVersion) return meta.textCache.value;
+      let value = raw;
+      try {
+        let body;
+        if (meta.parsedText?.raw === raw) body = meta.parsedText.body;
+        else {
+          body = JSON.parse(raw);
+          meta.parsedText = { raw, body };
+          captureLatestMeSnapshot(body, meta.sequence, meta.target);
+        }
+        const next = transformPayload(body, meta);
+        if (next !== body) value = JSON.stringify(next);
+      } catch {
+        if (meta.sequence >= latestMeSequence) {
+          latestMeSequence = meta.sequence;
+          latestMeSnapshot = null;
+        }
+        warnOnce('transform', 'transform skipped; using original response');
+      }
+      meta.textCache = { raw, version: orderVersion, value };
+      return value;
+    }
+
+    function wrappedOpen(...args) {
+      // Set metadata BEFORE native open: synchronous OPENED listeners can read
+      // the XHR or send a synchronous request. A reused XHR gets fresh caches.
+      const previous = requests.get(this);
+      requests.delete(this);
+      let meta = null;
+      try {
+        const target = running && enabled() ? identifyTargetRequest(args[0], args[1]) : null;
+        if (target) {
+          meta = { target, sequence: ++requestSequence };
+          requests.set(this, meta);
+        }
+      } catch { /* Only interception failure is swallowed. */ }
+      try {
+        return Reflect.apply(originalOpen, this, args);
+      } catch (error) {
+        if (requests.get(this) === meta) {
+          requests.delete(this);
+          if (previous) requests.set(this, previous);
+        }
+        throw error;
+      }
+    }
+
+    function wrappedText() {
+      // Native brand/type exceptions must propagate unchanged, not be caught.
+      const raw = Reflect.apply(originalText, this, []);
+      try { return readText(this, raw); } catch { return raw; }
+    }
+
+    function wrappedResponse() {
+      const raw = Reflect.apply(originalResponse, this, []);
+      try {
+        if (this.responseType === '' || this.responseType === 'text') return readText(this, raw);
+        const meta = requests.get(this);
+        if (this.responseType !== 'json' || !eligible(this, meta)) return raw;
+        if (meta.jsonCache?.raw === raw && meta.jsonCache.version === orderVersion) return meta.jsonCache.value;
+        if (meta.jsonCaptured !== raw) {
+          captureLatestMeSnapshot(raw, meta.sequence, meta.target);
+          meta.jsonCaptured = raw;
+        }
+        const value = transformPayload(raw, meta);
+        meta.jsonCache = { raw, version: orderVersion, value };
+        return value;
+      } catch { return raw; }
+    }
+
+    // Patch transactionally. Wrappers are inert until every required patch is
+    // installed. Preserve all descriptor flags and any earlier wrapper.
+    const patches = [];
+    try {
+      Object.defineProperty(proto, 'responseText', { ...textDescriptor, get: wrappedText });
+      patches.push(['responseText', textDescriptor, wrappedText, 'get']);
+      Object.defineProperty(proto, 'open', { ...openDescriptor, value: wrappedOpen });
+      patches.push(['open', openDescriptor, wrappedOpen, 'value']);
+      if (responseDescriptor?.configurable && typeof originalResponse === 'function' && !responseDescriptor.set) {
+        try {
+          Object.defineProperty(proto, 'response', { ...responseDescriptor, get: wrappedResponse });
+          patches.push(['response', responseDescriptor, wrappedResponse, 'get']);
+        } catch {
+          // Optional future JSON support; the proven responseText path works.
+          warnOnce('response-hook', 'optional response interceptor unavailable; responseText only');
+        }
+      }
+      hookPatches = patches;
+      hookPrototype = proto;
+      hookActive = true;
+      return true;
+    } catch {
+      hookActive = false;
+      for (const [key, descriptor] of patches.reverse()) {
+        try { Object.defineProperty(proto, key, descriptor); } catch { /* Remaining wrappers are inert. */ }
+      }
+      warnOnce('hook', 'sorter interceptor unavailable; using Crack default order');
+      return false;
+    }
+  }
+
+  function buildMasterOrderFromEditedGroups(snapshot, groups) {
+    const available = new Map(snapshot.map(item => [item._id, item.isPinned]));
+    const edited = [...groups.pinned, ...groups.normal];
+    if (edited.length !== snapshot.length || new Set(edited).size !== edited.length) throw new Error('stale');
+    for (const [pin, ids] of [[true, groups.pinned], [false, groups.normal]]) {
+      for (const id of ids) if (!available.has(id) || available.get(id) !== pin) throw new Error('stale');
+    }
+    const cursor = { pinned: 0, normal: 0 };
+    return snapshot.map(item => {
+      const group = item.isPinned ? 'pinned' : 'normal';
+      return groups[group][cursor[group]++];
+    });
+  }
+
+  function sameSnapshotSlots(left, right) {
+    return Array.isArray(right) && left.length === right.length && left.every((item, index) =>
+      item._id === right[index]._id && item.isPinned === right[index].isPinned);
+  }
+
+  const UI_CSS = `
+    :host { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    :host([data-dark]) { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    dialog { color: #222; background: #fff; border: 1px solid #ccc; border-radius: 16px;
+      padding: 0; width: min(540px, calc(100vw - 20px)); max-width: none;
+      max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); margin: auto; box-shadow: 0 16px 64px #0005; }
+    dialog::backdrop { background: #0007; }
+    .frame { display: flex; flex-direction: column; max-height: min(720px, calc(100dvh - 28px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))); }
+    header { padding: 14px 16px 10px; flex: none; }
+    h2 { font-size: 18px; margin: 0 0 8px; }
+    p { margin: 6px 0; line-height: 1.5; font-size: 13px; }
+    .scroll { overflow: auto; padding: 0 20px 16px; overscroll-behavior: contain; }
+    h3 { font-size: 15px; margin: 14px 0 8px; }
+    ol { padding: 0; margin: 0; list-style: none; }
+    li { display: flex; align-items: center; gap: 8px; min-height: 56px; padding: 8px;
+      margin: 5px 0; border: 1px solid #ddd; border-radius: 9px; background: #f7f7f9; }
+    li.dragging { outline: 2px solid #8a5bea; opacity: .75; }
+    .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .name { font-size: 14px; font-weight: 600; }
+    .description { font-size: 12px; color: #666; white-space: pre-wrap;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    button { font: inherit; font-size: 13px; padding: 8px 12px; border: 1px solid #bbb;
+      border-radius: 8px; background: #fff; color: #222; cursor: pointer; }
+    button:hover:enabled { background: #eeeaf8; }
+    button:focus-visible { outline: 3px solid #9b70e8; outline-offset: 2px; }
+    button:disabled { opacity: .35; cursor: default; }
+    .handle { cursor: grab; touch-action: none; user-select: none; font-size: 18px; padding: 8px; }
+    .moves { display: flex; gap: 4px; flex: none; }
+    .moves button { min-width: 36px; min-height: 40px; padding: 7px 9px; }
+    .primary { background: #7443c9; color: #fff; border-color: #7443c9; }
+    .primary:hover:enabled { background: #6136ad; }
+    footer { padding: 12px 20px 16px; border-top: 1px solid #ddd; flex: none; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .status { min-height: 20px; color: #85421c; }
+    .confirm { border: 1px solid #ab8ada; border-radius: 8px; padding: 10px; margin-bottom: 12px; }
+    [hidden] { display: none !important; }
+    @media (prefers-color-scheme: dark) {
+      dialog { color: #eee; background: #212126; border-color: #555; }
+      li { background: #2d2d34; border-color: #4c4c56; }
+      button { background: #33333b; color: #eee; border-color: #666; }
+      button:hover:enabled { background: #4d3b64; }
+      .description { color: #aaa; } footer { border-color: #555; } .status { color: #efbc8a; }
+      .primary { background: #8050d0; } }
+    :host([data-dark]) dialog { color: #eee; background: #212126; border-color: #555; }
+    :host([data-dark]) li { background: #2d2d34; border-color: #4c4c56; }
+    :host([data-dark]) button { background: #33333b; color: #eee; border-color: #666; }
+    :host([data-dark]) button:hover:enabled { background: #4d3b64; }
+    :host([data-dark]) .description { color: #aaa; }
+    :host([data-dark]) footer { border-color: #555; }
+    :host([data-dark]) .status { color: #efbc8a; }
+    :host([data-dark]) .primary { background: #8050d0; }
+    @media (max-width: 380px) { header, footer { padding-inline: 12px; }
+      .scroll { padding-inline: 12px; } li { gap: 4px; padding: 5px; } }
+  `;
+
+  function element(tag, attributes = {}, text = '') {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+    if (text) node.textContent = text;
+    return node;
+  }
+
+  function openSorterUI(owner, returnFocus) {
+    if (activeEditor) { activeEditor.focus(); return; }
+    const snapshot = latestMeSnapshot?.map(item => ({ ...item })) ?? null;
+    const editorOrderVersion = orderVersion;
+    const snapshotSource = latestSnapshotSource;
+    const host = element('div', { id: 'cmu-shortcut-sorter', 'data-crack-shortcut-sorter-editor': '', 'data-cmu-addon-ui': 'shortcut-sorter' });
+    if (document.documentElement?.dataset.cmuTheme === 'dark' || document.documentElement?.dataset.theme === 'dark' || document.body?.dataset.theme === 'dark' || document.documentElement?.classList.contains('dark')) host.setAttribute('data-dark', '');
+    owner.append(host);
+    const root = host.attachShadow({ mode: 'open' });
+    root.append(element('style', {}, UI_CSS));
+    const dialog = element('dialog', { 'aria-labelledby': 'sorter-title', 'aria-describedby': 'sorter-help' });
+    const frame = element('div', { class: 'frame' });
+    const header = element('header');
+    header.append(element('h2', { id: 'sorter-title' }, '단축어 순서 변경'),
+      element('p', { id: 'sorter-help' }, '같은 그룹 안에서 ☰ 핸들을 드래그하거나 ▲ ▼ 버튼으로 이동하세요.'));
+    const scroll = element('div', { class: 'scroll' });
+    const footer = element('footer');
+    const status = element('p', { class: 'status', role: 'status', 'aria-live': 'polite' });
+    const actions = element('div', { class: 'actions' });
+    const reset = element('button', { type: 'button' }, '기본 순서 복원');
+    const cancel = element('button', { type: 'button' }, '취소');
+    const save = element('button', { type: 'button' }, '저장');
+    const reload = element('button', { type: 'button', class: 'primary' }, '저장 후 새로고침');
+    const confirm = element('section', { class: 'confirm', hidden: '', 'aria-label': '기본 순서 복원 확인' });
+    confirm.append(element('p', {}, '사용자 순서를 지우고 Crack 기본 순서로 복원할까요?'));
+    const confirmActions = element('div', { class: 'actions' });
+    const restore = element('button', { type: 'button' }, '복원');
+    const restoreReload = element('button', { type: 'button' }, '복원 후 새로고침');
+    const keep = element('button', { type: 'button' }, '돌아가기');
+    confirmActions.append(restore, restoreReload, keep);
+    confirm.append(confirmActions);
+    actions.append(reset, cancel, save, reload);
+    footer.append(confirm, status, actions);
+    frame.append(header, scroll, footer);
+    dialog.append(frame);
+    root.append(dialog);
+
+    const controller = new AbortController();
+    const listen = (node, type, fn, options = {}) => node.addEventListener(type, fn, { ...options, signal: controller.signal });
+    const groups = { pinned: [], normal: [] };
+    const lists = {};
+    const rows = new Map();
+    let drag = null;
+    let closed = false;
+    let dragFrame = 0;
+    let pendingPointer = null;
+    let requestTimer = 0;
+    let requestController = null;
+
+    function endDrag(revert = false) {
+      if (dragFrame) window.cancelAnimationFrame(dragFrame);
+      dragFrame = 0;
+      pendingPointer = null;
+      if (!drag) return;
+      const current = drag;
+      drag = null;
+      if (revert && current.started) groups[current.group] = current.before;
+      try {
+        if (current.handle.hasPointerCapture(current.pointerId)) current.handle.releasePointerCapture(current.pointerId);
+      } catch { /* Capture may already have been released by the browser. */ }
+      rows.get(current.id)?.classList.remove('dragging');
+      dialog.style.userSelect = '';
+      if (revert && current.started) renderGroup(current.group);
+    }
+
+    function close() {
+      if (closed) return;
+      closed = true;
+      endDrag(true);
+      controller.abort();
+      requestController?.abort();
+      requestController = null;
+      if (requestTimer) window.clearTimeout(requestTimer);
+      requestTimer = 0;
+      if (dialog.open) dialog.close();
+      host.remove();
+      activeEditor = null;
+      if (returnFocus?.isConnected) returnFocus.focus();
+    }
+
+    function renderGroup(group) {
+      const list = lists[group];
+      if (!list) return;
+      let anchor = null;
+      // Never detach/move the row holding pointer capture. Move its siblings
+      // around it instead, so mouse/touch dragging survives each reorder.
+      for (const id of groups[group].slice().reverse()) {
+        const row = rows.get(id);
+        if (!(drag?.group === group && drag.id === id)) list.insertBefore(row, anchor);
+        anchor = row;
+      }
+      groups[group].forEach((id, index) => {
+        const row = rows.get(id);
+        row.querySelector('[data-move="up"]').disabled = index === 0;
+        row.querySelector('[data-move="down"]').disabled = index === groups[group].length - 1;
+      });
+    }
+
+    function move(group, id, to) {
+      const ids = groups[group];
+      const from = ids.indexOf(id);
+      if (from < 0 || to < 0 || to >= ids.length || from === to) return;
+      ids.splice(to, 0, ids.splice(from, 1)[0]);
+      renderGroup(group);
+      status.textContent = `${group === 'pinned' ? '고정' : '일반'} 그룹: ${to + 1}번째로 이동했습니다.`;
+    }
+
+    if (!hookActive) {
+      scroll.append(element('p', {}, '이 환경에서는 안전한 응답 처리를 사용할 수 없습니다. Crack 기본 순서를 유지합니다.'));
+      save.disabled = reload.disabled = true;
+    } else if (!snapshot) {
+      scroll.append(element('p', {}, '아직 내 단축어 목록을 받지 못했어요. 아래 버튼으로 한 번 불러오거나, 크랙 설정 → 내 단축어를 열고 다시 눌러 주세요.'));
+      const load = element('button', { type: 'button', class: 'primary' }, '내 단축어 불러오기');
+      scroll.append(load);
+      listen(load, 'click', async () => {
+        if (closed || load.disabled || !running || !enabled()) return;
+        load.disabled = true;
+        status.textContent = '내 단축어 목록을 불러오고 있어요…';
+        const sequence = ++requestSequence;
+        const networkController = new AbortController();
+        requestController = networkController;
+        requestTimer = window.setTimeout(() => networkController.abort(), 12000);
+        try {
+          const headers = { accept: 'application/json, text/plain, */*', platform: 'web', 'wrtn-locale': 'ko-KR' };
+          // This factory can bootstrap before the main CMU scope exists.
+          const readCookie = name => {
+            const prefix = `${encodeURIComponent(name)}=`;
+            const part = String(document.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith(prefix));
+            if (!part) return '';
+            try { return decodeURIComponent(part.slice(prefix.length)); } catch { return ''; }
+          };
+          const token = readCookie('access_token');
+          if (token) headers.authorization = /^Bearer\s/i.test(token) ? token : `Bearer ${token}`;
+          const wrtnId = readCookie('__w_id');
+          if (wrtnId) headers['x-wrtn-id'] = wrtnId;
+          const mixpanelId = readCookie('Mixpanel-Distinct-Id');
+          if (mixpanelId) headers['mixpanel-distinct-id'] = mixpanelId;
+          const response = await window.fetch(API_ORIGIN + ME_PATH, { method: 'GET', credentials: 'include', cache: 'no-store', headers, signal: networkController.signal });
+          if (!response.ok || (response.url && identifyTargetRequest('GET', response.url) !== 'me')) throw new Error('request');
+          const body = await response.json();
+          if (closed || !running || !enabled()) return;
+          if (!isRecord(body) || !isRecord(body.data) || !validPersonalArray(body.data.items)) throw new Error('shape');
+          captureLatestMeSnapshot(body, sequence, 'me');
+          close();
+          openSorterUI(owner, returnFocus);
+        } catch {
+          if (!closed) {
+            status.textContent = '목록을 불러오지 못했어요. 이 창을 닫고 크랙 설정 → 내 단축어를 연 뒤 다시 눌러 주세요.';
+            load.disabled = false;
+          }
+        } finally {
+          if (requestTimer) window.clearTimeout(requestTimer);
+          requestTimer = 0;
+          if (requestController === networkController) requestController = null;
+        }
+      });
+      save.disabled = reload.disabled = true;
+    } else {
+      const ordered = sortingEnabled() ? reorderSamePinSlots(snapshot, ranks) : snapshot;
+      for (const group of ['pinned', 'normal']) {
+        const pin = group === 'pinned';
+        groups[group] = ordered.filter(item => item.isPinned === pin).map(item => item._id);
+        const section = element('section', { 'aria-label': pin ? '고정 단축어' : '일반 단축어' });
+        section.append(element('h3', {}, pin ? '고정' : '일반'));
+        const list = element('ol');
+        lists[group] = list;
+        section.append(list);
+        scroll.append(section);
+        if (!groups[group].length) section.append(element('p', {}, '이 그룹에 단축어가 없습니다.'));
+        for (const item of ordered.filter(entry => entry.isPinned === pin)) {
+          const label = item.name ? (item.name.startsWith('/') ? item.name : `/${item.name}`) : '(이름 없음)';
+          const row = element('li');
+          const handle = element('button', { type: 'button', class: 'handle', 'aria-label': `${label} 순서 이동 핸들` }, '☰');
+          const text = element('div', { class: 'text' });
+          text.append(element('div', { class: 'name' }, label));
+          if (item.description) text.append(element('div', { class: 'description' }, item.description));
+          const moves = element('div', { class: 'moves' });
+          const up = element('button', { type: 'button', 'data-move': 'up', 'aria-label': `${label} 위로 이동` }, '▲');
+          const down = element('button', { type: 'button', 'data-move': 'down', 'aria-label': `${label} 아래로 이동` }, '▼');
+          moves.append(up, down);
+          row.append(handle, text, moves);
+          rows.set(item._id, row);
+          listen(up, 'click', () => {
+            endDrag(true);
+            move(group, item._id, groups[group].indexOf(item._id) - 1);
+            (up.disabled ? down : up).focus();
+          });
+          listen(down, 'click', () => {
+            endDrag(true);
+            move(group, item._id, groups[group].indexOf(item._id) + 1);
+            (down.disabled ? up : down).focus();
+          });
+          listen(handle, 'pointerdown', event => {
+            if (event.button !== 0 || !event.isPrimary || drag) return;
+            event.preventDefault();
+            handle.focus();
+            try { handle.setPointerCapture(event.pointerId); } catch { return; }
+            drag = { group, id: item._id, handle, pointerId: event.pointerId,
+              x: event.clientX, y: event.clientY, started: false, before: groups[group].slice() };
+          });
+        }
+        renderGroup(group);
+      }
+      scroll.append(element('p', {}, '저장된 순서는 다음 정상 목록 요청부터 적용됩니다. 바로 적용하려면 저장 후 새로고침을 선택하세요.'));
+    }
+
+    function performDrag(event) {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      if (!drag.started) {
+        if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 6) return;
+        drag.started = true;
+        rows.get(drag.id).classList.add('dragging');
+        dialog.style.userSelect = 'none';
+      }
+      const list = lists[drag.group];
+      const bounds = list.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) return;
+      const viewport = scroll.getBoundingClientRect();
+      if (event.clientY < viewport.top + 40) scroll.scrollTop -= 14;
+      else if (event.clientY > viewport.bottom - 40) scroll.scrollTop += 14;
+      const candidates = groups[drag.group].filter(id => id !== drag.id);
+      let to = candidates.length;
+      for (let index = 0; index < candidates.length; index += 1) {
+        const box = rows.get(candidates[index]).getBoundingClientRect();
+        if (event.clientY < box.top + box.height / 2) { to = index; break; }
+      }
+      // Reorder sibling rows, but retain the captured handle in the DOM.
+      // Unexpected capture loss cancels safely and restores the pre-drag order.
+      move(drag.group, drag.id, to);
+    }
+    listen(dialog, 'pointermove', event => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      event.preventDefault();
+      pendingPointer = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY };
+      if (dragFrame) return;
+      dragFrame = window.requestAnimationFrame(() => {
+        dragFrame = 0;
+        const point = pendingPointer;
+        pendingPointer = null;
+        if (point && !closed) performDrag(point);
+      });
+    });
+    listen(dialog, 'pointerup', event => {
+      if (drag?.pointerId !== event.pointerId) return;
+      if (pendingPointer) performDrag(pendingPointer);
+      endDrag();
+    });
+    listen(dialog, 'pointercancel', event => { if (drag?.pointerId === event.pointerId) endDrag(true); });
+    listen(dialog, 'lostpointercapture', event => { if (drag?.pointerId === event.pointerId) endDrag(true); });
+    listen(window, 'blur', () => endDrag(true));
+    listen(dialog, 'cancel', event => { event.preventDefault(); close(); });
+    listen(dialog, 'close', close);
+    listen(dialog, 'keydown', event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (drag) endDrag(true);
+        else if (!confirm.hidden) { confirm.hidden = true; reset.focus(); }
+        else close();
+      } else if (event.key === 'Tab') {
+        // Native modal focus isolation + explicit traversal inside this shadow.
+        const controls = [...dialog.querySelectorAll('button:not(:disabled)')]
+          .filter(button => !button.closest('[hidden]'));
+        const index = controls.indexOf(root.activeElement);
+        const next = event.shiftKey ? (index <= 0 ? controls.length - 1 : index - 1) : (index + 1) % controls.length;
+        if (controls[next]) { event.preventDefault(); controls[next].focus(); }
+      }
+      event.stopPropagation();
+    });
+    for (const type of ['keyup', 'keypress', 'click', 'pointerdown', 'pointermove', 'pointerup']) {
+      listen(host, type, event => event.stopPropagation());
+    }
+    listen(cancel, 'click', close);
+    listen(reset, 'click', () => { endDrag(true); confirm.hidden = false; restore.focus(); });
+    listen(keep, 'click', () => { confirm.hidden = true; reset.focus(); });
+
+    function persist(shouldReload) {
+      endDrag();
+      if (!snapshot || !hookActive) return;
+      if (editorOrderVersion !== orderVersion || !sameSnapshotSlots(snapshot, latestMeSnapshot)) {
+        status.textContent = '편집 중 목록 또는 저장된 순서가 변경되었습니다. 취소 후 순서 변경을 다시 열어주세요.';
+        return;
+      }
+      let masterOrder;
+      try {
+        masterOrder = buildMasterOrderFromEditedGroups(latestMeSnapshot, groups);
+        // A chat may expose only a subset of personal commands. Preserve stored
+        // commands absent there instead of deleting their rank on a mobile edit.
+        if (snapshotSource !== 'me') {
+          const present = new Set(masterOrder);
+          let cursor = 0;
+          const merged = settings.masterOrder.map(id => present.has(id) ? masterOrder[cursor++] : id);
+          masterOrder = merged.concat(masterOrder.slice(cursor));
+        }
+      }
+      catch { status.textContent = '목록이 변경되었습니다. 취소 후 다시 열어주세요.'; return; }
+      if (!saveSettings({ schemaVersion: 1, enabled: true, masterOrder })) {
+        status.textContent = '브라우저 저장소에 저장하지 못했습니다. 저장소 설정을 확인해 주세요.';
+        return;
+      }
+      close();
+      if (shouldReload) window.location.reload();
+      else say('단축어 순서를 저장했어요 · 다음 목록 요청부터 적용돼요');
+    }
+    function restoreDefaults(shouldReload) {
+      // Omit masterOrder entirely; validation normalises disabled state in memory.
+      if (!saveSettings({ schemaVersion: 1, enabled: false })) {
+        status.textContent = '브라우저 저장소에 저장하지 못했습니다. 복원되지 않았습니다.';
+        return;
+      }
+      close();
+      if (shouldReload) window.location.reload();
+    }
+    listen(save, 'click', () => persist(false));
+    listen(reload, 'click', () => persist(true));
+    listen(restore, 'click', () => restoreDefaults(false));
+    listen(restoreReload, 'click', () => restoreDefaults(true));
+    activeEditor = { owner, close, focus: () => cancel.focus() };
+    try {
+      dialog.showModal();
+      cancel.focus();
+    } catch {
+      close();
+      warnOnce('editor', 'sorter editor unavailable in this environment');
+    }
+  }
+
+  function onStorage(event) {
+    if (!running || !enabled()) return;
+    if (event.key === STORAGE_KEY || event.key === null) {
+      applySettings(loadSettings());
+      publish();
+    }
+  }
+
+  function ownsGuard() {
+    try { return window[GUARD] === guardOwner; } catch { return false; }
+  }
+
+  function claimGuard() {
+    try {
+      if (Object.prototype.hasOwnProperty.call(window, GUARD)) {
+        if (ownsGuard()) return true;
+        if (!blockedNoticeShown) {
+          blockedNoticeShown = true;
+          say('별도 단축어 정렬 확장프로그램이 실행 중이에요. 해당 확장을 끈 뒤 새로고침해 주세요.');
+        }
+        return false;
+      }
+      Object.defineProperty(window, GUARD, { value: guardOwner, configurable: true });
+      return true;
+    } catch {
+      say('단축어 정렬을 안전하게 시작하지 못했어요. 새로고침 후 다시 켜 주세요.');
+      return false;
+    }
+  }
+
+  function uninstallXHRHook() {
+    if (!hookActive || !hookPrototype || !hookPatches.length) return;
+    // Do not remove another extension's newer wrapper. Ours stays dormant instead.
+    if (!hookPatches.every(([key, descriptor, wrapped, member]) => {
+      try { return Object.getOwnPropertyDescriptor(hookPrototype, key)?.[member] === wrapped; }
+      catch { return false; }
+    })) return;
+    try {
+      for (const [key, descriptor] of hookPatches.slice().reverse()) Object.defineProperty(hookPrototype, key, descriptor);
+      hookPatches = [];
+      hookPrototype = null;
+      hookActive = false;
+    } catch { /* Remaining wrappers fail open while stopped. */ }
+  }
+
+  function start() {
+    if (destroyed || !enabled()) return false;
+    if (running) return true;
+    if (!claimGuard()) return false;
+    applySettings(loadSettings());
+    if (!hookActive && !installXHRHook()) {
+      say('이 환경에서 단축어 정렬을 안전하게 적용하지 못했어요. 기본 순서를 유지해요.');
+      return false;
+    }
+    running = true;
+    window.addEventListener('storage', onStorage);
+    publish();
+    return true;
+  }
+
+  function stop() {
+    running = false;
+    orderVersion += 1;
+    window.removeEventListener('storage', onStorage);
+    activeEditor?.close();
+    uninstallXHRHook();
+    publish();
+  }
+
+  function open(returnFocus) {
+    if (!enabled()) { say('설정에서 단축어 정렬을 먼저 켜 주세요.'); return false; }
+    if (!running && !start()) return false;
+    if (!document.body) { say('화면을 불러오는 중이에요. 잠시 후 다시 눌러 주세요.'); return false; }
+    openSorterUI(document.body, returnFocus);
+    return !!activeEditor;
+  }
+
+  function destroy() {
+    stop();
+    destroyed = true;
+    if (ownsGuard()) {
+      try { delete window[GUARD]; } catch {}
+    }
+    latestMeSnapshot = null;
+  }
+
+  return { start, stop, open, close: () => activeEditor?.close(), destroy, isRunning: () => running,
+    isBlocked: () => { try { return !!window[GUARD] && !ownsGuard(); } catch { return true; } } };
+}
+
+    const CMU_EARLY_SORTER = createCmuShortcutSorter({
+        pageWindow: page,
+        isEnabled: () => CMU_EARLY_BRIDGE.isEnabled(),
+        notify: message => CMU_EARLY_BRIDGE.notify?.(message),
+        onStateChange: () => CMU_EARLY_BRIDGE.onStateChange?.(),
+    });
+    // Always-on work is only a URL check for XHR opens; no timers, DOM scans, or background requests.
+    CMU_EARLY_SORTER.start();
 /*
+ * 4.6.0.5 통합: 혀노 Crack Shortcut Sorter 1.0.0 / Crack Pinset 0.1.5.
+ * 단축어 정렬: 기존 localStorage 순서 유지, 개인 항목만 같은 고정 그룹에서 이동.
+ * 핀셋: 부분 수정·수정 흔적·기록·되돌리기, 개별 OFF 시 이벤트·감시·UI 정리.
+ * 미니사이드바: 단축어 정렬 / 핀셋 아이콘, 설정 > 대시보드 > 통합 기능에서 ON/OFF.
+ * 핀셋 기본 OFF. 아이콘으로 켜면 본문 길게 누르기·두 번 누르기를 글 선택에 양보.
+ * 핀셋 OFF 시 기존 길게 누르기·두 번 눌러 수정 설정을 그대로 복원.
+ * 단독판 중복 실행 감지. 단독 Pinset의 GM 저장 기록은 합본으로 자동 이전되지 않음.
+ * 반복 타이머 대신 합본 화면 감지 공유. 실제 휴대폰 발열·로그인 서비스는 별도 확인 필요.
  * 4.6.0.4 변경: 모델 선택창을 누른 버튼 위에 배치하고 화면 경계·키보드 변화·스크롤에 맞춰 재배치.
  * 4.6.0.3 배포: 기존 GitHub 4.6.0.2보다 높은 버전으로 배포하고 본체/메타 업데이트 주소 동기화.
  * 4.6.0.2 변경: 글 선택 후 미니사이드바 아이콘으로 감싸기 도구 호출.
@@ -192,9 +1063,9 @@
  *       실제 서비스 로그인 상태의 API/React 화면 및 Android 실기기는 미검증.
  */
 
-(() => {
+function cmuMain() {
     'use strict';
-    const VERSION = '4.6.0.4';
+    const VERSION = '4.6.0.5';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -408,6 +1279,8 @@
         keyboardComposerMotionGuard: true,
         keyboardComposerOffset: 0,
         shortcutEditor: true,
+        shortcutSorterEnabled: true,
+        pinsetEnabled: false,
         editPasteFix: true,
         editTextCleaner: true,
         selectionTextCounter: true,
@@ -466,6 +1339,60 @@
         seongjwa: { label: '성좌', bg: '#0E1220' },
         heugyo: { label: '흑요', bg: '#131210' },
     });
+    const CMU_ADDONS = { sorter: null, pinset: null };
+    function cmuPinsetSelecting() {
+        return shouldRun() && !!CMU_ADDONS.pinset?.isRunning();
+    }
+    function cmuSyncAddonButtons() {
+        for (const [key, feature, label, module] of [
+            ['shortcutSorterButton', 'shortcutSorterEnabled', '단축어 정렬', CMU_ADDONS.sorter],
+            ['pinsetButton', 'pinsetEnabled', '핀셋 부분 수정', CMU_ADDONS.pinset],
+        ]) {
+            const button = DASH_SIDE.btns[key];
+            if (!button) continue;
+            const running = !!module?.isRunning();
+            const title = running ? `${label} 열기` : settings[feature] ? `${label} · 실행 상태 확인` : `${label} 켜기`;
+            button.title = title;
+            button.setAttribute('aria-label', title);
+            button.setAttribute('aria-pressed', String(running));
+            button.classList.toggle('cmu-addon-off', !running);
+        }
+    }
+    function cmuAddonStateChanged() {
+        cmuMessageActionsClearGesture();
+        CMU_MESSAGE_ACTIONS.ignoreClickUntil = 0;
+        cmuMessageActionsSyncRootClass();
+        document.documentElement.classList.toggle('cmu-pinset-selecting', cmuPinsetSelecting());
+        cmuSyncAddonButtons();
+        const panel = document.getElementById(ID.panel);
+        for (const key of ['shortcutSorterEnabled', 'pinsetEnabled']) {
+            const toggle = panel?.querySelector(`.sw[data-key="${key}"]`);
+            if (toggle) syncQToggleElement(toggle, settings[key]);
+        }
+    }
+    function cmuSyncAddons() {
+        for (const [module, enabled] of [
+            [CMU_ADDONS.sorter, shouldRun() && settings.shortcutSorterEnabled],
+            [CMU_ADDONS.pinset, shouldRun() && settings.pinsetEnabled && isChatRoomPath()],
+        ]) {
+            if (!module) continue;
+            if (enabled && !module.isRunning()) module.start();
+            else if (!enabled && module.isRunning()) module.stop();
+        }
+        cmuAddonStateChanged();
+    }
+    function cmuOpenAddon(kind) {
+        if (!shouldRun()) { showToast('모바일 유틸을 먼저 켜 주세요.'); return; }
+        const pinset = kind === 'pinset';
+        const key = pinset ? 'pinsetEnabled' : 'shortcutSorterEnabled';
+        const module = pinset ? CMU_ADDONS.pinset : CMU_ADDONS.sorter;
+        (pinset ? CMU_ADDONS.sorter : CMU_ADDONS.pinset)?.close?.();
+        closeCompactModelPicker({ closeNative: true });
+        if (!settings[key]) setSettingFromQ(key, true);
+        else cmuSyncAddons();
+        if (module?.isRunning()) module.open();
+        else showToast(pinset ? '핀셋을 시작할 수 없어요. 채팅방에서 단독 Pinset을 끄고 새로고침해 주세요.' : '단축어 정렬을 시작할 수 없어요. 단독 Sorter를 끄고 새로고침해 주세요.');
+    }
     const CMU_EDGE_SYNC_STEPS = Object.freeze([0, 80, 250, 700]);
     const CMU_EDGE_HANDLE_COOLDOWN = Object.freeze({
         left: 360,
@@ -1066,13 +1993,16 @@
             if (!match) return null;
             method = String(method || 'GET').toUpperCase();
             if (!['GET', 'PATCH', 'DELETE'].includes(method)) return null;
-            return { method, chatId: decodeURIComponent(match[1]), messageId: match[2] ? decodeURIComponent(match[2]) : '',
+            const meta = { method, chatId: decodeURIComponent(match[1]), messageId: match[2] ? decodeURIComponent(match[2]) : '',
                 cursor: url.searchParams.get('cursor') || '', limit: Number(url.searchParams.get('limit') || 20) };
+            try { meta.pinsetCapture = CMU_ADDONS.pinset?.captureRequest(meta) || null; } catch (_) {}
+            return meta;
         } catch (_) { return null; }
     }
     function cmuObserveMessageResponse(meta, json, body, revision) {
         if (!shouldRun() || !meta) return;
         cmuAssertPayload(json);
+        try { CMU_ADDONS.pinset?.observeMessage(meta, json, body); } catch (_) {}
         if (meta.method === 'GET') {
             if (!Array.isArray(json.data?.messages) || cmuRoomData(meta.chatId).revision !== revision) return;
             cmuRememberMessages(meta.chatId, json.data.messages);
@@ -3901,6 +4831,7 @@
             CMU_DOM_WATCH.thumbEnabled = thumbEnabled;
             scheduleAnimatedThumbState();
         }
+        cmuSyncAddons();
         syncCmuDomWatchOptions();
         scheduleCmuInputCounterSync();
     }
@@ -4513,6 +5444,7 @@
         return /유저\s*노트|user\s*note|잊으면\s*안\s*되는\s*중요한\s*내용|추가하고\s*싶은\s*설정/i.test(hints);
     }
     function isCmuProtectedEditorTarget(target) {
+        if (target?.closest?.('[data-cmu-addon-ui], .cpn-ui, .cpn-badge, #cpn-host')) return true;
         // 네이티브 선택 핸들은 event target이 textarea 밖으로 잡힐 수 있으므로,
         // 유저노트 다이얼로그가 열린 동안에는 CMU 전역 제스처를 모두 쉬게 한다.
         if (cmuUserNoteGuardActive())
@@ -7965,9 +8897,9 @@
     const CMU_TAB_ICONONLY_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg>`;
     const CMU_SEARCH_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>`;
     const CMU_TABS = Object.freeze([
-        { id: 'ui', icon: Q_ICONS.ui, label: '화면·입력', keys: ['autoHideHeader', 'wideView', 'hideStatBar', 'fullscreenButton', 'composerExpandButton', 'inputCharacterCounter', 'keyboardComposerAssist', 'keyboardComposerMotionGuard', 'shortcutEditor', 'inputWrapper', 'selectionTextCounter', 'mobileMenuSwipeZone', 'mobileLeftMenuButton', 'mobileRightMenuButton', 'emptySendGuard', 'draftAutoSave', 'hideEndingHint'] },
+        { id: 'ui', icon: Q_ICONS.ui, label: '화면·입력', keys: ['autoHideHeader', 'wideView', 'hideStatBar', 'fullscreenButton', 'composerExpandButton', 'inputCharacterCounter', 'keyboardComposerAssist', 'keyboardComposerMotionGuard', 'shortcutEditor', 'shortcutSorterEnabled', 'inputWrapper', 'selectionTextCounter', 'mobileMenuSwipeZone', 'mobileLeftMenuButton', 'mobileRightMenuButton', 'emptySendGuard', 'draftAutoSave', 'hideEndingHint'] },
         { id: 'memory', icon: Q_ICONS.message, label: '메모리·노트', keys: ['memoryUi', 'userNoteUi', 'memoryDraftOverflow'] },
-        { id: 'message', icon: Q_ICONS.message, label: '대화·편집', keys: ['messageLongPressMenu', 'editPasteFix', 'editTextCleaner', 'messageDoubleClickEdit', 'messageWordWrap'] },
+        { id: 'message', icon: Q_ICONS.message, label: '대화·편집', keys: ['pinsetEnabled', 'messageLongPressMenu', 'editPasteFix', 'editTextCleaner', 'messageDoubleClickEdit', 'messageWordWrap'] },
         { id: 'theme', icon: Q_ICONS.theme, label: '테마', keys: ['themeSkin'] },
         { id: 'radiosonde', icon: Q_ICONS.radio, label: '라존데', keys: ['radiosonde'] },
         { id: 'dashboard', icon: Q_ICONS.dash, label: '대시보드', keys: ['dashboard', 'dashboardNumberAnimation', 'dashboardSidebar'] },
@@ -8202,6 +9134,7 @@
             (pathText.includes('M1.99 12') || pathText.includes('S22.01 17.52 22.01 12'));
     }
     function isCmuEdgeOwnElement(el) {
+        if (el?.closest?.('[data-cmu-addon-ui], .cpn-ui, #cpn-host')) return true;
         return !!el?.closest?.(`#${ID.panel}, #${ID.toolbarWrapper}, #${ID.leftMenuZone}, #${ID.rightMenuZone}, #${ID.menuSwipeZone}, #${ID.toast}, #${ID.dashboard}, #${ID.dashboardSidebar}, #chud-info-menu, #chud-side-menu, #igx-live-popup`);
     }
     function scoreCmuMobileChatListToggle(button) {
@@ -9345,7 +10278,7 @@
         ['deducted', '차감']
     ];
     const SIDE_PART_LABELS = [
-        ['modelButton', '모델'], ['themeButton', '라이트/다크'], ['episodeModeButton', '소설/채팅'], ['inputWrapperButton', '글 감싸기'], ['guideButton', '가이드'], ['profileButton', '프로필'], ['profileBoxButton', '프로필 박스'], ['noteButton', '노트'],
+        ['modelButton', '모델'], ['themeButton', '라이트/다크'], ['episodeModeButton', '소설/채팅'], ['inputWrapperButton', '글 감싸기'], ['shortcutSorterButton', '단축어 정렬'], ['pinsetButton', '핀셋'], ['guideButton', '가이드'], ['profileButton', '프로필'], ['profileBoxButton', '프로필 박스'], ['noteButton', '노트'],
         ['proseStyleButton', '문체'], ['outputButton', '출력'], ['summaryButton', '요약'], ['imageButton', '상황 이미지'], ['archiveButton', '보관함'],
         ['roomBackgroundButton', '이미지 테마'], ['scenePainterButton', '모바일 삽화'], ['wishManagerButton', 'Wish RP'], ['sceneBlurButton', 'CSP 테마'],
         ['startButton', '시작'], ['loreButton', '로어'], ['translatorButton', '번역'], ['aiSummaryButton', 'AI 요약'], ['aiWriterButton', 'AI 답변'], ['gameHudButton', '게임 HUD']
@@ -9353,6 +10286,8 @@
     const SIDE_PART_ICON_KEYS = Object.freeze({
         modelButton: 'model',
         inputWrapperButton: 'inputWrapper',
+        shortcutSorterButton: 'shortcutSorter',
+        pinsetButton: 'pinset',
         guideButton: 'guide',
         profileButton: 'profile',
         profileBoxButton: 'profileBox',
@@ -9591,7 +10526,11 @@
         ${qSwitch('selectionTextCounter', '선택 글자수 표시', '선택한 부분의 글자수를 화면 아래에 작게 표시해요.')}
       `)}
       <div class="sec">단축어</div>
-      ${qCard(qSwitch('shortcutEditor', '단축어 편집기', '/ 창에서 체크박스 · 전체 선택 · 내 단축어 선택 삭제'))}
+      ${qCard(`
+        ${qSwitch('shortcutEditor', '단축어 편집기', '/ 창에서 체크박스 · 전체 선택 · 내 단축어 선택 삭제')}
+        ${qSwitch('shortcutSorterEnabled', '단축어 정렬', '내 단축어 순서 저장 · 위/아래 버튼으로 이동 · 제작자 항목 유지')}
+        <div class="subrow"><div class="lbl">단축어 표시 순서<div class="note">순정 / 목록을 연 뒤 정렬 · 저장 후 목록을 다시 열면 반영</div></div><button type="button" class="cmu-action-btn" data-action="addon-sorter">순서 편집</button></div>
+      `)}
 
       <div class="sec">채팅창 임시 저장</div>
       ${qCard(qSwitch('draftAutoSave', '입력창 초안 자동 저장', '채팅방별 저장 · 빈 입력창에만 복구 · 전송 확인 후 삭제'))}
@@ -10131,6 +11070,11 @@
 
     function renderSettingsMessagePage() {
         return qPage('message', `
+      <div class="sec">핀셋 부분 수정</div>
+      ${qCard(`
+        ${qSwitch('pinsetEnabled', '핀셋 켜기', '본문 길게 누르기·두 번 누르기를 글 선택에 사용 · 끄면 기존 메뉴 복원')}
+        <div class="subrow"><div class="lbl">부분 수정 · 기록<div class="note">본문을 선택한 뒤 수정 · 원문 보기와 되돌리기 · 단독판 기록은 자동 이전되지 않아요</div></div><button type="button" class="cmu-action-btn" data-action="addon-pinset">핀셋 열기</button></div>
+      `)}
       <div class="sec">읽기와 편집</div>
       ${qCard(`
         ${qSwitch('messageWordWrap', '단어 단위 줄바꿈', '긴 단어는 화면 폭에 맞춰 줄바꿈해요.')}
@@ -10245,6 +11189,8 @@
             ['userNoteUi', '유저노트 편집창', '노트 편집 공간을 화면과 키보드에 맞춤'],
             ['memoryDraftOverflow', '메모리 긴 초안 편집', '긴 초안을 다듬은 뒤 저장 · 초과 분량 안내'],
             ['shortcutEditor', '단축어 편집기', '/ 단축어의 선택·전체 선택·삭제 도구'],
+            ['shortcutSorterEnabled', '단축어 정렬', '내 단축어 순서 저장 · 고정 그룹과 제작자 항목 유지'],
+            ['pinsetEnabled', '핀셋 부분 수정', '켜면 본문 길게 누르기·두 번 누르기는 글 선택 · 끄면 기존 메뉴 복원'],
             ['editTextCleaner', '수정창 단어 정리', '치환·삭제·미리보기·되돌리기'],
             ['editPasteFix', '수정창 줄바꿈 보존', '붙여넣을 때 빈 줄이 늘어나는 현상 보정'],
             ['selectionTextCounter', '선택 글자수', '선택한 부분의 글자수 표시'],
@@ -10436,6 +11382,11 @@
                     return true;
                 }
                 copyTextToClipboard(value).then(ok => showToast(ok ? 'API 키 복사됨' : '복사 실패'));
+                return true;
+            }
+            if (action === 'addon-sorter' || action === 'addon-pinset') {
+                toggleSettingsPanel(false);
+                cmuOpenAddon(action === 'addon-pinset' ? 'pinset' : 'sorter');
                 return true;
             }
             if (action === 'wrapper-settings') {
@@ -11862,6 +12813,8 @@
         themeButton: true,
         episodeModeButton: true,
         inputWrapperButton: true,
+        shortcutSorterButton: true,
+        pinsetButton: true,
 
         guideButton: true,
         profileButton: true,
@@ -11941,6 +12894,9 @@
         catch (_) { }
     }
     const SIDE_ICON = {
+        shortcutSorter: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4v16m-3-3 3 3 3-3M15 4h6M15 9h4M15 14h2"/></svg>',
+        pinset: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="m8.2 8.2 12.3 12.3M14 10l6.5-6.5M8.2 15.8 11 13"/></svg>',
+
         inputWrapper: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 7-5 5 5 5m10-10 5 5-5 5M14 4l-4 16"/></svg>',
         aiWriter: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 17-1 4 4-1L20 7l-3-3Z"/><path d="m14 7 3 3M4 5h6M4 9h4"/></svg>',
         model: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="chud-btn-icon"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"></path><path d="M12 12l8-4.5"></path><path d="M12 12v9"></path><path d="M12 12L4 7.5"></path></svg>',
@@ -11966,6 +12922,7 @@
         wishManager: '<svg class="chud-btn-icon chud-wish-heart-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21.35 10.55 20.03C5.4 15.36 2 12.27 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.77-3.4 6.86-8.55 11.54L12 21.35Z"/></svg>',
     };
     function isOwnElement(el) {
+        if (el?.closest?.('[data-cmu-addon-ui], .cpn-ui, .cpn-badge, #cpn-host')) return true;
         return !!el?.closest?.(`#${ID.panel}, #${ID.toolbarWrapper}, #chud-infobar, #chud-sidebar, #chud-info-menu, #chud-side-menu, #igx-live-popup, #cmu-compact-model-menu, #cerc-panel, #ciw-settings-overlay, #ciw-selection-bar, #ciw-toolbar-wrapper, #rpcm-overlay, #csp-v35-root`);
     }
     function fireClickSequence(el) {
@@ -12617,6 +13574,8 @@
             themeButton: true,
             episodeModeButton: true,
             inputWrapperButton: true,
+        shortcutSorterButton: true,
+        pinsetButton: true,
 
             guideButton: true,
             profileButton: true,
@@ -14689,6 +15648,8 @@
                 themeButton: makeSideButton('themeButton', 'chud-theme-btn', '라이트/다크 테마 전환', QUICK_MODE_ICON[getQuickThemeMode()], toggleQuickTheme),
                 episodeModeButton: makeSideButton('episodeModeButton', 'chud-episode-mode-btn', '소설형/채팅형 전환', QUICK_MODE_ICON[getQuickEpisodeMode()], toggleQuickEpisodeMode),
 
+                shortcutSorterButton: makeSideButton('shortcutSorterButton', 'chud-shortcut-sorter-btn', '단축어 정렬', SIDE_ICON.shortcutSorter, () => cmuOpenAddon('sorter')),
+                pinsetButton: makeSideButton('pinsetButton', 'chud-pinset-btn', '핀셋 부분 수정 켜기', SIDE_ICON.pinset, () => cmuOpenAddon('pinset')),
                 inputWrapperButton: makeSideButton('inputWrapperButton', 'chud-input-wrapper-btn', '선택한 글 감싸기', SIDE_ICON.inputWrapper, () => CMU_TEXT_TOOLS.wrapper?.show()),
                 guideButton: makeSideButton('guideButton', 'chud-guide-btn', '플레이 가이드', SIDE_ICON.guide, () => clickFirst([/플레이\s*가이드/, /가이드/], '플레이 가이드')),
                 profileButton: makeSideButton('profileButton', 'chud-native-profile-btn', '크랙 기본 프로필', SIDE_ICON.profile, () => clickFirst([/대화\s*프로필/, /프로필/], '대화 프로필')),
@@ -14715,7 +15676,7 @@
             buttons.profileButton.dataset.sideKey = 'nativeProfileButton';
             buttons.profileBoxButton.dataset.cpmExternalProfileLauncher = 'true';
             DASH_SIDE.btns = buttons;
-            content.append(buttons.modelButton, buttons.themeButton, buttons.episodeModeButton, buttons.inputWrapperButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.proseStyleButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.aiWriterButton, buttons.gameHudButton);
+            content.append(buttons.modelButton, buttons.themeButton, buttons.episodeModeButton, buttons.inputWrapperButton, buttons.shortcutSorterButton, buttons.pinsetButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.proseStyleButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.aiWriterButton, buttons.gameHudButton);
             bar.append(content);
         }
         if (bar.parentElement !== shell)
@@ -14752,6 +15713,7 @@
             row.style.display = available[key] !== false ? 'flex' : 'none';
         });
         syncCmuQuickButtons();
+        cmuSyncAddonButtons();
     }
     function syncSideMenu() {
         const visible = sideLoadVisible();
@@ -19083,7 +20045,7 @@
     }
   `);
     function cmuMessageActionsSyncRootClass() {
-        document.documentElement.classList.toggle('cmu-message-actions-enabled', !!settings.messageLongPressMenu);
+        document.documentElement.classList.toggle('cmu-message-actions-enabled', shouldRun() && !!settings.messageLongPressMenu && !cmuPinsetSelecting());
     }
     function cmuMessageActionsOptionCount() {
         return [
@@ -19105,6 +20067,7 @@
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     }
     function cmuMessageActionsRootFromTarget(target) {
+        if (cmuPinsetSelecting()) return null;
         if (!(target instanceof Element))
             return null;
         if (LOG_CAPTURE.active || LOG_CAPTURE.previewOpen)
@@ -19460,7 +20423,7 @@
         }
     }
     async function cmuMessageActionsOpen(root, clientX, clientY) {
-        if (!settings.messageLongPressMenu || !isChatRoomPath() || CMU_MESSAGE_ACTIONS.opening)
+        if (cmuPinsetSelecting() || !settings.messageLongPressMenu || !isChatRoomPath() || CMU_MESSAGE_ACTIONS.opening)
             return false;
         if (!cmuMessageActionsOptionCount()) {
             showToast('길게 누르기 메뉴 항목이 모두 꺼져 있음');
@@ -19509,6 +20472,7 @@
         CMU_MESSAGE_ACTIONS.gesture = null;
     }
     function cmuMessageActionsBegin(event, x, y, pointerId = 0) {
+        if (cmuPinsetSelecting()) return;
         if (!settings.messageLongPressMenu || !isChatRoomPath())
             return;
         if (Date.now() < CMU_MESSAGE_ACTIONS.ignoreClickUntil)
@@ -19644,7 +20608,7 @@
             cmuGestureListen(signal, document, 'click', event => {
                 if (isCmuProtectedEditorTarget(event.target))
                     return;
-                if (Date.now() >= CMU_MESSAGE_ACTIONS.ignoreClickUntil)
+                if (cmuPinsetSelecting() || Date.now() >= CMU_MESSAGE_ACTIONS.ignoreClickUntil)
                     return;
                 if (event.target?.closest?.('#cmu-message-select-copy, [data-radix-popper-content-wrapper]'))
                     return;
@@ -19731,6 +20695,7 @@
         syncCmuMessageTextRoots(reason === 'route' || reason === 'visible-resume' || !CMU_DOM_WATCH.textRoots.size ? null : []);
         const late = /^late-/.test(String(reason || ''));
         applyState();
+        CMU_ADDONS.pinset?.refresh();
         if (cmuUserNoteGuardActive())
             return;
         if (!late)
@@ -19773,7 +20738,7 @@
         if (!late)
             scheduleBadgeScan();
     }
-    const CMU_SELF_SELECTOR = `#${ID.panel}, #${ID.toolbarWrapper}, #${ID.topZone}, #${ID.leftMenuZone}, #${ID.rightMenuZone}, #${ID.menuSwipeZone}, #${ID.toast}, #${ID.dashboard}, #${ID.dashboardSidebar}, #${ID.logCaptureBar}, #${ID.logCapturePreview}, #${ID.inputCounterWrap}, #chud-info-menu, #chud-side-menu, #igx-live-popup, #cmu-compact-model-menu, .cmi-model-badge, .cmi-model-slot, .cac-answer-cost, #cmu-message-select-copy, .cmu-message-badge, .cmu-user-badge-row, .cmu-sce-ui, #cerc-panel, [data-cerc-trigger], #ciw-toolbar-wrapper, #ciw-selection-bar, #ciw-settings-overlay, #ciw-toast, #crack-selection-text-counter-popup`;
+    const CMU_SELF_SELECTOR = `[data-cmu-addon-ui], .cpn-ui, .cpn-badge, #cpn-host, #${ID.panel}, #${ID.toolbarWrapper}, #${ID.topZone}, #${ID.leftMenuZone}, #${ID.rightMenuZone}, #${ID.menuSwipeZone}, #${ID.toast}, #${ID.dashboard}, #${ID.dashboardSidebar}, #${ID.logCaptureBar}, #${ID.logCapturePreview}, #${ID.inputCounterWrap}, #chud-info-menu, #chud-side-menu, #igx-live-popup, #cmu-compact-model-menu, .cmi-model-badge, .cmi-model-slot, .cac-answer-cost, #cmu-message-select-copy, .cmu-message-badge, .cmu-user-badge-row, .cmu-sce-ui, #cerc-panel, [data-cerc-trigger], #ciw-toolbar-wrapper, #ciw-selection-bar, #ciw-settings-overlay, #ciw-toast, #crack-selection-text-counter-popup`;
     function isSelfMutation(m) {
         const el = m.target instanceof Element ? m.target : m.target?.parentElement;
         return !!el?.closest?.(CMU_SELF_SELECTOR);
@@ -19989,13 +20954,14 @@
         }
         if (groups.length || markdowns.length)
             queueCmuIncrementalMessageWork(groups, markdowns);
+        if (groups.length || markdowns.length || popupDirty || themeDirty) CMU_ADDONS.pinset?.refresh(themeDirty ? null : groups);
     }
     function cmuMessageDomWorkWanted() {
-        return shouldRun() && isChatRoomPath() && !!(settings.wideView || settings.themeSkin || settings.badgeChars || settings.badgeTime || settings.modelIcon || settings.answerCost);
+        return shouldRun() && isChatRoomPath() && !!(settings.wideView || settings.themeSkin || settings.badgeChars || settings.badgeTime || settings.modelIcon || settings.answerCost || settings.pinsetEnabled);
     }
     function cmuMessageTextWorkWanted() {
         // Time, model and API-based character/cost badges do not consume streaming text.
-        return themeSkinEnabled();
+        return themeSkinEnabled() || cmuPinsetSelecting();
     }
     function cmuExpectChildChange(target, added, removed) {
         if (!bootObserver || !target?.isConnected)
@@ -21128,6 +22094,9 @@
         CMU_KEYBOARD_COMPOSER.reset();
         CMU_KEYBOARD_COMPOSER.schedule();
         CMU_TEXT_TOOLS.reset(); CMU_TEXT_TOOLS.sync();
+        CMU_ADDONS.sorter?.close?.();
+        CMU_ADDONS.pinset?.refresh();
+        cmuSyncAddons();
         cmuAbortOtherRooms();
         CMU_DOM_WATCH.roomPanelMissUntil = 0;
         CMU_DOM_WATCH.roomPanelSearchRoot = null;
@@ -25566,7 +26535,7 @@
     }
 
     function getSelectionInfo() {
-        if (!cmuTextToolEnabled('selectionTextCounter') || document.activeElement?.closest?.('#cmu-settings-panel, #ciw-settings-overlay, #cerc-panel')) return null;
+        if (!cmuTextToolEnabled('selectionTextCounter') || document.activeElement?.closest?.('#cmu-settings-panel, #ciw-settings-overlay, #cerc-panel, [data-cmu-addon-ui], #cpn-host')) return null;
         if (document.activeElement?.matches?.('input[type=password]')) return null;
         return getActiveInputSelection() || getWindowSelectionInfo();
     }
@@ -25940,7 +26909,7 @@
   }
 
   function isAllowedEditor(editor) {
-    if (!cmuTextToolEnabled('inputWrapper') || editor?.closest?.('#cmu-settings-panel, #cerc-panel, #cmu-message-select-copy, [data-cmu-memory-kind]')) return false;
+    if (!cmuTextToolEnabled('inputWrapper') || editor?.closest?.('#cmu-settings-panel, #cerc-panel, #cmu-message-select-copy, [data-cmu-memory-kind], [data-cmu-addon-ui], #cpn-host')) return false;
     if (!editor || !editor.isConnected || !isVisible(editor)) return false;
     if (isOwnUiNode(editor)) return false;
 
@@ -27168,7 +28137,7 @@
 
     // Reuse CMU's native message activation rather than adding a second menu.
     cmuListen(document, 'dblclick', async event => {
-        if (!cmuTextToolEnabled('messageDoubleClickEdit') || event.button !== 0 || CMU_MESSAGE_ACTIONS.opening) return;
+        if (cmuPinsetSelecting() || !cmuTextToolEnabled('messageDoubleClickEdit') || event.button !== 0 || CMU_MESSAGE_ACTIONS.opening) return;
         const target = event.target instanceof Element ? event.target : null;
         if (!target || target.closest('button,a,input,textarea,[contenteditable="true"],[role="dialog"],pre,code,#cmu-settings-panel,#cerc-panel,#ciw-settings-overlay')) return;
         const root = target.closest('[data-message-group-id]');
@@ -27450,6 +28419,2580 @@
       }
     `);
 
+
+    /* CMU integrated addon factories: source credits retained in each module. */
+// Pinset 0.1.5 integrated with CMU: event-driven lifecycle, guarded saves, mobile viewport.
+function createCmuPinset({ isEnabled = () => true, notify = () => {}, onStateChange = () => {}, onDisable = () => {} } = {}) {
+  const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  const owner = {};
+  let running = false;
+  let blockedNoticeShown = false;
+  let epoch = 0;
+  const timers = new Set();
+  const listeners = [];
+  const valueListeners = new Map();
+  const later = (fn, ms = 0) => {
+    if (!running) return 0;
+    const id = setTimeout(() => { timers.delete(id); if (running) fn(); }, ms);
+    timers.add(id); return id;
+  };
+  const clearLater = id => { clearTimeout(id); timers.delete(id); };
+  function listen(target, type, handler, options) {
+    target?.addEventListener(type, handler, options);
+    listeners.push(() => target?.removeEventListener(type, handler, options));
+  }
+  function watchValue(key, handler) {
+    if (!running || valueListeners.has(key) || typeof GM_addValueChangeListener !== 'function') return;
+    try {
+      const id = GM_addValueChangeListener(key, (...args) => { if (running) handler(...args); });
+      valueListeners.set(key, id);
+    } catch (_) {}
+  }
+  function validTarget(target) {
+    return running && isEnabled() && target.chatId === here().chatId && target.epoch === epoch;
+  }
+  function assertTarget(target) {
+    if (!validTarget(target)) throw new UserError('핀셋이 꺼졌거나 방이 바뀌어서 취소했어요. 다시 선택해 주세요.');
+  }
+  const VERSION = '0.1.5-cmu.1';
+  const LOG = '[핀셋]';
+  const API_BASE = 'https://crack-api.wrtn.ai/crack-gen';
+  const SETTINGS_KEY = 'cpn:settings:v1';
+  const INDEX_KEY = 'cpn:index:v1';
+  const chatKey = chatId => `cpn:chat:${chatId}`;
+  const LIMITS = Object.freeze({ edits: 30, undo: 10, messages: 120, chats: 150, soft: 8000 });
+  const ID_RE = /^[a-f0-9]{24}$/i;
+  const MSG_URL = /\/(?:v3\/chats|character-chats)\/([a-f0-9]{24})\/messages\/([a-f0-9]{24})(?:[?#]|$)/i;
+
+  let debug = (() => {
+    try { return pageWindow.localStorage.getItem('cpn:debug') === '1'; } catch (error) { return false; }
+  })();
+  const log = (...args) => { if (debug) console.log(LOG, ...args); };
+
+  class UserError extends Error {}
+
+  // ---------- 저장 ----------
+
+  function readValue(key, fallback) {
+    try {
+      const value = GM_getValue(key, fallback);
+      return value && typeof value === 'object' ? value : fallback;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function writeValue(key, value) {
+    try { GM_setValue(key, value); } catch (error) { console.warn(LOG, 'save failed', error); }
+  }
+
+  function deleteValue(key) {
+    try { GM_deleteValue(key); } catch (error) { writeValue(key, {}); }
+  }
+
+  const settings = { paint: true, ...readValue(SETTINGS_KEY, {}) };
+  function watchSettings() {
+    watchValue(SETTINGS_KEY, (name, before, after, remote) => {
+      if (!remote || !after || typeof after !== 'object') return;
+      settings.paint = after.paint !== false;
+      schedulePaint(0);
+    });
+  }
+  const books = new Map();
+  const dirty = new Map();
+
+
+  // 저장된 기록 가운데 모양이 이상한 것(손상·다른 판)은 버립니다.
+  const isRecord = r => Boolean(r && typeof r === 'object' && typeof r.base === 'string' && typeof r.current === 'string' && Array.isArray(r.edits) && (r.spans === undefined || Array.isArray(r.spans)));
+  function cleanBook(records) {
+    const out = {};
+    if (records && typeof records === 'object' && !Array.isArray(records)) {
+      for (const [id, record] of Object.entries(records)) if (ID_RE.test(id) && isRecord(record)) out[id] = record;
+    }
+    return out;
+  }
+
+  // 방마다 { 메시지id: { base, current, spans, edits, at } }
+  // base: 처음 본 원문, current: 마지막으로 확인한 서버 원문, spans: current 안에서 바뀐 자리 [시작, 끝] (끝=시작이면 지운 자리)
+  function book(chatId) {
+    if (!chatId) return {};
+    if (!books.has(chatId)) {
+      books.set(chatId, cleanBook(readValue(chatKey(chatId), {})));
+      // Subscribe only to the current room; old-room watches and caches are released on route changes.
+      if (chatId === here().chatId) watchValue(chatKey(chatId), (name, before, after, remote) => {
+        if (!remote) return;
+        books.delete(chatId);
+        schedulePaint();
+      });
+    }
+    return books.get(chatId);
+  }
+
+  function putRecord(chatId, msgId, record) {
+    const records = book(chatId);
+    if (record) records[msgId] = record;
+    else delete records[msgId];
+    const changes = dirty.get(chatId) || new Map();
+    changes.set(msgId, record || null);
+    dirty.set(chatId, changes);
+  }
+
+  // 다른 탭이 그사이 저장한 기록을 지우지 않도록, 저장된 것을 다시 읽어 이 탭이 바꾼 메시지만 덮어씁니다.
+  function saveBook(chatId) {
+    const records = cleanBook(readValue(chatKey(chatId), {}));
+    (dirty.get(chatId) || new Map()).forEach((record, msgId) => {
+      if (record) records[msgId] = record;
+      else delete records[msgId];
+    });
+    dirty.delete(chatId);
+    const ids = Object.keys(records);
+    if (ids.length > LIMITS.messages) {
+      ids.sort((a, b) => (records[b].at || 0) - (records[a].at || 0)).slice(LIMITS.messages).forEach(id => delete records[id]);
+    }
+    books.set(chatId, records);
+    const index = readValue(INDEX_KEY, {});
+    if (Object.keys(records).length) {
+      writeValue(chatKey(chatId), records);
+      index[chatId] = Date.now();
+    } else {
+      deleteValue(chatKey(chatId));
+      delete index[chatId];
+    }
+    const chats = Object.keys(index);
+    if (chats.length > LIMITS.chats) {
+      chats.sort((a, b) => index[b] - index[a]).slice(LIMITS.chats).forEach(id => {
+        delete index[id];
+        books.delete(id);
+        deleteValue(chatKey(id));
+      });
+    }
+    writeValue(INDEX_KEY, index);
+  }
+
+  // ---------- 크랙 API (React 내부를 못 찾을 때만 씁니다) ----------
+
+  function here() {
+    const path = location.pathname;
+    let m = path.match(/^\/stories\/([^/]+)\/episodes\/([a-f0-9]{24})/i);
+    if (m) return { kind: 'story', chatId: m[2] };
+    m = path.match(/^\/characters\/([^/]+)\/chats\/([a-f0-9]{24})/i);
+    if (m) return { kind: 'character', chatId: m[2] };
+    m = path.match(/^\/u\/([^/]+)\/c\/([a-f0-9]{24})/i);
+    if (m) return { kind: 'character', chatId: m[2] };
+    return { kind: '', chatId: '' };
+  }
+
+  const messagePath = (h, id) => (h.kind === 'character' ? `/character-chats/${h.chatId}/messages/${id}` : `/v3/chats/${h.chatId}/messages/${id}`);
+
+  function getCookie(name) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = document.cookie.match(new RegExp('(?:^|; )' + escaped + '=([^;]*)'));
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  async function api(method, path, body) {
+    const headers = { accept: 'application/json, text/plain, */*', platform: 'web', 'wrtn-locale': 'ko-KR' };
+    const token = getCookie('access_token');
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (body) headers['content-type'] = 'application/json';
+    let response;
+    try {
+      response = await fetch(API_BASE + path, { method, headers, credentials: 'include', body: body ? JSON.stringify(body) : undefined });
+    } catch (error) {
+      throw new UserError('크랙 서버에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.');
+    }
+    const text = await response.text();
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch (error) { json = null; }
+    if (!response.ok) throw new UserError(json?.message ? `크랙이 거절했어요: ${json.message}` : `크랙 서버 오류 (${response.status})`);
+    return json && typeof json === 'object' && 'data' in json ? json.data : json;
+  }
+
+  // ---------- 크랙 내부 연결 (React fiber) ----------
+  // 크랙 화면은 메시지 저장소(zustand)에서 그려집니다. 크랙이 쓰는 updateMessage를 그대로 부르면 새로고침 없이 바뀝니다.
+
+  const rawEl = el => (el && el.wrappedJSObject) || el;
+
+  function fiberOf(el) {
+    for (let cur = el, depth = 0; cur && depth < 15; cur = cur.parentElement, depth += 1) {
+      const raw = rawEl(cur);
+      let key = null;
+      try { key = Object.keys(raw).find(name => name.startsWith('__reactFiber$') || name.startsWith('__reactInternalInstance$')); } catch (error) { key = null; }
+      if (key && raw[key]) return raw[key];
+    }
+    return null;
+  }
+
+  function propValues(fiber) {
+    const values = [];
+    for (const candidate of [fiber, fiber?.alternate]) {
+      if (!candidate) continue;
+      for (const props of [candidate.memoizedProps, candidate.pendingProps]) {
+        const value = props?.value;
+        if (value && typeof value === 'object' && !values.includes(value)) values.push(value);
+      }
+    }
+    return values;
+  }
+
+  // 화면 요소에 붙은 fiber는 처음 만들어질 때의 것이라, 위로 따라가다 보면 한 번 전 렌더의 값(alternate)을 만날 수 있습니다.
+  // 맨 위(HostRoot)가 지금 화면의 것이 아니면 짝(alternate) 쪽 값을 씁니다.
+  function isCurrentTree(fiber) {
+    let top = fiber;
+    for (let depth = 0; top.return && depth < 3000; depth += 1) top = top.return;
+    const current = top.stateNode && top.stateNode.current;
+    return !current || current === top;
+  }
+  const liveProps = fiber => ((fiber.alternate && !isCurrentTree(fiber) ? fiber.alternate : fiber).memoizedProps || fiber.memoizedProps);
+
+  const isMapLike = value => Boolean(value && typeof value.get === 'function' && typeof value.has === 'function' && typeof value.forEach === 'function');
+  const isActions = value => typeof value?.updateMessage === 'function' && typeof value.resyncMessage === 'function' && typeof value.removeMessage === 'function';
+  const isChatState = value => Boolean(value && typeof value.status === 'string' && 'selectedMessageId' in value && 'chatId' in value);
+  const isStore = value => {
+    if (!value || typeof value.getState !== 'function' || typeof value.subscribe !== 'function') return false;
+    try { return isMapLike(value.getState()?.messages); } catch (error) { return false; }
+  };
+
+  // ChatActions는 크랙이 다시 그릴 때마다 새로 만들어지므로 쓸 때마다 다시 찾습니다.
+  function findBridge(anchor) {
+    const h = here();
+    const start = fiberOf(anchor) || fiberOf(document.querySelector('[data-message-group-id] .wrtn-markdown')) || fiberOf(document.querySelector('[data-message-group-id]'));
+    const out = { fiber: Boolean(start), actions: null, state: null, store: null, mismatch: false };
+    for (let fiber = start, depth = 0; fiber && depth < 500; fiber = fiber.return, depth += 1) {
+      for (const value of propValues(fiber)) {
+        try {
+          for (const [slot, test] of [['actions', isActions], ['state', isChatState], ['store', isStore]]) {
+            if (out[slot] || !test(value)) continue;
+            const live = liveProps(fiber)?.value;
+            out[slot] = live && test(live) ? live : value;
+          }
+        } catch (error) { /* 무시 */ }
+      }
+      if (out.actions && out.state && out.store) break;
+    }
+    if (out.state && h.chatId && String(out.state.chatId) !== h.chatId) {
+      out.mismatch = true;
+      out.actions = null;
+    }
+    if (out.store) watchStore(out.store);
+    return out;
+  }
+
+  // 메시지 한 개의 화면 = 그룹 안의 .wrtn-markdown 전부. 캐릭터 채팅은 문단마다 말풍선(.wrtn-markdown)이 따로 있습니다.
+  const groupOf = node => (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest('[data-message-group-id]') || null;
+  const mdsOf = group => Array.from(group.querySelectorAll('.wrtn-markdown'));
+
+  // 그룹이 어느 메시지인지 찾습니다. 그룹 id는 첫 메시지 id라서, 답변 비교 중이면 실제로 보이는 메시지와 다를 수 있습니다.
+  // wanted가 있으면 그 id가 이 그룹에 없을 때 바로 null을 돌려줍니다(칠하기를 가볍게).
+  function messageOf(group, bridge, wanted) {
+    if (!group) return null;
+    const groupId = group.dataset.messageGroupId;
+    const mds = mdsOf(group);
+    if (!mds.length) return null;
+    let shown = null;
+    let ids = null;
+    for (let fiber = fiberOf(mds[0]), depth = 0; fiber && depth < 80; fiber = fiber.return, depth += 1) {
+      const raw = fiber.memoizedProps;
+      if (!raw || typeof raw !== 'object') continue;
+      if (shown === null && typeof raw.content === 'string' && 'isUserMessage' in raw) shown = liveProps(fiber)?.content ?? raw.content;
+      if (Array.isArray(raw.messageIds)) {
+        ids = Array.from(liveProps(fiber)?.messageIds || raw.messageIds);
+        break;
+      }
+    }
+    const state = bridge?.store ? bridge.store.getState() : null;
+    if (!ids && state?.messageGroups) {
+      const found = Array.from(state.messageGroups).find(item => item && item[0] === groupId);
+      if (found) ids = Array.from(found);
+    }
+    if (!ids) ids = [groupId];
+    if (wanted && !ids.some(id => wanted.has(id))) return null;
+    let message = null;
+    if (state) {
+      const candidates = ids.map(id => state.messages.get(id)).filter(item => item && typeof item.content === 'string');
+      // 같은 글의 답변이 여럿이면 크랙이 고른 답변(selectedMessageId), 없으면 마지막 답변을 씁니다.
+      const selectedId = bridge?.state?.selectedMessageId;
+      const pick = list => list.find(item => item._id === selectedId) || list[list.length - 1] || null;
+      // props 글과 정확히 같은지는 말풍선이 하나일 때만 믿습니다(말풍선이 여럿이면 props는 첫 문단뿐).
+      message = shown !== null && mds.length === 1 ? pick(candidates.filter(item => item.content === shown)) : null;
+      if (!message && candidates.length > 1) {
+        // 문단별 말풍선이라 props가 문단 하나뿐이면, 화면 글과 가장 잘 맞는 답변을 고릅니다. 점수가 같으면 위 규칙으로 고릅니다.
+        let best = -1;
+        let ties = [];
+        for (const item of candidates) {
+          const score = coverage(item.content, mds);
+          if (score > best + 1e-9) {
+            best = score;
+            ties = [item];
+          } else if (Math.abs(score - best) <= 1e-9) ties.push(item);
+        }
+        message = best < 0.9 ? null : pick(ties);
+      }
+      if (!message && candidates.length) {
+        const index = ids.indexOf(bridge.state?.selectedMessageId ?? '');
+        message = state.messages.get(ids[index >= 0 ? index : ids.length - 1]) || candidates[candidates.length - 1];
+      }
+    }
+    return {
+      group,
+      mds,
+      groupId,
+      ids,
+      msgId: message?._id || (ids.length === 1 ? ids[0] : null),
+      content: typeof message?.content === 'string' ? message.content : shown,
+      fromStore: Boolean(message),
+    };
+  }
+
+  const streamingNow = () => Boolean(document.querySelector('.wrtn-markdown .animate'));
+  const nativeEditorOpen = group => Boolean(group?.querySelector('.ProseMirror:not(.__chat_input_textarea), [contenteditable="true"]:not(.__chat_input_textarea)'));
+  const normalize = text => String(text ?? '').replace(/\r\n?/g, '\n').replace(/\s+$/, '');
+
+  // ---------- 원문 ↔ 화면 글자 맞추기 ----------
+
+  // 화면에 안 그려지는 것: 링크 정의 줄([//]: # (…), [//]: <> (…)), 이미지, 링크 주소 부분(](…)), 줄 앞 목록·인용·제목 기호.
+  // HTML 주석은 크랙이 글자 그대로 보여 주므로, 화면에 '<!--'가 없을 때(다른 확프가 지운 경우)만 뺍니다.
+  // 정의 줄의 제목 (…)은 다음 줄이나 여러 줄에 걸칠 수도 있습니다(빈 줄 전까지). 크랙도 이것을 숨깁니다.
+  const LINK_DEF_RE = /^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\n?[ \t]*(?:<[^>\n]*>|[^\s<>]+)(?:[ \t]*\n?[ \t]*(?:"(?:[^"\n]|\n(?![ \t]*\n))*"|'(?:[^'\n]|\n(?![ \t]*\n))*'|\((?:[^()\n]|\n(?![ \t]*\n))*\)))?[ \t]*(?:\n|$)/gm;
+  // 표의 정렬 줄(|:---|---:|)
+  const TABLE_DELIM_RE = /^[ \t]*\|?(?:[ \t]*:?-+:?[ \t]*\|)+(?:[ \t]*:?-+:?[ \t]*)?$/gm;
+  const IMAGE_RE = /!\[[^\]\n]*\]\([^)\n]*\)/g;
+  const LINK_DEST_RE = /\]\([^)\n]*\)/g;
+  const COMMENT_RE = /<!--[\s\S]*?-->/g;
+  const BLOCK_MARK_RE = /^[ \t]*(?:>[ \t]?|(?:\d{1,9}[.)]|[-+*]|#{1,6})[ \t]+)+/gm;
+
+  // 코드블록(``` 또는 ~~~) 안쪽 범위. 그 안의 '- '·'1. '·'[x]: …' 같은 줄은 화면에 글자 그대로 보입니다.
+  // 여는 줄의 정보 문자열(```INFO)은 크랙이 코드블록 머리표로 보여 주므로 빼지 않습니다.
+  function fenceRanges(src) {
+    const out = [];
+    let open = null;
+    const re = /^[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$/gm;
+    let m;
+    while ((m = re.exec(src))) {
+      if (!open) {
+        if (m[1][0] === '`' && m[2].includes('`')) continue;
+        open = { start: m.index + m[0].length, ch: m[1][0], len: m[1].length };
+      } else if (m[1][0] === open.ch && m[1].length >= open.len && !m[2].trim()) {
+        out.push([open.start, m.index]);
+        open = null;
+      }
+    }
+    if (open) out.push([open.start, src.length]);
+    return out;
+  }
+
+  function stripHidden(src, ren) {
+    const drop = new Uint8Array(src.length);
+    const fences = fenceRanges(src);
+    const inFence = i => fences.some(([s, e]) => i >= s && i < e);
+    const res = [LINK_DEF_RE, IMAGE_RE, LINK_DEST_RE, BLOCK_MARK_RE, TABLE_DELIM_RE];
+    if (!ren.includes('<!--')) res.push(COMMENT_RE);
+    for (const re of res) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(src))) {
+        if (!m[0].length) {
+          re.lastIndex += 1;
+          continue;
+        }
+        if (inFence(m.index)) continue;
+        // 문단에 바로 붙은 정의 줄은 문단을 끊지 못해 화면에 글자 그대로 보입니다.
+        if (re === LINK_DEF_RE && ren.includes(m[0].trim())) continue;
+        // 문단 바로 다음 줄의 '2. '처럼 1이 아닌 번호도 문단을 끊지 못해 글자 그대로 보입니다.
+        if (re === BLOCK_MARK_RE && m.index > 0 && /^[ \t]*\d/.test(m[0]) && !/^[ \t]*0*1[.)]/.test(m[0])) {
+          const prevEnd = m.index - 1;
+          const prevLine = src.slice(src.lastIndexOf('\n', prevEnd - 1) + 1, prevEnd);
+          if (prevLine.trim() && !/^[ \t]{0,3}(?:\d{1,9}[.)]|[-+*]|#{1,6}|`{3,}|~{3,})(?:[ \t]|$)/.test(prevLine) && !/^[ \t]*\|/.test(prevLine)) continue;
+        }
+        drop.fill(1, m.index, m.index + m[0].length);
+      }
+    }
+    const keep = [];
+    const parts = [];
+    for (let i = 0; i < src.length; i += 1) {
+      if (drop[i]) continue;
+      keep.push(i);
+      parts.push(src[i]);
+    }
+    return { text: parts.join(''), keep };
+  }
+
+  const SKIP_SEL = 'button, svg, style, script, textarea, input, select, [aria-hidden="true"], .cpn-ui';
+
+  function renderedText(mds) {
+    const nodes = [];
+    let text = '';
+    for (const md of mds) {
+      const walker = document.createTreeWalker(md, NodeFilter.SHOW_TEXT, {
+        acceptNode: node => {
+          const skip = node.parentElement?.closest(SKIP_SEL);
+          return skip && md.contains(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+        },
+      });
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        nodes.push({ node, start: text.length });
+        text += node.nodeValue;
+      }
+    }
+    return { text, nodes };
+  }
+
+  const SYNTAX = new Set('*_~`#>|-+=[]()!\\'.split(''));
+  const SPACE = /\s/;
+  const LETTER = /[\p{L}\p{N}]/u;
+  const entityBox = document.createElement('textarea');
+  function decodeEntity(entity) {
+    entityBox.innerHTML = entity;
+    return entityBox.value;
+  }
+
+  // 화면 글자는 원문에서 서식 기호만 빠진 모양이라, 앞에서부터 짝을 지어 갑니다. 어긋나면 다음 몇 글자를 원문에서 찾아 다시 맞춥니다.
+  // 그렇게 건너뛰면서 글자(기호가 아닌 것)를 넘긴 자리는 jumps에 표시해 두고, 그 자리를 고칠 때는 원문 창으로 넘깁니다.
+  function align(src, ren) {
+    const r2s = new Int32Array(ren.length).fill(-1);
+    const jumps = new Uint8Array(ren.length);
+    let i = 0;
+    let j = 0;
+    while (j < ren.length && i < src.length) {
+      const a = src[i];
+      const c = ren[j];
+      // 문자 참조(&amp; 등)를 먼저 봅니다. '&' 한 글자만 짝지으면 'amp;'가 남거나 엉뚱한 곳으로 건너뜁니다.
+      // 인라인 코드처럼 참조가 화면에도 그대로 보이면 보통 글자로 맞춥니다.
+      if (a === '&') {
+        const entity = /^&(#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i.exec(src.slice(i, i + 12));
+        if (entity && !ren.startsWith(entity[0], j) && decodeEntity(entity[0]) === c) {
+          jumps[j] = 1;
+          r2s[j] = i;
+          i += entity[0].length;
+          j += 1;
+          continue;
+        }
+      }
+      if (a === c) {
+        r2s[j] = i;
+        i += 1;
+        j += 1;
+        continue;
+      }
+      if (SPACE.test(c) && !SPACE.test(a) && !SYNTAX.has(a)) {
+        j += 1;
+        continue;
+      }
+      if (SYNTAX.has(a) || SPACE.test(a)) {
+        if (a === '\\') jumps[j] = 1;
+        i += 1;
+        continue;
+      }
+      const probe = ren.slice(j, j + 6);
+      const k = probe.length >= 2 ? src.indexOf(probe, i) : -1;
+      if (k >= 0 && k - i < 600) {
+        if (LETTER.test(src.slice(i, k))) jumps[j] = 1;
+        i = k;
+        continue;
+      }
+      jumps[j] = 1;
+      j += 1;
+    }
+    return { r2s, jumps };
+  }
+
+  // 뒤에서부터 맞춘 결과. 앞에서 맞춘 자리와 다르면 숨은 글(주석 등)에 같은 말이 있어 헷갈린 것이므로 원문 창으로 넘깁니다.
+  function alignBack(src, ren) {
+    const rev = text => text.split('').reverse().join('');
+    const { r2s } = align(rev(src), rev(ren));
+    const out = new Int32Array(ren.length).fill(-1);
+    for (let j = 0; j < ren.length; j += 1) {
+      const s = r2s[ren.length - 1 - j];
+      out[j] = s < 0 ? -1 : src.length - 1 - s;
+    }
+    return out;
+  }
+
+  function offsetOf(nodes, root, container, offset) {
+    if (container.nodeType === Node.TEXT_NODE) {
+      const hit = nodes.find(item => item.node === container);
+      if (hit) return hit.start + offset;
+    }
+    const before = document.createRange();
+    before.setStart(root, 0);
+    try { before.setEnd(container, offset); } catch (error) { return -1; }
+    let pos = 0;
+    for (const item of nodes) {
+      if (before.intersectsNode(item.node)) pos = item.start + item.node.nodeValue.length;
+      else break;
+    }
+    return pos;
+  }
+
+  function rangeFor(nodes, start, end) {
+    const locate = (pos, isEnd) => {
+      let lo = 0;
+      let hi = nodes.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (nodes[mid].start < pos || (!isEnd && nodes[mid].start === pos)) lo = mid;
+        else hi = mid - 1;
+      }
+      const item = nodes[lo];
+      return [item.node, Math.max(0, Math.min(item.node.nodeValue.length, pos - item.start))];
+    };
+    if (!nodes.length || end <= start) return null;
+    const range = document.createRange();
+    const [sn, so] = locate(start, false);
+    const [en, eo] = locate(end, true);
+    try {
+      range.setStart(sn, so);
+      range.setEnd(en, eo);
+    } catch (error) {
+      return null;
+    }
+    return range;
+  }
+
+  // 선택한 화면 글자 → 원문 위치. 결과의 oldText는 '보이는 글자(와 공백)'만 모은 것이고, vpos는 그 글자들의 원문 위치입니다.
+  function mapSelection(mds, range, src) {
+    const { text: ren, nodes } = renderedText(mds);
+    let rs = offsetOf(nodes, mds[0], range.startContainer, range.startOffset);
+    let re = offsetOf(nodes, mds[0], range.endContainer, range.endOffset);
+    if (rs < 0 || re < 0) return { ok: false };
+    if (rs > re) [rs, re] = [re, rs];
+    while (rs < re && SPACE.test(ren[rs])) rs += 1;
+    while (re > rs && SPACE.test(ren[re - 1])) re -= 1;
+    if (rs >= re) return { ok: false };
+    const stripped = stripHidden(src, ren);
+    const { r2s, jumps } = align(stripped.text, ren);
+    const back = alignBack(stripped.text, ren);
+    const visible = new Uint8Array(src.length);
+    let first = -1;
+    let last = -1;
+    let missing = 0;
+    for (let j = rs; j < re; j += 1) {
+      const s = r2s[j];
+      if (jumps[j]) missing += 1;
+      if (s >= 0 && !SPACE.test(ren[j]) && back[j] !== s) missing += 1;
+      if (s < 0) {
+        if (!SPACE.test(ren[j])) missing += 1;
+        continue;
+      }
+      if (first >= 0 && s <= last) missing += 1;
+      if (first < 0) first = s;
+      last = s;
+      visible[stripped.keep[s]] = 1;
+    }
+    const shownText = ren.slice(rs, re);
+    if (first < 0) return { ok: false, shownText };
+    const a = stripped.keep[first];
+    const b = stripped.keep[last] + 1;
+    if (missing) return { ok: false, approx: [a, b], shownText };
+    const inStripped = new Uint8Array(src.length);
+    stripped.keep.forEach(index => { inStripped[index] = 1; });
+    let oldText = '';
+    const vpos = [];
+    for (let i = a; i < b; i += 1) {
+      if (visible[i] || (inStripped[i] && SPACE.test(src[i]))) {
+        oldText += src[i];
+        vpos.push(i);
+      }
+    }
+    return { ok: true, a, b, oldText, vpos, shownText };
+  }
+
+  // 화면 글자 중 원문과 짝이 맞은 비율. 화면이 정말 그 원문인지 판단하는 데 씁니다.
+  function coverage(src, mds) {
+    const { text: ren } = renderedText(mds);
+    const { r2s } = align(stripHidden(src, ren).text, ren);
+    let total = 0;
+    let hit = 0;
+    for (let j = 0; j < ren.length; j += 1) {
+      if (SPACE.test(ren[j])) continue;
+      total += 1;
+      if (r2s[j] >= 0) hit += 1;
+    }
+    return total ? hit / total : 0;
+  }
+
+  // 원문 위치(spans) → 화면 Range
+  function rangesFor(mds, record) {
+    const { text: ren, nodes } = renderedText(mds);
+    const stripped = stripHidden(record.current, ren);
+    const { r2s } = align(stripped.text, ren);
+    const s2r = new Int32Array(record.current.length).fill(-1);
+    for (let j = 0; j < r2s.length; j += 1) if (r2s[j] >= 0) s2r[stripped.keep[r2s[j]]] = j;
+    const ranges = [];
+    const cuts = [];
+    for (const [s, e] of record.spans || []) {
+      if (e > s) {
+        let runStart = -1;
+        let prev = -2;
+        const flush = () => {
+          if (runStart >= 0) {
+            const range = rangeFor(nodes, runStart, prev + 1);
+            if (range) ranges.push(range);
+          }
+        };
+        for (let i = s; i < Math.min(e, s2r.length); i += 1) {
+          const j = s2r[i];
+          if (j < 0) continue;
+          if (j !== prev + 1) {
+            flush();
+            runStart = j;
+          }
+          prev = j;
+        }
+        flush();
+      } else {
+        // 지운 자리: 같은 줄의 뒤 글자 → 같은 줄의 앞 글자 → (그래도 없으면) 줄을 넘어서 찾습니다.
+        // 줄 끝을 지웠을 때 밑줄이 다음 문단 첫 글자에 그어지지 않게 하고, 공백·줄바꿈 글자에는 긋지 않습니다.
+        const cur = record.current;
+        const shown = i => (s2r[i] >= 0 && !SPACE.test(ren[s2r[i]]) ? s2r[i] : -1);
+        let j = -1;
+        for (let i = s; i < Math.min(s2r.length, s + 40) && j < 0 && cur[i] !== '\n'; i += 1) j = shown(i);
+        for (let i = s - 1; i >= Math.max(0, s - 40) && j < 0 && cur[i] !== '\n'; i -= 1) j = shown(i);
+        for (let i = s; i < Math.min(s2r.length, s + 40) && j < 0; i += 1) j = shown(i);
+        for (let i = s - 1; i >= Math.max(0, s - 40) && j < 0; i -= 1) j = shown(i);
+        if (j >= 0) {
+          const range = rangeFor(nodes, j, j + 1);
+          if (range) cuts.push(range);
+        }
+      }
+    }
+    return { ranges, cuts };
+  }
+
+  // ---------- 바꿀 자리 계산 ----------
+
+  const isDelim = ch => ch === '*' || ch === '_' || ch === '~';
+
+  // 안전망: CommonMark 강조 규칙(process emphasis)으로 한 블록에서 짝을 못 찾아 글자로 남는 * _ 개수.
+  // 고친 뒤 이 수가 늘면 화면에 별표·밑줄이 드러나는 것이므로 원문 창으로 넘깁니다.
+  function emphasisLeft(s) {
+    const ws = c => c === undefined || /\s/.test(c);
+    const pu = c => c !== undefined && /[\p{P}\p{S}]/u.test(c);
+    // 이모지 같은 서로게이트 쌍은 한 글자(코드 포인트)로 봅니다.
+    const prevCp = idx => {
+      if (idx <= 0) return undefined;
+      const lo = s.charCodeAt(idx - 1);
+      if (lo >= 0xdc00 && lo <= 0xdfff && idx >= 2) {
+        const hi = s.charCodeAt(idx - 2);
+        if (hi >= 0xd800 && hi <= 0xdbff) return s.slice(idx - 2, idx);
+      }
+      return s[idx - 1];
+    };
+    const nextCp = idx => (idx >= s.length ? undefined : String.fromCodePoint(s.codePointAt(idx)));
+    const D = [];
+    let i = 0;
+    while (i < s.length) {
+      const c = s[i];
+      if (c === '\\' && i + 1 < s.length && /[!-/:-@[-`{-~]/.test(s[i + 1])) {
+        i += 2;
+        continue;
+      }
+      if (c === '`') {
+        let e = i;
+        while (s[e] === '`') e += 1;
+        const n = e - i;
+        let k = e;
+        let found = -1;
+        while (k < s.length) {
+          if (s[k] === '`') {
+            let f = k;
+            while (s[f] === '`') f += 1;
+            if (f - k === n) {
+              found = f;
+              break;
+            }
+            k = f;
+          } else k += 1;
+        }
+        i = found >= 0 ? found : e;
+        continue;
+      }
+      if (c === '*' || c === '_') {
+        let e = i;
+        while (s[e] === c) e += 1;
+        const p = prevCp(i);
+        const n = nextCp(e);
+        const L = !ws(n) && (!pu(n) || ws(p) || pu(p));
+        const R = !ws(p) && (!pu(p) || ws(n) || pu(n));
+        const open = c === '_' ? L && (!R || pu(p)) : L;
+        const close = c === '_' ? R && (!L || pu(n)) : R;
+        D.push({ c, n: e - i, len: e - i, open, close, dead: false });
+        i = e;
+        continue;
+      }
+      i += 1;
+    }
+    for (let ci = 0; ci < D.length; ci += 1) {
+      const cl = D[ci];
+      if (!cl.close || cl.dead) continue;
+      while (cl.n > 0) {
+        let oi = -1;
+        for (let k = ci - 1; k >= 0; k -= 1) {
+          const op = D[k];
+          if (op.dead || op.n === 0 || op.c !== cl.c || !op.open) continue;
+          if ((op.close || cl.open) && (op.len + cl.len) % 3 === 0 && !(op.len % 3 === 0 && cl.len % 3 === 0)) continue;
+          oi = k;
+          break;
+        }
+        if (oi < 0) break;
+        const op = D[oi];
+        const use = op.n >= 2 && cl.n >= 2 ? 2 : 1;
+        op.n -= use;
+        cl.n -= use;
+        for (let k = oi + 1; k < ci; k += 1) D[k].dead = true;
+      }
+    }
+    return D.reduce((sum, d) => sum + d.n, 0);
+  }
+
+  function literalDelims(text) {
+    const blocks = [];
+    let cur = [];
+    const flush = () => {
+      if (cur.length) blocks.push(cur.join('\n'));
+      cur = [];
+    };
+    for (const raw of String(text).split('\n')) {
+      if (/^[ \t]*$/.test(raw) || /^[ \t]{0,3}([*_-])(?:[ \t]*\1){2,}[ \t]*$/.test(raw) || /^[ \t]{0,3}\[[^\]\n]+\]:/.test(raw)) {
+        flush();
+        continue;
+      }
+      const m = /^[ \t]*(?:>[ \t]?|(?:\d{1,9}[.)]|[-+*]|#{1,6})[ \t]+)+/.exec(raw);
+      if (m) {
+        flush();
+        cur.push(raw.slice(m[0].length));
+      } else cur.push(raw);
+    }
+    flush();
+    return blocks.reduce((sum, block) => sum + emphasisLeft(block), 0);
+  }
+
+  // 선택한 글(oldText)과 새 글을 앞뒤로 비교해 실제로 달라진 가운데만 원문에서 바꿉니다. 그래서 서식 기호는 대부분 제자리에 남습니다.
+  // 바꾸면 서식이 깨질 수 있는 경우는 null을 돌려주고, 그때는 원문 창으로 넘깁니다.
+  function planSplice(src, mapped, replacement) {
+    const old = mapped.oldText;
+    const vpos = mapped.vpos;
+    const max = Math.min(old.length, replacement.length);
+    let p = 0;
+    while (p < max && old[p] === replacement[p]) p += 1;
+    if (p > 0 && /[\uD800-\uDBFF]/.test(old[p - 1])) p -= 1;
+    let s = 0;
+    while (s < max - p && old[old.length - 1 - s] === replacement[replacement.length - 1 - s]) s += 1;
+    if (s > 0 && /[\uDC00-\uDFFF]/.test(old[old.length - s])) s -= 1;
+    const oldEnd = old.length - s;
+    const ins = replacement.slice(p, replacement.length - s);
+    let a;
+    let b;
+    if (oldEnd > p) {
+      a = vpos[p];
+      b = vpos[oldEnd - 1] + 1;
+    } else {
+      a = p > 0 ? vpos[p - 1] + 1 : vpos[0];
+      // 줄바꿈 바로 뒤에 넣는 글은 그 줄의 목록·인용 기호 뒤에 넣습니다(- 첫째\n그리고 - 둘째 가 되지 않게).
+      if (p > 0 && src[a - 1] === '\n') {
+        const mark = /^[ \t]*(?:>[ \t]?|(?:\d{1,9}[.)]|[-+*]|#{1,6})[ \t]+)+/.exec(src.slice(a));
+        if (mark) a += mark[0].length;
+      }
+      b = a;
+    }
+    const changed = new Set(vpos.slice(p, oldEnd));
+    let kept = '';
+    for (let i = a; i < b; i += 1) if (!changed.has(i)) kept += src[i];
+    const removed = src.slice(a, b);
+    // 바뀌는 가운데에 기울임·굵게 기호가 끼어 있으면 그 기호를 새 글 바로 뒤에 둡니다.
+    // 기호 양옆이 글자일 때만 서식이 유지되므로, 공백·줄바꿈이 닿거나 다른 기호(목록·링크·이스케이프)가 끼면 원문 창으로 넘깁니다.
+    // 밑줄(_)은 단어 안에서 열고 닫히지 않으므로 옮기지 않고, 기호 양옆은 둘 다 글자여야 합니다(공백·문장부호가 닿으면 서식이 풀림).
+    if (kept) {
+      if (!/^[*~]+$/.test(kept) || removed.includes('\n') || ins.includes('\n')) return null;
+      const before = ins ? ins[ins.length - 1] : src[a - 1];
+      const after = src[b];
+      if (!before || !after || !LETTER.test(before) || !LETTER.test(after)) return null;
+    }
+    // 새 글의 앞뒤 공백이 기호 안쪽에 붙으면(*비가 오기 *) 서식이 풀립니다.
+    if (/^\s/.test(ins) && isDelim(src[a - 1])) return null;
+    if (/\s$/.test(ins) && !kept && isDelim(src[b])) return null;
+    // 서식이 있는 문단 안에 줄바꿈을 넣으면 기울임이 풀려 별표가 보이므로 원문 창에서 합니다.
+    if (ins.includes('\n')) {
+      const ps = src.lastIndexOf('\n\n', a);
+      const pe = src.indexOf('\n\n', b);
+      if (/[*_~`]/.test(src.slice(ps < 0 ? 0 : ps, pe < 0 ? src.length : pe))) return null;
+      // 새 줄의 맨 앞이 '- '·'> '·'1. '처럼 되면 목록·인용이 됩니다.
+      const le = src.indexOf('\n', b);
+      const tail = ins.slice(ins.lastIndexOf('\n') + 1) + src.slice(b, le < 0 ? src.length : le);
+      if (/^[ \t]*(?:>|(?:\d{1,9}[.)]|[-+*]|#{1,6})(?:[ \t]|$))/.test(tail)) return null;
+    }
+    // 줄을 합치면 다음 줄 앞의 목록·인용·제목 기호가 글자로 남으므로 원문 창에서 합니다.
+    if (removed.includes('\n')) {
+      const lineAt = src.lastIndexOf('\n', b - 1) + 1;
+      if (lineAt > a && /^[ \t]*(?:>|(?:\d{1,9}[.)]|[-+*]|#{1,6})[ \t])/.test(src.slice(lineAt))) return null;
+    }
+    if (!ins && !kept) [a, b] = tidyDelete(src, a, b);
+    const next = src.slice(0, a) + ins + kept + src.slice(b);
+    // 안전망 1: 짝 없는(글자로 보일) * _ 가 늘면 원문 창. 새 글에 사용자가 직접 쓴 * _ 만큼은 허용합니다(snake_case 같은 글).
+    if (literalDelims(next) - literalDelims(src) > (ins.match(/[*_]/g) || []).length) return null;
+    // 안전망 2: 새 글이 직접 넣은 것 말고, 줄 앞 목록·인용·제목 기호 줄이 새로 생기면 원문 창
+    const BM = /^[ \t]*(?:>|(?:\d{1,9}[.)]|[-+*]|#{1,6})(?:[ \t]|$))/;
+    const marks = text => text.split('\n').filter(line => BM.test(line)).length;
+    const typed = ins.split('\n').slice(1).filter(line => BM.test(line)).length;
+    if (marks(next) > marks(src) + typed) return null;
+    return { a, b, ins, kept, next };
+  }
+
+  const isBlank = ch => ch === ' ' || ch === '\t';
+  const CLOSE_NEXT = /[\s.,!?…~"'”’」』)\]]/;
+
+  // 지운 뒤 서식이 깨지지 않게 다듬습니다.
+  // 1) *글*·`코드`의 글을 통째로 지우면 남는 빈 기호 쌍(**, ****, ``)도 지웁니다.
+  // 2) 닫는 기호 바로 앞(*글 *)이나 여는 기호 바로 뒤(* 글*)에 공백이 남으면 그 공백을 지웁니다.
+  //    크랙에서는 이럴 때 기울임이 풀려 별표가 그대로 보이기 때문입니다. 단어 사이 공백(**철수** 학교)은 건드리지 않습니다.
+  function tidyDelete(src, a, b) {
+    for (let guard = 0; guard < 3; guard += 1) {
+      const left = /[*_~`]+$/.exec(src.slice(Math.max(0, a - 4), a))?.[0] || '';
+      const right = /^[*_~`]+/.exec(src.slice(b, b + 4))?.[0] || '';
+      if (!left || !right) break;
+      const ch = right[0];
+      let l = 0;
+      while (l < left.length && left[left.length - 1 - l] === ch) l += 1;
+      let r = 0;
+      while (r < right.length && right[r] === ch) r += 1;
+      const k = Math.min(l, r);
+      if (!k) break;
+      // 짝이 아닌 기호(여는 쪽 앞이 글자, 밑줄 닫는 쪽 뒤가 글자)는 빈 쌍이 아니므로 넓히지 않습니다.
+      const ls = a - left.length;
+      if (ls > 0 && !/[\s\p{P}\p{S}]/u.test(src[ls - 1])) break;
+      if (ch === '_' && b + right.length < src.length && !/[\s\p{P}\p{S}]/u.test(src[b + right.length])) break;
+      a -= k;
+      b += k;
+    }
+    const closerAt = i => {
+      if (!isDelim(src[i])) return false;
+      let j = i;
+      while (isDelim(src[j])) j += 1;
+      if (j >= src.length || CLOSE_NEXT.test(src[j])) return true;
+      // *비가 내리기*를 처럼 닫는 기호 바로 뒤에 조사가 붙은 경우: 앞쪽에 짝 없는 여는 기호가 있을 때만 닫는 기호로 봅니다.
+      if (src[i] === '_' || !LETTER.test(src[j])) return false;
+      const ps = src.lastIndexOf('\n\n', i);
+      const head = src.slice(ps < 0 ? 0 : ps, i);
+      return ((head.match(src[i] === '*' ? /\*+/g : /~+/g) || []).length % 2) === 1;
+    };
+    const openerBefore = i => {
+      let j = i;
+      while (j > 0 && isDelim(src[j - 1])) j -= 1;
+      return j < i && (j === 0 || SPACE.test(src[j - 1]));
+    };
+    const lineStart = a === 0 || src[a - 1] === '\n';
+    if (isBlank(src[a - 1]) && (b >= src.length || src[b] === '\n' || closerAt(b))) {
+      while (a > 0 && isBlank(src[a - 1])) a -= 1;
+    } else if (isBlank(src[b]) && (lineStart || openerBefore(a))) {
+      while (b < src.length && isBlank(src[b])) b += 1;
+    } else if (isBlank(src[a - 1]) && isBlank(src[b])) {
+      // 낱말을 통째로 지워 양옆 공백이 두 칸 남으면 한 칸으로 줄입니다(크랙은 공백을 그대로 보여 줘서 두 칸이 보임).
+      b += 1;
+    }
+    return [a, b];
+  }
+
+  // ---------- 흔적 계산 ----------
+
+  // [a, b) 자리를 newLen 글자로 바꿨을 때 이전 흔적 위치를 옮기고, 새로 바뀐 자리(repLen)를 더합니다.
+  function shiftSpans(spans, a, b, newLen, repLen) {
+    const delta = newLen - (b - a);
+    const out = [];
+    for (const [s, e] of spans || []) {
+      if (e === s) {
+        if (s < a) out.push([s, s]);
+        else if (s > b) out.push([s + delta, s + delta]);
+        continue;
+      }
+      if (e <= a) out.push([s, e]);
+      else if (s >= b) out.push([s + delta, e + delta]);
+      else {
+        if (s < a) out.push([s, a]);
+        if (e > b) out.push([b + delta, e + delta]);
+      }
+    }
+    out.push(repLen > 0 ? [a, a + repLen] : [a, a]);
+    out.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+    const merged = [];
+    for (const span of out) {
+      const prev = merged[merged.length - 1];
+      if (prev && prev[1] > prev[0] && span[1] > span[0] && span[0] <= prev[1]) prev[1] = Math.max(prev[1], span[1]);
+      else if (prev && span[0] === span[1] && prev[1] > prev[0] && span[0] >= prev[0] && span[0] <= prev[1]) continue;
+      else if (prev && prev[0] === prev[1] && span[1] > span[0] && prev[0] >= span[0] && prev[0] <= span[1]) merged[merged.length - 1] = span;
+      else merged.push(span);
+    }
+    return merged;
+  }
+
+  // 크랙 수정창·원문 창·다른 확프의 일괄 바꾸기처럼 여러 군데가 한 번에 바뀐 것은 낱말 단위로 비교해
+  // 바뀐 조각마다 따로 흔적을 남깁니다(처음 바뀐 곳~마지막 바뀐 곳을 통째로 칠하지 않게).
+  // 결과: [{ a, b(옛 글 위치), oldText, newText }] (앞에서부터)
+  function changeList(before, after) {
+    const changes = [];
+    let oldPos = 0;
+    let cur = null;
+    for (const [type, text] of diffParts(before, after)) {
+      if (type === '=') {
+        if (cur) changes.push(cur);
+        cur = null;
+        oldPos += text.length;
+        continue;
+      }
+      if (!cur) cur = { a: oldPos, b: oldPos, oldText: '', newText: '' };
+      if (type === '-') {
+        cur.b += text.length;
+        cur.oldText += text;
+        oldPos += text.length;
+      } else cur.newText += text;
+    }
+    if (cur) changes.push(cur);
+    return changes;
+  }
+
+  // 뒤쪽 조각부터 옮겨야 앞쪽 조각의 옛 위치가 그대로 맞습니다.
+  function applyChanges(spans, changes) {
+    let out = spans || [];
+    for (let i = changes.length - 1; i >= 0; i -= 1) {
+      const c = changes[i];
+      out = shiftSpans(out, c.a, c.b, c.newText.length, c.newText.length);
+    }
+    return out;
+  }
+
+  // 흔적 창에 보일 '원래 → 바뀐 글' (조각이 여럿이면 … 로 이어 붙임)
+  function changeSummary(changes) {
+    return { before: changes.map(c => c.oldText).filter(Boolean).join(' … '), after: changes.map(c => c.newText).filter(Boolean).join(' … ') };
+  }
+
+  // 통째로 바뀐 경우(크랙 수정창·원문 편집)는 앞뒤가 같은 부분을 빼고 가운데를 바뀐 자리로 봅니다.
+  function wholeChange(before, after) {
+    let p = 0;
+    const max = Math.min(before.length, after.length);
+    while (p < max && before[p] === after[p]) p += 1;
+    // 이모지 같은 서로게이트 쌍을 반으로 자르지 않습니다.
+    if (p > 0 && /[\uD800-\uDBFF]/.test(before[p - 1])) p -= 1;
+    let s = 0;
+    while (s < max - p && before[before.length - 1 - s] === after[after.length - 1 - s]) s += 1;
+    if (s > 0 && /[\uDC00-\uDFFF]/.test(before[before.length - s])) s -= 1;
+    return { a: p, b: before.length - s, newLen: after.length - s - p, oldText: before.slice(p, before.length - s), newText: after.slice(p, after.length - s) };
+  }
+
+  // ---------- 저장 경로 ----------
+
+  // 우리가 쓴 내용은 '크랙 수정창 기록'으로 잘못 남지 않게 잠깐 표시해 둡니다. 저장이 끝나면 2초 뒤 풀어서, 곧이어 크랙 수정창으로 고친 것은 기록되게 합니다.
+  const ownWrites = new Map();
+  function pruneOwn(id) {
+    const entry = ownWrites.get(id);
+    if (!entry) return;
+    const now = Date.now();
+    entry.forEach((until, key) => { if (until <= now) entry.delete(key); });
+    if (!entry.size) ownWrites.delete(id);
+  }
+  function markOwn(id, ttl, ...contents) {
+    pruneOwn(id);
+    const entry = ownWrites.get(id) || new Map();
+    const until = Date.now() + ttl;
+    contents.forEach(content => entry.set(normalize(content), until));
+    ownWrites.set(id, entry);
+  }
+  function settleOwn(id) {
+    const entry = ownWrites.get(id);
+    const until = Date.now() + 2000;
+    entry?.forEach((value, key) => entry.set(key, Math.min(value, until)));
+  }
+  const isOwn = (id, content) => {
+    pruneOwn(id);
+    return (ownWrites.get(id)?.get(normalize(content)) || 0) > Date.now();
+  };
+
+  // 저장 중인 메시지. 이 동안에는 화면이 잠깐 원문으로 보여도 기록을 지우지 않습니다.
+  const inFlight = new Set();
+  // 크랙 내부를 못 찾아 서버에만 저장한 메시지(새로고침 전까지 화면은 옛 글)
+  const reloadNeeded = new Set();
+  const diagState = { lastPath: '', lastError: '', xhrHooked: false, xhrWrapped: false, fetchHooked: false, nativeCaptured: 0 };
+
+  // 보이는 글이 하나도 남지 않으면(숨김 주석·목록 기호·폭 0 글자만 남음) 빈 메시지로 봅니다.
+  function visibleLeft(text) {
+    return stripHidden(String(text ?? ''), '<!--').text
+      .replace(/^[ \t]*(?:>[ \t]?|(?:\d{1,9}[.)]|[-+*]|#{1,6})(?=[ \t]|$))+/gm, '')
+      .replace(/[\s​-‍⁠﻿ㅤᅟᅠ]/g, '');
+  }
+
+  // 크랙과 같은 길(A1) → 저장소만 직접 고치기(A2) → API로만 고치고 새로고침 안내(C) 순서로 시도합니다.
+  async function writeContent(target, next) {
+    assertTarget(target);
+    const h = here();
+    if (h.chatId !== target.chatId) throw new UserError('다른 방으로 옮겨져서 취소했어요.');
+    if (!normalize(next) || !visibleLeft(next)) throw new UserError('메시지를 전부 비울 수는 없어요.');
+    if (inFlight.has(target.msgId)) throw new UserError('아직 앞의 수정을 저장하고 있어요.');
+    // 재생성 등으로 그룹 요소가 새로 그려졌으면 지금 화면의 그룹으로 검사합니다.
+    const liveGroup = target.group?.isConnected
+      ? target.group
+      : findGroup(target.msgId) || (target.groupId ? document.querySelector(`[data-message-group-id="${CSS.escape(target.groupId)}"]`) : null);
+    const anchor = liveGroup ? mdsOf(liveGroup)[0] : null;
+    const bridge = findBridge(anchor);
+    if (bridge.mismatch) throw new UserError('다른 방으로 옮겨져서 취소했어요.');
+    if ((bridge.state && String(bridge.state.status).toUpperCase() !== 'IDLE') || streamingNow()) throw new UserError('답변이 만들어지는 중에는 고칠 수 없어요.');
+    if (nativeEditorOpen(liveGroup) || bridge.state?.isEdit) throw new UserError('크랙 수정창이 열려 있어요. 먼저 끝내거나 닫아 주세요.');
+    const fresh = bridge.store?.getState().messages.get(target.msgId);
+    if (fresh && fresh.content !== target.content) throw new UserError('그사이 메시지가 바뀌었어요. 다시 선택해 주세요.');
+    // 편집 창을 연 사이 답변 비교 화살표나 재생성으로 보이는 답변이 바뀌었으면 거절합니다.
+    const shownNow = liveGroup ? messageOf(liveGroup, bridge) : null;
+    if (shownNow?.fromStore && shownNow.msgId && shownNow.msgId !== target.msgId) throw new UserError('보이는 답변이 바뀌었어요. 다시 선택해 주세요.');
+    markOwn(target.msgId, 30000, next, target.content);
+    inFlight.add(target.msgId);
+    try {
+      const result = await sendContent(h, bridge, fresh, target, next);
+      return {...result, epoch:target.epoch, chatId:target.chatId};
+    } finally {
+      inFlight.delete(target.msgId);
+      settleOwn(target.msgId);
+    }
+  }
+
+  async function sendContent(h, bridge, fresh, target, next) {
+    assertTarget(target);
+    if (bridge.actions && fresh) {
+      diagState.lastPath = 'A1';
+      log('A1 updateMessage', target.msgId);
+      const local = () => bridge.store.getState().messages.get(target.msgId)?.content;
+      try {
+        await bridge.actions.updateMessage({ _id: fresh._id, content: fresh.content }, next);
+      } catch (error) {
+        const why = error?.response?.data?.message || error?.body?.message;
+        throw new UserError(why ? `크랙이 거절했어요: ${why}` : '크랙이 저장하지 못했어요. 잠시 뒤 다시 해 주세요.');
+      }
+      // 크랙은 저장에 실패하면 오류를 밖으로 던지지 않고 저장소를 원래 글로 되돌리기도 합니다.
+      if (normalize(fresh.content) !== normalize(next) && normalize(local()) === normalize(fresh.content)) throw new UserError('크랙이 저장하지 못해서 원래 글로 되돌렸어요.');
+      if (!validTarget(target)) return { content: local() ?? next, reload: true, unverified: true };
+      let content = null;
+      let unverified = false;
+      try {
+        await bridge.actions.resyncMessage(target.msgId);
+        content = local() ?? null;
+      } catch (error) {
+        log('resync failed', error);
+      }
+      if (!validTarget(target)) return { content: content ?? local() ?? next, reload: true, unverified: true };
+      if (content === null) content = await api('GET', messagePath(h, target.msgId)).then(data => (typeof data?.content === 'string' ? data.content : null), () => null);
+      if (content === null) {
+        // 서버 확인은 못 했지만 크랙 저장소에는 새 글이 들어가 있으면, 저장된 것으로 보고 기록을 남깁니다.
+        if (normalize(local()) !== normalize(next)) throw new UserError('크랙 서버에 반영되지 않았어요. 새로고침해서 확인해 주세요.');
+        content = local();
+        unverified = true;
+      }
+      if (normalize(content) !== normalize(next)) throw new UserError('크랙 서버에 반영되지 않았어요. 새로고침해서 확인해 주세요.');
+      markOwn(target.msgId, 30000, content);
+      return { content, reload: false, unverified };
+    }
+
+    log('direct PATCH', target.msgId);
+    // 저장소가 없으면 '그사이 바뀜'을 서버에서 확인합니다.
+    if (!fresh) {
+      const now = await api('GET', messagePath(h, target.msgId));
+      if (typeof now?.content !== 'string' || normalize(now.content) !== normalize(target.content)) throw new UserError('그사이 메시지가 바뀌었어요. 다시 선택해 주세요.');
+    }
+    assertTarget(target);
+    const data = await api('PATCH', messagePath(h, target.msgId), { message: next });
+    if (!validTarget(target)) return { content: typeof data?.content === 'string' ? data.content : next, reload: true, unverified: true };
+    const check = await api('GET', messagePath(h, target.msgId)).catch(() => null);
+    const verified = typeof check?.content === 'string';
+    const content = verified ? check.content : typeof data?.content === 'string' ? data.content : next;
+    if (normalize(content) !== normalize(next)) throw new UserError('크랙 서버에 반영되지 않았어요. 새로고침해서 확인해 주세요.');
+    markOwn(target.msgId, 30000, content);
+    if (!validTarget(target)) return { content, reload: true, unverified: !verified };
+    const live = bridge.store?.getState();
+    if (live?.messages.has(target.msgId) && typeof live.updateMessage === 'function') {
+      // PATCH가 성공했으면(확인 GET만 실패했어도) 크랙 저장소에 넣어 화면을 맞춥니다. 확인 못 한 것은 알림에 적습니다.
+      diagState.lastPath = 'A2';
+      live.updateMessage(target.msgId, { content });
+      return { content, reload: false, unverified: !verified };
+    }
+    diagState.lastPath = 'C';
+    reloadNeeded.add(target.msgId);
+    return { content, reload: true, unverified: !verified };
+  }
+
+  // 화면에서 고칠 메시지와 그 원문을 찾습니다. node는 그 메시지 그룹 안의 아무 요소나 됩니다.
+  async function resolveTarget(node) {
+    const h = here();
+    const requestEpoch = epoch;
+    assertTarget({chatId: h.chatId, epoch: requestEpoch});
+    if (!h.chatId) throw new UserError('채팅방에서만 쓸 수 있어요.');
+    const group = groupOf(node);
+    const bridge = findBridge(group ? mdsOf(group)[0] : null);
+    if (bridge.mismatch) throw new UserError('방을 옮기는 중이에요. 잠시 뒤 다시 해 주세요.');
+    const info = messageOf(group, bridge);
+    if (!info) throw new UserError('이 글은 메시지가 아니라서 고칠 수 없어요.');
+    let { msgId, content } = info;
+    if (!info.fromStore) {
+      // 크랙 내부를 못 찾았을 때: 그룹의 메시지들을 API로 읽고, 화면 글과 가장 잘 맞는 것을 고릅니다.
+      // 답변 비교처럼 후보가 여럿이면 거의 똑같이 맞고 2등과 차이가 날 때만, 하나뿐이어도 화면 글과 아주 잘 맞을 때만 고칩니다.
+      const ids = (msgId ? [msgId] : info.ids || [info.groupId]).filter(id => ID_RE.test(id));
+      if (!ids.length) throw new UserError('메시지 id를 찾지 못했어요.');
+      const scored = [];
+      for (const id of ids) {
+        const data = ids.length === 1 ? await api('GET', messagePath(h, id)) : await api('GET', messagePath(h, id)).catch(() => null);
+        if (typeof data?.content === 'string') scored.push({ id, content: data.content, score: coverage(data.content, info.mds) });
+      }
+      scored.sort((x, y) => y.score - x.score);
+      const best = scored[0];
+      const close = Boolean(scored[1] && best.score - scored[1].score < 0.005);
+      if (!best || best.score < (scored.length > 1 ? 0.995 : 0.97) || close) throw new UserError('화면 글과 서버 원문이 달라요. 새로고침한 뒤 다시 해 주세요. (답변 비교 중이면 크랙 수정창을 써 주세요)');
+      msgId = best.id;
+      content = best.content;
+    }
+    if (typeof content !== 'string') throw new UserError('메시지 원문을 읽지 못했어요.');
+    const target = { chatId: h.chatId, epoch: requestEpoch, msgId, content, group: info.group, groupId: info.groupId, mds: info.mds, via: info.fromStore ? 'store' : 'api' };
+    assertTarget(target);
+    return target;
+  }
+
+  // 지금 원문(content)에 맞는 기록을 돌려줍니다. 그사이 다른 곳에서 바뀌었으면 거기서부터 새로 시작하고,
+  // 옛 수정들은 보기용으로만 남깁니다(되돌리기가 남이 쓴 글을 지우지 않게).
+  function recordFor(prev, content) {
+    if (prev && normalize(prev.current) === normalize(content)) return prev;
+    const edits = (prev?.edits || []).map(edit => ({ at: edit.at, kind: edit.kind, before: edit.before, after: edit.after, old: true }));
+    return { base: content, origin: prev?.origin ?? prev?.base, current: content, spans: [], edits, rebased: Boolean(prev) };
+  }
+
+  // 수정 1번을 저장하고 흔적을 남깁니다. plan: { a, b, ins, kept, next } (원문에서 바뀌는 자리와 새 원문)
+  async function commitEdit(target, plan, meta) {
+    const snapshot = book(target.chatId)[target.msgId] || null;
+    const result = await writeContent(target, plan.next);
+    const record = recordFor(book(target.chatId)[target.msgId] || snapshot, target.content);
+    const prevSpans = (record.spans || []).map(span => span.slice());
+    record.spans = plan.changes ? applyChanges(record.spans, plan.changes) : shiftSpans(record.spans, plan.a, plan.b, plan.ins.length + plan.kept.length, plan.ins.length);
+    record.edits.push({ at: Date.now(), kind: meta.kind, before: meta.before, after: meta.after, prev: target.content, prevSpans });
+    finishRecord(target.chatId, target.msgId, record, result.content);
+    return result;
+  }
+
+  function finishRecord(chatId, msgId, record, content) {
+    record.current = content;
+    record.at = Date.now();
+    record.edits = record.edits.slice(-LIMITS.edits);
+    record.edits.slice(0, -LIMITS.undo).forEach(edit => { delete edit.prev; delete edit.prevSpans; });
+    putRecord(chatId, msgId, normalize(record.current) === normalize(record.base) ? null : record);
+    saveBook(chatId);
+    schedulePaint(0);
+  }
+
+  // 되돌리기 전에 서버 글도 기록의 current와 같은지 확인합니다(다른 기기·탭이 서버만 바꾼 것을 덮어쓰지 않게).
+  async function confirmServer(target, expected) {
+    assertTarget(target);
+    const data = await api('GET', messagePath(here(), target.msgId));
+    assertTarget(target);
+    if (typeof data?.content !== 'string' || normalize(data.content) !== normalize(expected)) throw new UserError('서버 글이 그사이 바뀌어서 되돌리지 않았어요. 새로고침해 주세요.');
+  }
+
+  async function undoLast(chatId, msgId, node) {
+    const record = book(chatId)[msgId];
+    const edit = record?.edits[record.edits.length - 1];
+    if (!edit || typeof edit.prev !== 'string') throw new UserError('되돌릴 수정이 없어요.');
+    const target = await resolveTarget(node);
+    if (target.chatId !== chatId || target.msgId !== msgId) throw new UserError('보이는 답변이 바뀌었어요.');
+    if (normalize(target.content) !== normalize(record.current)) throw new UserError('그사이 다른 곳에서 바뀌어서 되돌리지 않았어요.');
+    await confirmServer(target, record.current);
+    const result = await writeContent(target, edit.prev);
+    const live = book(chatId)[msgId] || record;
+    const popped = live.edits.pop();
+    // '하나만 되돌리기'를 되돌리면, 되돌렸던 수정의 표시도 풉니다.
+    if (popped?.revertOf) {
+      const original = live.edits.find(item => item.at === popped.revertOf);
+      if (original) delete original.reverted;
+    }
+    live.spans = edit.prevSpans || [];
+    finishRecord(chatId, msgId, live, result.content);
+    return result;
+  }
+
+  // ---------- 하나만 골라 되돌리기 ----------
+  // 수정 i의 바로 전 글(prev)과 바로 뒤 글(다음 수정의 prev 또는 current)로 바뀐 자리를 구하고,
+  // 그 뒤 수정들의 위치 변화를 따라 지금 글에서의 자리를 찾아 그 부분만 원래 글로 돌립니다. 뒤 수정과 겹치면 하지 않습니다.
+  function planRevertOne(record, i) {
+    const edits = record.edits;
+    const edit = edits[i];
+    if (!edit || edit.old || edit.reverted) return null;
+    const states = edits.map(item => (typeof item.prev === 'string' ? item.prev : null)).concat([record.current]);
+    for (let k = i; k < states.length; k += 1) if (typeof states[k] !== 'string') return null;
+    const change = wholeChange(states[i], states[i + 1]);
+    let a = change.a;
+    let b = change.a + change.newLen;
+    for (let k = i + 1; k < edits.length; k += 1) {
+      const later = wholeChange(states[k], states[k + 1]);
+      if (later.b <= a) {
+        // 앞쪽 변화: 길이 차이만큼 자리를 옮깁니다.
+        const delta = later.newLen - (later.b - later.a);
+        a += delta;
+        b += delta;
+      } else if (later.a < b) return { conflict: true };
+      // 뒤쪽 변화는 자리에 영향이 없습니다.
+    }
+    const cur = record.current;
+    if (cur.slice(a, b) !== change.newText) return { conflict: true };
+    return { a, b, ins: change.oldText, removed: change.newText, next: cur.slice(0, a) + change.oldText + cur.slice(b) };
+  }
+
+  // [a, b)를 newLen 글자(원래 글)로 돌렸을 때: 그 자리의 흔적은 빼고 나머지 자리만 옮깁니다.
+  function dropRegion(spans, a, b, newLen) {
+    const delta = newLen - (b - a);
+    const out = [];
+    for (const [s, e] of spans || []) {
+      if (e === s) {
+        if (s < a) out.push([s, s]);
+        else if (s > b) out.push([s + delta, s + delta]);
+        continue;
+      }
+      if (e <= a) out.push([s, e]);
+      else if (s >= b) out.push([s + delta, e + delta]);
+      else {
+        if (s < a) out.push([s, a]);
+        if (e > b) out.push([a + newLen, e + delta]);
+      }
+    }
+    return out;
+  }
+
+  async function revertOne(chatId, msgId, node, at) {
+    const record = book(chatId)[msgId];
+    const i = record ? record.edits.findIndex(item => item.at === at) : -1;
+    if (i < 0) throw new UserError('그 수정을 찾지 못했어요.');
+    if (i === record.edits.length - 1) return undoLast(chatId, msgId, node);
+    const plan = planRevertOne(record, i);
+    if (!plan) throw new UserError('오래된 수정이라 이것만 되돌릴 수는 없어요.');
+    if (plan.conflict) throw new UserError('뒤에 고친 것과 자리가 겹쳐서 이것만 되돌릴 수 없어요.');
+    const target = await resolveTarget(node);
+    if (target.chatId !== chatId || target.msgId !== msgId) throw new UserError('보이는 답변이 바뀌었어요.');
+    if (normalize(target.content) !== normalize(record.current)) throw new UserError('그사이 다른 곳에서 바뀌어서 되돌리지 않았어요.');
+    await confirmServer(target, record.current);
+    const result = await writeContent(target, plan.next);
+    const live = book(chatId)[msgId] || record;
+    const prevSpans = (live.spans || []).map(span => span.slice());
+    live.spans = dropRegion(live.spans, plan.a, plan.b, plan.ins.length);
+    const original = live.edits.find(item => item.at === at);
+    if (original) original.reverted = true;
+    live.edits.push({ at: Date.now(), kind: 'revert', before: plan.removed, after: plan.ins, prev: record.current, prevSpans, revertOf: at });
+    finishRecord(chatId, msgId, live, result.content);
+    return result;
+  }
+
+  async function restoreBase(chatId, msgId, node) {
+    const record = book(chatId)[msgId];
+    if (!record) throw new UserError('흔적이 없어요.');
+    const target = await resolveTarget(node);
+    if (target.chatId !== chatId || target.msgId !== msgId) throw new UserError('보이는 답변이 바뀌었어요.');
+    if (normalize(target.content) !== normalize(record.current)) throw new UserError('그사이 다른 곳에서 바뀌어서 되돌리지 않았어요.');
+    await confirmServer(target, record.current);
+    const result = await writeContent(target, record.base);
+    forget(chatId, msgId);
+    return result;
+  }
+
+  function forget(chatId, msgId) {
+    putRecord(chatId, msgId, null);
+    saveBook(chatId);
+    schedulePaint(0);
+  }
+
+  // ---------- 크랙 수정창으로 고친 것도 기록 ----------
+  // 크랙은 저장소를 먼저 바꾼 뒤 PATCH를 보냅니다. 저장소 변화(전/후)를 잡아 두었다가 그 메시지의 PATCH가 성공하면 확정합니다.
+  // 답변 생성·재생성·resync는 PATCH가 없으므로 기록되지 않습니다.
+
+  const watchedStores = new Map();
+  let nativeCleanupTimer = 0;
+  const pendingNative = new Map();
+  // 이 탭의 저장소에서 'current → base'로 돌아가는 것을 본 메시지. 이때만 기록을 지웁니다(다른 탭·옛 화면이 지우지 않게).
+  const revertSeen = new Map();
+
+  // 답변 생성·이어서 생성 중인지(이때의 저장소 변화는 크랙 수정창 기록 후보가 아님)
+  function generatingNow() {
+    if (streamingNow()) return true;
+    try {
+      const state = findBridge().state;
+      return Boolean(state && String(state.status).toUpperCase() !== 'IDLE');
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function watchStore(store) {
+    if (!running || watchedStores.has(store)) return;
+    watchedStores.set(store, null);
+    const subscribedChat = here().chatId;
+    try {
+      const unsubscribe = store.subscribe((state, prev) => {
+        if (!running || here().chatId !== subscribedChat || document.hidden) return;
+        if (!prev) return;
+        schedulePaint();
+        if (state.messages === prev.messages) return;
+        // During streamed generation no PATCH capture is needed; avoid walking the full history per chunk.
+        if (generatingNow()) return;
+        state.messages.forEach((message, id) => {
+          const old = prev.messages.get(id);
+          if (!old || old === message || typeof old.content !== 'string' || typeof message.content !== 'string' || old.content === message.content) return;
+          if (isOwn(id, message.content) || isOwn(id, old.content)) return;
+          const recNow = books.get(here().chatId)?.[id];
+          if (recNow && normalize(old.content) === normalize(recNow.current) && normalize(message.content) === normalize(recNow.base)) revertSeen.set(id, recNow.current);
+          const entry = { chatId: here().chatId, before: old.content, after: message.content, at: Date.now() };
+          pendingNative.set(id, entry);
+          if (!nativeCleanupTimer) nativeCleanupTimer = later(pruneNative, 15500);
+        });
+        prev.messages.forEach((message, id) => {
+          if (!state.messages.has(id) && state.messages.size >= prev.messages.size - 3) {
+            const chatId = here().chatId;
+            if (book(chatId)[id]) forget(chatId, id);
+          }
+        });
+      });
+      watchedStores.set(store, typeof unsubscribe === 'function' ? unsubscribe : null);
+    } catch (error) {
+      watchedStores.delete(store);
+      log('store subscribe failed', error);
+    }
+  }
+
+  function pruneNative() {
+    nativeCleanupTimer = 0;
+    const now = Date.now();
+    pendingNative.forEach((entry, id) => { if (now - entry.at >= 15000) pendingNative.delete(id); });
+    if (pendingNative.size) nativeCleanupTimer = later(pruneNative, 15500);
+  }
+
+  function sentMessage(body) {
+    if (typeof body !== 'string') return null;
+    try {
+      const json = JSON.parse(body);
+      return typeof json?.message === 'string' ? json.message : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // info: { sentAt, entry(보낸 순간의 후보), body(보낸 글) }
+  function onPatchDone(url, status, bodyText, info = {}) {
+    if (!running || info.epoch !== epoch) return;
+    if (status < 200 || status >= 300) return;
+    const m = MSG_URL.exec(url);
+    if (!m) return;
+    const [, chatId, msgId] = m;
+    const sent = sentMessage(info.body);
+    // 경로 C(새로고침 대기)인 메시지를 크랙 수정창이 옛 글로 저장하면 핀셋 수정이 덮입니다.
+    if (reloadNeeded.has(msgId) && sent !== null && !isOwn(msgId, sent)) {
+      reloadNeeded.delete(msgId);
+      toast('크랙 수정창 저장이 핀셋 수정을 덮었어요. 새로고침해서 확인해 주세요.', { error: true, ms: 6000 });
+    }
+    const entry = info.entry || pendingNative.get(msgId);
+    if (!entry) return;
+    if (pendingNative.get(msgId) === entry) pendingNative.delete(msgId);
+    // 크랙 수정창은 저장소를 바꾸자마자 PATCH를 보냅니다. 오래된 변화나, 보낸 글이 그 변화와 다른 PATCH는 크랙 수정창 기록이 아닙니다.
+    if (info.sentAt && info.sentAt - entry.at > 3000) return;
+    if (sent !== null && normalize(sent) !== normalize(entry.after)) return;
+    let content = entry.after;
+    try {
+      const json = JSON.parse(bodyText);
+      if (typeof json?.data?.content === 'string') content = json.data.content;
+    } catch (error) { /* 무시 */ }
+    if (isOwn(msgId, content)) return;
+    const record = recordFor(book(chatId)[msgId], entry.before);
+    // 끝 공백·줄바꿈만 다른 것은 바뀐 자리로 치지 않습니다.
+    const changes = changeList(entry.before.replace(/\s+$/, ''), content.replace(/\s+$/, ''));
+    const prevSpans = (record.spans || []).map(span => span.slice());
+    record.spans = applyChanges(record.spans, changes);
+    record.edits.push({ at: Date.now(), kind: 'native', ...changeSummary(changes), prev: entry.before, prevSpans });
+    diagState.nativeCaptured += 1;
+    finishRecord(chatId, msgId, record, content);
+  }
+
+  // CMU owns the single transport hook; Pinset receives only confirmed successful responses.
+  function captureRequest(meta) {
+    if (!running || !isEnabled() || meta?.method !== 'PATCH' || meta.chatId !== here().chatId || !ID_RE.test(meta.messageId || '')) return null;
+    return {epoch, sentAt:Date.now(), entry:pendingNative.get(meta.messageId), chatId:meta.chatId, msgId:meta.messageId};
+  }
+
+  function observeMessage(meta, json, body) {
+    const token=meta?.pinsetCapture;
+    if(!running || !isEnabled() || !token || token.epoch!==epoch || token.chatId!==here().chatId || token.chatId!==meta.chatId || token.msgId!==meta.messageId) return;
+    const data=json?.data?.message || json?.data;
+    const bodyText=JSON.stringify({data:typeof data?.content==='string'?data:{}});
+    const requestBody=typeof body==='string'?body:body&&typeof body==='object'?JSON.stringify(body):null;
+    onPatchDone(`/v3/chats/${meta.chatId}/messages/${meta.messageId}`,200,bodyText,{...token,body:requestBody});
+  }
+
+  // ---------- 흔적 칠하기 ----------
+
+  const HL = pageWindow.Highlight || window.Highlight;
+  const registry = () => pageWindow.CSS?.highlights || window.CSS?.highlights || null;
+  const hits = new Map();
+  let rangeCache = new WeakMap();
+  let paintTimer = 0;
+
+  function schedulePaint(delay = 400) {
+    if (!running || document.hidden || !here().chatId) return;
+    if (delay > 0 && !Object.keys(book(here().chatId)).length && !hits.size) return;
+    if (paintTimer && delay > 0) return;
+    clearLater(paintTimer);
+    paintTimer = later(() => { paintTimer = 0; paint(); }, delay);
+  }
+
+  function paint() {
+    if (!running || document.hidden) return;
+    const h = here();
+    const records = book(h.chatId);
+    const reg = registry();
+    if (streamingNow()) return; // Store/DOM completion triggers the next paint; no polling.
+    hits.clear();
+    const edits = [];
+    const cuts = [];
+    const keep = new Set();
+    const wanted = new Set(Object.keys(records));
+    if (h.chatId && wanted.size) {
+      const bridge = findBridge();
+      let changed = false;
+      for (const group of document.querySelectorAll('[data-message-group-id]')) {
+        const info = messageOf(group, bridge, wanted);
+        if (!info) continue;
+        const id = info.msgId || info.groupId;
+        const record = records[id];
+        if (!record) continue;
+        // 저장 중이거나 확정을 기다리는 동안에는 화면이 잠깐 원문과 같아도 기록을 지우지 않습니다.
+        const busy = inFlight.has(id) || pendingNative.has(id) || reloadNeeded.has(id);
+        let status;
+        if (info.fromStore) {
+          if (normalize(info.content) === normalize(record.current)) status = 'ok';
+          else if (!busy && revertSeen.get(id) === record.current && normalize(info.content) === normalize(record.base)) {
+            // 이 탭에서 원래 글로 돌아가는 것을 직접 본 경우에만 기록을 지웁니다.
+            // (같은 방을 연 다른 탭이나 옛 글이 한 번 그려진 화면은 '어긋남'으로만 둡니다.)
+            revertSeen.delete(id);
+            putRecord(h.chatId, id, null);
+            changed = true;
+            continue;
+          } else status = 'stale';
+        } else {
+          status = !reloadNeeded.has(id) && coverage(record.current, info.mds) > 0.97 ? 'ok' : 'stale';
+        }
+        keep.add(ensureBadge(info.mds[info.mds.length - 1], id, record, status));
+        if (status === 'ok' && settings.paint) {
+          let cached = rangeCache.get(group);
+          const key = record.current;
+          if (!cached || cached.key !== key || cached.spans !== record.spans || cached.mds.length !== info.mds.length || cached.mds.some((md, i) => md !== info.mds[i])) {
+            cached = { key, spans:record.spans, mds:info.mds, painted:rangesFor(info.mds, record) };
+            rangeCache.set(group, cached);
+          }
+          const painted = cached.painted;
+          edits.push(...painted.ranges);
+          cuts.push(...painted.cuts);
+          const hit = { id, group, ranges: painted.ranges.concat(painted.cuts) };
+          info.mds.forEach(md => hits.set(md, hit));
+        }
+      }
+      if (changed) saveBook(h.chatId);
+    }
+    document.querySelectorAll('.cpn-badge').forEach(badge => {
+      if (!keep.has(badge)) badge.remove();
+    });
+    if (reg && HL) {
+      try {
+        reg.set('cpn-edit', new HL(...edits));
+        reg.set('cpn-cut', new HL(...cuts));
+      } catch (error) {
+        log('highlight failed', error);
+      }
+    }
+  }
+
+  // 배지는 .wrtn-markdown 안이 아니라 바로 뒤에 붙입니다(크랙이 본문을 다시 그려도 지워지지 않게).
+  function ensureBadge(md, id, record, status) {
+    let badge = md.nextElementSibling;
+    if (!badge?.classList.contains('cpn-badge')) {
+      badge = document.createElement('button');
+      badge.type = 'button';
+      badge.className = 'cpn-badge cpn-ui';
+      // 방금 고친 메시지의 배지만 톡 튀어나오게 합니다(새로고침이나 크랙이 다시 그릴 때는 조용히).
+      if (Date.now() - (record.at || 0) < 4000) {
+        badge.classList.add('is-new');
+        badge.addEventListener('animationend', () => badge.classList.remove('is-new'), { once: true });
+      }
+      badge.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        openTrace(groupOf(badge), badge.dataset.id, badge.getBoundingClientRect());
+      });
+      md.after(badge);
+    }
+    const count = record.edits.length;
+    const label = status === 'stale' ? (reloadNeeded.has(id) ? '수정 흔적 · 새로고침하면 보여요' : '수정 흔적 · 어긋남') : `수정 흔적 ${count}`;
+    if (badge.dataset.id !== id) badge.dataset.id = id;
+    if (badge.dataset.label !== label) {
+      badge.dataset.label = label;
+      badge.innerHTML = `${ICONS.pen}<span></span>`;
+      badge.lastElementChild.textContent = label;
+    }
+    badge.classList.toggle('is-stale', status === 'stale');
+    return badge;
+  }
+
+  // ---------- 화면 (선택 막대, 편집 창, 흔적 창, 알림) ----------
+
+  const ICONS = {
+    pen: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+    erase: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>',
+    source: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
+    undo: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
+    close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
+    alert: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>',
+  };
+
+  const HOST_CSS = `
+::highlight(cpn-edit){background-color:rgba(255,140,60,.28)}
+::highlight(cpn-cut){text-decoration:underline wavy rgba(234,88,12,.9);text-decoration-thickness:1.5px;text-underline-offset:3px}
+.cpn-badge{display:inline-flex;align-items:center;gap:4px;align-self:flex-start;width:max-content;height:22px;margin:4px 0 0;padding:0 8px 0 6px;border:0;border-radius:999px;background:rgba(255,140,60,.15);color:#c2410c;font-size:11.5px;font-weight:700;line-height:1;cursor:pointer;transition:background-color .15s,scale .15s}
+.cpn-badge:hover{background:rgba(255,140,60,.26)}
+.cpn-badge:active{scale:.97}
+.cpn-badge svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.cpn-badge.is-stale{background:rgba(127,127,127,.14);color:inherit;opacity:.7}
+html[data-cpn-theme="dark"] .cpn-badge{color:#ffab70}
+html[data-cpn-theme="dark"] .cpn-badge.is-stale{color:inherit}
+.cpn-badge.is-new{animation:cpnBadgeIn .38s cubic-bezier(.34,1.56,.64,1)}
+@keyframes cpnBadgeIn{from{opacity:0;transform:scale(.6)}}
+@media (prefers-reduced-motion:reduce){.cpn-badge.is-new{animation:none}}`;
+
+  // 유리(글라스) 느낌: 반투명 바탕 + 뒤 흐림. 움직임은 짧고 가볍게, '동작 줄이기' 설정이면 끕니다.
+  const STAGE_CSS = `
+*{box-sizing:border-box}
+button,textarea{font:inherit;color:inherit;letter-spacing:inherit}
+button{cursor:pointer}
+.stage{--glass:#1e1e22;--glass-solid:#1e1e22;--edge:inset 0 0 0 1px rgba(255,255,255,.1),inset 0 1px 0 rgba(255,255,255,.08);--drop:0 18px 48px -16px rgba(0,0,0,.6),0 2px 6px -2px rgba(0,0,0,.3);--blur:none;--surface:rgba(255,255,255,.06);--surface-2:rgba(255,255,255,.11);--hover:rgba(255,255,255,.1);--text:#f1f1f2;--text-2:#a9a9b0;--text-3:#74747b;--rule:rgba(255,255,255,.08);--rail:rgba(255,255,255,.18);--pink:#ffab70;--pink-soft:rgba(255,140,60,.2);--on-pink:#2a1306;--danger:#ff9a9a;--out:cubic-bezier(.2,0,0,1);--spring:cubic-bezier(.34,1.4,.64,1);position:fixed;inset:0;z-index:2147483000;pointer-events:none;font-size:13px;line-height:1.45;letter-spacing:-.01em}
+.stage[data-theme=light]{--glass:#fff;--glass-solid:#fff;--edge:inset 0 0 0 1px rgba(255,255,255,.7),0 0 0 1px rgba(0,0,0,.07);--drop:0 18px 48px -18px rgba(0,0,0,.28),0 2px 6px -2px rgba(0,0,0,.08);--surface:rgba(0,0,0,.04);--surface-2:rgba(0,0,0,.08);--hover:rgba(0,0,0,.06);--text:#1c1c1b;--text-2:#5f5f5c;--text-3:#9a9a96;--rule:rgba(0,0,0,.07);--rail:rgba(0,0,0,.18);--pink:#c2410c;--pink-soft:rgba(255,140,60,.16);--on-pink:#fff;--danger:#c4545a}
+.tb,.pop,.toast{background:var(--glass);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--edge),var(--drop);color:var(--text)}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.tb,.pop,.toast{background:var(--glass-solid)}}
+svg{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+@keyframes cpnIn{from{opacity:0;transform:translateY(4px) scale(.92)}}
+@keyframes cpnPop{from{opacity:0;transform:translateY(6px) scale(.97)}}
+@keyframes cpnFade{from{opacity:0;transform:translateY(3px)}}
+@keyframes cpnOut{to{opacity:0;transform:scale(.96)}}
+@keyframes cpnToast{from{opacity:0;transform:translateY(10px) scale(.96)}}
+@keyframes cpnTimer{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+.tb{position:absolute;display:flex;gap:2px;padding:4px;border-radius:14px;pointer-events:auto;animation:cpnIn .22s var(--spring) both}
+.tb button{display:inline-flex;align-items:center;gap:5px;height:30px;padding:0 10px;border:0;border-radius:10px;background:none;font-size:12.5px;font-weight:600;white-space:nowrap;transition:background .15s,scale .12s;animation:cpnFade .2s var(--out) both}
+.tb button:nth-child(2){animation-delay:.03s}
+.tb button:nth-child(3){animation-delay:.06s}
+.tb button:hover{background:var(--hover)}
+.tb button:active{scale:.95}
+.tb .main{color:var(--pink)}
+.pop{position:absolute;width:380px;max-width:calc(100vw - 20px);display:flex;flex-direction:column;max-height:calc(var(--cpn-vh,100dvh) - 24px);border-radius:18px;pointer-events:auto;outline:none;animation:cpnPop .24s var(--out) both}
+.pop.wide{width:620px}
+.tb.out,.pop.out{pointer-events:none;animation:cpnOut .13s var(--out) forwards}
+.hd{display:flex;align-items:center;gap:8px;padding:12px 10px 8px 14px}
+.hd b{flex:1;font-size:14px;font-weight:700;letter-spacing:-.02em}
+.hd small{color:var(--text-3);font-size:11.5px;font-weight:500;margin-left:6px}
+.x{width:28px;height:28px;display:grid;place-items:center;padding:0;border:0;border-radius:9px;background:none;color:var(--text-2);transition:background .15s,color .15s,rotate .2s var(--out)}
+.x:hover{background:var(--hover);color:var(--text);rotate:90deg}
+.bd{padding:0 14px 12px;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--rail) transparent}
+.was{margin-bottom:8px;padding:8px 10px;border-radius:11px;background:var(--surface);color:var(--text-2);font-size:12.5px;max-height:84px;overflow:auto;white-space:pre-wrap;word-break:break-all;animation:cpnFade .22s var(--out) both}
+.was i{font-style:normal;color:var(--text-3);font-size:11px;font-weight:700;margin-right:6px}
+textarea{width:100%;min-height:72px;max-height:calc(var(--cpn-vh,100dvh) * .46);padding:10px 12px;border:0;border-radius:12px;background:var(--surface);box-shadow:inset 0 0 0 1px var(--rule);color:var(--text);font-size:14px;line-height:1.6;resize:vertical;outline:none;white-space:pre-wrap;word-break:break-all;transition:box-shadow .18s,background .18s}
+textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pink),0 0 0 4px var(--pink-soft)}
+.wide textarea{min-height:min(240px,calc(var(--cpn-vh,100dvh) * .38));font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.note{margin-top:6px;color:var(--text-3);font-size:11.5px;transition:color .15s}
+.note.warn{color:var(--danger)}
+.ft{display:flex;align-items:center;gap:6px;padding:10px 14px 12px;border-top:1px solid var(--rule)}
+.ft .grow{flex:1}
+.btn{display:inline-flex;align-items:center;gap:5px;height:32px;padding:0 12px;border:0;border-radius:11px;background:var(--surface);color:var(--text);box-shadow:inset 0 0 0 1px var(--rule);font-size:12.5px;font-weight:600;transition:scale .12s,opacity .15s,background .15s,filter .15s}
+.btn:hover{background:var(--surface-2)}
+.btn:active{scale:.96}
+.btn.pri{background:var(--pink);color:var(--on-pink);box-shadow:none}
+.btn.pri:hover{filter:brightness(1.08)}
+.btn.danger{color:var(--danger)}
+.btn[disabled]{opacity:.4;pointer-events:none}
+.btn.busy{opacity:.6;pointer-events:none}
+.list{display:flex;flex-direction:column;gap:8px}
+.it{padding:9px 10px;border-radius:12px;background:var(--surface);animation:cpnFade .22s var(--out) both}
+.it:nth-child(2){animation-delay:.03s}.it:nth-child(3){animation-delay:.06s}.it:nth-child(4){animation-delay:.09s}.it:nth-child(n+5){animation-delay:.12s}
+.it .meta{display:flex;gap:6px;color:var(--text-3);font-size:11px;font-weight:700;margin-bottom:4px}
+.it .meta b{color:var(--text-2)}
+.it.old{opacity:.55}
+.del,.ins{display:block;white-space:pre-wrap;word-break:break-all;font-size:12.5px}
+.del{color:var(--text-3);text-decoration:line-through;text-decoration-color:var(--danger)}
+.ins{color:var(--text)}
+.ins mark{background:var(--pink-soft);color:inherit;border-radius:3px;padding:0 1px}
+.empty{color:var(--text-3);font-size:12px}
+.stale{margin-bottom:8px;padding:8px 10px;border-radius:11px;background:var(--surface);color:var(--text-2);font-size:12px}
+.sw{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 4px;border:0;background:none;color:var(--text-2);font-size:12px;font-weight:600}
+.sw i{position:relative;width:30px;height:18px;border-radius:999px;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--rule);transition:background .2s}
+.sw i::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--text-2);transition:translate .22s var(--spring),background .2s}
+.sw[aria-pressed=true] i{background:var(--pink)}
+.sw[aria-pressed=true] i::after{translate:12px 0;background:#fff}
+.toast{position:absolute;left:50%;bottom:28px;translate:-50% 0;display:flex;align-items:center;gap:8px;max-width:calc(100vw - 24px);padding:9px 10px 9px 14px;border-radius:14px;font-size:13px;font-weight:600;pointer-events:auto;overflow:hidden;animation:cpnToast .26s var(--spring) both}
+.toast svg{color:var(--pink)}
+.toast.err svg{color:var(--danger)}
+.toast.err{box-shadow:var(--edge),inset 0 0 0 1px rgba(238,138,138,.35),var(--drop)}
+.toast.out{pointer-events:none;animation:cpnOut .15s var(--out) forwards}
+.toast button{height:28px;padding:0 10px;border:0;border-radius:9px;background:var(--surface-2);color:var(--text);font-size:12px;font-weight:700;transition:background .15s}
+.toast button:hover{background:var(--pink-soft);color:var(--pink)}
+.toast .tm{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--pink);opacity:.7;transform-origin:left;animation:cpnTimer linear forwards}
+.seg{display:inline-flex;gap:2px;padding:3px;margin-bottom:10px;border-radius:11px;background:var(--surface)}
+.seg button{height:26px;padding:0 12px;border:0;border-radius:8px;background:none;color:var(--text-2);font-size:12px;font-weight:600;transition:background .18s var(--out),color .18s}
+.seg button[aria-pressed=true]{background:var(--surface-2);color:var(--text);box-shadow:inset 0 0 0 1px var(--rule)}
+.it .meta{align-items:center}
+.it .meta .grow{flex:1}
+.mini{display:inline-flex;align-items:center;gap:3px;height:22px;padding:0 8px;border:0;border-radius:7px;background:var(--surface-2);color:var(--text-2);font-size:11px;font-weight:700;opacity:.55;transition:opacity .15s,background .15s,color .15s}
+.mini svg{width:12px;height:12px}
+.it:hover .mini,.mini:focus-visible{opacity:1}
+@media (hover:none){.mini{opacity:1}}
+.mini:hover{background:var(--pink-soft);color:var(--pink)}
+.mini.busy{opacity:.6;pointer-events:none}
+.tag{padding:1px 6px;border-radius:6px;background:var(--surface-2);color:var(--text-2);font-size:10.5px}
+.it.gone{opacity:.5}
+.it.gone .ins mark{background:none;text-decoration:line-through}
+.v-cmp{animation:cpnFade .2s var(--out) both}
+.cmp{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+.pane{min-width:0;padding:9px 10px;border-radius:12px;background:var(--surface)}
+.pane .lab{margin-bottom:5px;color:var(--text-3);font-size:11px;font-weight:700}
+.pane .txt{max-height:calc(var(--cpn-vh,100dvh) * .46);overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.6;scrollbar-width:thin;scrollbar-color:var(--rail) transparent}
+.pane del{color:var(--danger);text-decoration:line-through;text-decoration-thickness:1.5px;background:rgba(238,138,138,.12);border-radius:3px}
+.pane ins{text-decoration:none;color:var(--text);background:var(--pink-soft);box-shadow:inset 0 -1.5px 0 var(--pink);border-radius:3px}
+.pane .gap{display:inline-block;margin:0 4px;padding:0 6px;border-radius:6px;background:var(--surface-2);color:var(--text-3);font-size:11px}
+.cmp-full{margin-top:6px}
+@media (pointer:coarse){.tb button,.btn{min-height:38px}.ft{flex-wrap:wrap}.mini{min-height:30px}.toast{font-size:12px}.x{width:34px;height:34px}.tb,.pop,.toast{animation:none}}
+@media (max-width:560px){.pop{left:10px!important;right:10px!important;top:auto!important;bottom:calc(var(--cpn-kb,0px) + 10px)!important;width:auto!important}.cmp{grid-template-columns:1fr}.pane .txt{max-height:28vh}}
+@media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-delay:0s!important;transition-duration:.01ms!important}}`;
+
+  const ui = { host: null, shadow: null, stage: null, toolbar: null, pop: null, busy: false, sel: null };
+  const esc = text => String(text).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  const $ = selector => ui.shadow?.querySelector(selector);
+
+  function currentTheme() {
+    const theme = document.body?.dataset.theme;
+    if (theme === 'light' || theme === 'dark') return theme;
+    if (document.documentElement.classList.contains('dark')) return 'dark';
+    return pageWindow.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+
+  function injectHostStyle() {
+    if (document.getElementById('cpn-host-style')) return;
+    const style = document.createElement('style');
+    style.id = 'cpn-host-style';
+    style.textContent = HOST_CSS;
+    document.head.append(style);
+  }
+
+  function ensureStage() {
+    if (!running) return null;
+    if (ui.host?.isConnected) {
+      updateViewport();
+      ui.stage.dataset.theme = currentTheme();
+      return ui.stage;
+    }
+    ui.host = document.createElement('div');
+    ui.host.id = 'cpn-host';
+    ui.host.dataset.cmuAddonUi = 'pinset';
+    ui.shadow = ui.host.attachShadow({ mode: 'open' });
+    ui.shadow.innerHTML = `<style>${STAGE_CSS}</style><div class="stage"></div>`;
+    ui.stage = ui.shadow.querySelector('.stage');
+    ui.stage.dataset.theme = currentTheme();
+    document.body.append(ui.host);
+    updateViewport();
+    // 편집 창 안의 키(Enter 등)가 크랙 단축키로 새지 않게, 창(window)의 잡기 단계에서 가장 먼저 멈춥니다.
+    // (그림자 DOM 안에서 멈추면 document·window의 잡기 단계 리스너에는 이미 닿은 뒤입니다.)
+    if (!ui.keyGuard) {
+      ui.keyGuard = true;
+      ['keydown', 'keyup', 'keypress'].forEach(type => listen(pageWindow, type, event => {
+        if (!ui.host || !event.composedPath().includes(ui.host)) return;
+        if (type === 'keydown') onPanelKey(event);
+        event.stopPropagation();
+      }, true));
+    }
+    // 막대를 누를 때 선택이 풀리지 않게 합니다.
+    ui.shadow.addEventListener('mousedown', event => {
+      if (event.target.closest('.tb')) event.preventDefault();
+    });
+    ui.shadow.addEventListener('click', onPanelClick);
+    return ui.stage;
+  }
+
+  // 닫힐 때 살짝 줄어들며 사라지게 합니다(그동안은 눌리지 않음).
+  const reduceMotion = () => Boolean(pageWindow.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  function fadeOut(el, ms = 140) {
+    if (!el) return;
+    if (reduceMotion()) {
+      el.remove();
+      return;
+    }
+    el.classList.add('out');
+    later(() => el.remove(), ms);
+  }
+
+  function hideToolbar() {
+    fadeOut(ui.toolbar);
+    ui.toolbar = null;
+  }
+
+  function closePop() {
+    fadeOut(ui.pop);
+    ui.pop = null;
+    ui.busy = false;
+  }
+
+  function place(el, rect, prefer = 'below') {
+    const gap = 8;
+    const width = el.offsetWidth;
+    const height = el.offsetHeight;
+    let left = rect.left + rect.width / 2 - width / 2;
+    left = Math.max(10, Math.min(innerWidth - width - 10, left));
+    let top = prefer === 'above' ? rect.top - height - gap : rect.bottom + gap;
+    if (prefer === 'above' && top < 8) top = rect.bottom + gap;
+    if (prefer === 'below' && top + height > innerHeight - 8) top = Math.max(8, rect.top - height - gap);
+    el.style.left = `${Math.round(left)}px`;
+    el.style.top = `${Math.round(Math.max(8, Math.min(innerHeight - height - 8, top)))}px`;
+  }
+
+  const coarse = () => pageWindow.matchMedia?.('(pointer: coarse)').matches;
+
+  function showToolbar(sel) {
+    if (!running) return;
+    ensureStage();
+    hideToolbar();
+    ui.sel = sel;
+    const bar = document.createElement('div');
+    bar.className = 'tb';
+    bar.innerHTML = `<button class="main" data-act="edit">${ICONS.pen}고치기</button><button data-act="erase">${ICONS.erase}지우기</button><button data-act="source" title="이 메시지 원문 전체 고치기">${ICONS.source}원문</button>`;
+    ui.stage.append(bar);
+    ui.toolbar = bar;
+    const rect = sel.range.getBoundingClientRect();
+    // 휴대폰은 위쪽에 기본 복사 메뉴가 뜨므로 아래에 둡니다.
+    place(bar, rect, coarse() ? 'below' : 'above');
+    // 선택한 글 쪽에서 튀어나오게 합니다.
+    bar.style.transformOrigin = parseFloat(bar.style.top) < rect.top ? '50% 100%' : '50% 0';
+  }
+
+  function toast(message, options = {}) {
+    if (!running || !isEnabled() || document.hidden) return;
+    const stage = ensureStage();
+    stage.querySelectorAll('.toast:not(.out)').forEach(node => fadeOut(node, 160));
+    const node = document.createElement('div');
+    node.className = `toast${options.error ? ' err' : ''}`;
+    node.innerHTML = `${options.error ? ICONS.alert : ICONS.check}<span>${esc(message)}</span>`;
+    if (options.action) {
+      const button = document.createElement('button');
+      button.textContent = options.action.label;
+      button.addEventListener('click', () => {
+        fadeOut(node, 160);
+        options.action.run();
+      });
+      node.append(button);
+    }
+    stage.append(node);
+    // 채팅 입력창을 덮지 않게 그 위로 올립니다.
+    const input = document.querySelector('.__chat_input_textarea') || Array.from(document.querySelectorAll('textarea, .ProseMirror[contenteditable="true"]')).find(el => !el.closest('[data-message-group-id]') && !el.closest('#cpn-host'));
+    const box = input ? (input.closest('form') || input.parentElement || input).getBoundingClientRect() : null;
+    if (box && box.top > innerHeight / 2 && box.top < innerHeight) node.style.bottom = `${Math.max(28, Math.round(innerHeight - box.top + 12))}px`;
+    const ms = options.ms || (options.action ? 6000 : 2600);
+    // 되돌리기 같은 버튼이 있으면 남은 시간을 아래 막대로 보여 줍니다.
+    if (options.action) {
+      const timer = document.createElement('i');
+      timer.className = 'tm';
+      timer.style.animationDuration = `${ms}ms`;
+      node.append(timer);
+    }
+    later(() => fadeOut(node, 160), ms);
+  }
+
+  function failed(error) {
+    if (!running) return;
+    diagState.lastError = String(error?.message || error);
+    if (!(error instanceof UserError)) console.warn(LOG, error);
+    toast(error instanceof UserError ? error.message : '고치지 못했어요. 새로고침 뒤 다시 해 주세요.', { error: true, ms: 4200 });
+  }
+
+  function doneToast(result, label, undo) {
+    if (!running || result?.epoch !== epoch || result?.chatId !== here().chatId) return;
+    if (result.unverified) label = `${label} (서버 확인은 못 했어요)`;
+    if (result.reload) {
+      // 새로고침 전에 크랙 수정창으로 저장하면 그 창이 들고 있던 옛 글로 덮입니다.
+      toast(`${label} · 새로고침하면 화면에 보여요. 그 전에 크랙 수정창을 쓰면 옛 글로 덮여요`, { action: { label: '새로고침', run: () => location.reload() }, ms: 8000 });
+      return;
+    }
+    toast(label, undo ? { action: { label: '되돌리기', run: undo } } : {});
+  }
+
+  // 선택 → 대상 메시지 확인 → 원문 위치 찾기
+  async function prepare(sel) {
+    const target = await resolveTarget(sel.group);
+    assertTarget(target);
+    const mapped = mapSelection(target.mds, sel.range, target.content);
+    return { target, mapped };
+  }
+
+  const liveGroup = target => (target.group?.isConnected ? target.group : findGroup(target.msgId));
+  const undoAction = target => () => undoLast(target.chatId, target.msgId, liveGroup(target)).then(r => doneToast(r, '되돌렸어요')).catch(failed);
+
+  // 원문 창으로 넘어간 이유는 창 안에 적습니다(휴대폰에서는 아래쪽 시트가 알림을 가리므로).
+  function sourceFallback(target, region, why) {
+    openSource(target, region);
+    ui.pop?.querySelector('.bd')?.insertAdjacentHTML('afterbegin', `<div class="stale cpn-why">${esc(why)}</div>`);
+  }
+
+  async function startEdit(mode) {
+    const sel = ui.sel;
+    hideToolbar();
+    if (!sel) return;
+    let prepared;
+    try {
+      prepared = await prepare(sel);
+    } catch (error) {
+      failed(error);
+      return;
+    }
+    const { target, mapped } = prepared;
+    if (!validTarget(target)) return;
+    const rect = sel.range.getBoundingClientRect();
+    document.getSelection()?.removeAllRanges();
+    if (mode === 'source') {
+      openSource(target, mapped.ok ? [mapped.a, mapped.b] : mapped.approx || null);
+      return;
+    }
+    if (!mapped.ok) {
+      sourceFallback(target, mapped.approx || null, '이 부분은 원문에서 정확히 못 찾아서, 원문 전체를 열었어요.');
+      return;
+    }
+    if (mode === 'erase') {
+      openEditor(target, mapped, rect);
+      const area = ui.pop?.querySelector('textarea');
+      if (area) { area.value = ''; area.setAttribute('aria-label','지울 부분 확인 (빈칸이면 선택한 글을 지워요)'); }
+      const button = ui.pop?.querySelector('[data-act="save"]');
+      if (button) button.textContent = '선택 부분 지우기';
+      return;
+    }
+    openEditor(target, mapped, rect);
+  }
+
+  function findGroup(msgId) {
+    const bridge = findBridge();
+    const wanted = new Set([msgId]);
+    for (const group of document.querySelectorAll('[data-message-group-id]')) {
+      const info = messageOf(group, bridge, wanted);
+      if (info && (info.msgId || info.groupId) === msgId) return group;
+    }
+    return null;
+  }
+
+  function popShell(title, sub, wide) {
+    ensureStage();
+    closePop();
+    const pop = document.createElement('div');
+    pop.className = `pop${wide ? ' wide' : ''}`;
+    pop.tabIndex = -1;
+    pop.setAttribute('role', 'dialog');
+    pop.innerHTML = `<div class="hd"><b>${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ''}</b><button class="x" data-act="close" aria-label="닫기">${ICONS.close}</button></div><div class="bd"></div><div class="ft"></div>`;
+    ui.stage.append(pop);
+    ui.pop = pop;
+    return pop;
+  }
+
+  function lengthNote(target, nextLength) {
+    const note = ui.pop?.querySelector('.note');
+    if (!note) return;
+    const over = nextLength > LIMITS.soft;
+    note.classList.toggle('warn', over);
+    note.textContent = over
+      ? `고친 뒤 ${nextLength.toLocaleString()}자예요. 8,000자가 넘으면 나중에 크랙 수정창으로 열 때 앞부분이 잘릴 수 있어요.`
+      : (note.dataset.base || '');
+  }
+
+  function openEditor(target, mapped, rect) {
+    const pop = popShell('핀셋 수정', '이 부분만 바꿔요');
+    // 휴대폰에서는 Enter가 줄바꿈이고 [고치기] 버튼으로 저장합니다.
+    const hint = coarse() ? '[고치기] 버튼으로 저장 · Enter 줄바꿈' : 'Enter 고치기 · Shift+Enter 줄바꿈 · Esc 닫기';
+    pop.querySelector('.bd').innerHTML = `<div class="was"><i>원래</i>${esc(mapped.oldText)}</div><textarea spellcheck="false" aria-label="바꿀 글"></textarea><div class="note" data-base="${esc(hint)}">${esc(hint)}</div>`;
+    pop.querySelector('.ft').innerHTML = '<span class="grow"></span><button class="btn" data-act="close">취소</button><button class="btn pri" data-act="save">고치기</button>';
+    const area = pop.querySelector('textarea');
+    area.value = mapped.oldText;
+    const rest = target.content.length - mapped.oldText.length;
+    area.addEventListener('input', () => lengthNote(target, rest + area.value.length));
+    lengthNote(target, rest + area.value.length);
+    pop.edit = { target, mapped };
+    place(pop, rect, 'below');
+    area.focus({ preventScroll: true });
+    area.select();
+  }
+
+  function openSource(target, approx) {
+    const pop = popShell('원문 고치기', '숨김 주석·서식 기호까지 보여요', true);
+    const hint = coarse() ? '[고치기] 버튼으로 저장' : 'Ctrl+Enter 고치기 · Esc 닫기';
+    pop.querySelector('.bd').innerHTML = `<textarea spellcheck="false" aria-label="메시지 원문"></textarea><div class="note" data-base="${esc(hint)}">${esc(hint)}</div>`;
+    pop.querySelector('.ft').innerHTML = '<span class="grow"></span><button class="btn" data-act="close">취소</button><button class="btn pri" data-act="save-source">고치기</button>';
+    const area = pop.querySelector('textarea');
+    // 글 상자는 CRLF를 LF로 바꿔 보여 주므로, 선택 위치와 '손대지 않음' 판정도 LF 기준으로 맞춥니다.
+    const shownSrc = target.content.replace(/\r\n?/g, '\n');
+    const toShown = i => i - (target.content.slice(0, i).match(/\r\n/g) || []).length;
+    area.value = shownSrc;
+    area.addEventListener('input', () => lengthNote(target, area.value.length));
+    lengthNote(target, area.value.length);
+    pop.edit = { target, source: true, shown: shownSrc };
+    pop.style.left = `${Math.max(10, (innerWidth - pop.offsetWidth) / 2)}px`;
+    pop.style.top = `${Math.max(12, (innerHeight - pop.offsetHeight) / 2)}px`;
+    area.focus({ preventScroll: true });
+    if (approx) {
+      area.setSelectionRange(toShown(approx[0]), toShown(approx[1]));
+      const line = target.content.slice(0, approx[0]).split('\n').length;
+      area.scrollTop = Math.max(0, (line - 3) * 21);
+    }
+  }
+
+  async function saveEditor() {
+    const pop = ui.pop;
+    if (!pop?.edit || pop.busy) return;
+    const button = pop.querySelector('[data-act^="save"]');
+    const area = pop.querySelector('textarea');
+    const { target, mapped, source } = pop.edit;
+    pop.busy = true;
+    button.classList.add('busy');
+    // 저장하는 사이 다른 창을 열었으면 그 창은 닫지 않습니다.
+    const done = () => {
+      if (ui.pop === pop) closePop();
+    };
+    try {
+      let result;
+      if (source) {
+        const next = area.value;
+        if (next === (pop.edit.shown ?? target.content)) {
+          done();
+          return;
+        }
+        const change = wholeChange(target.content, next);
+        const changes = changeList(target.content, next);
+        const plan = { a: change.a, b: change.b, ins: change.newText, kept: '', next, changes };
+        result = await commitEdit(target, plan, { kind: 'source', ...changeSummary(changes) });
+      } else {
+        let replacement = area.value;
+        // 휴대폰에서 실수로 넣은 끝 줄바꿈은 뺍니다.
+        if (!/\n$/.test(mapped.oldText)) replacement = replacement.replace(/\n+$/, '');
+        if (replacement.replace(/\r\n?/g, '\n') === mapped.oldText.replace(/\r\n?/g, '\n')) {
+          done();
+          return;
+        }
+        const plan = planSplice(target.content, mapped, replacement);
+        if (!plan) {
+          done();
+          sourceFallback(target, [mapped.a, mapped.b], '서식이 달라질 수 있어 원문 창으로 열었어요. 선택했던 자리에 작성한 글을 넣었으니 확인 후 저장해 주세요.');
+          const sourceArea = ui.pop?.querySelector('textarea');
+          if (sourceArea) sourceArea.value = target.content.slice(0, mapped.a) + replacement + target.content.slice(mapped.b);
+          return;
+        }
+        result = await commitEdit(target, plan, { kind: 'pin', before: mapped.oldText, after: replacement });
+      }
+      done();
+      doneToast(result, '고쳤어요', undoAction(target));
+    } catch (error) {
+      pop.busy = false;
+      button.classList.remove('busy');
+      failed(error);
+    }
+  }
+
+  const KIND_LABEL = { pin: '핀셋', source: '원문 고치기', native: '크랙 수정창', revert: '하나 되돌림' };
+
+  // ---------- 전후 비교 ----------
+  // 낱말·공백·기호 단위로 나눠 Myers 차이 계산을 합니다. 너무 많이 다르면 앞뒤 같은 부분만 빼고 가운데를 통째로 바뀐 것으로 봅니다.
+  const tokensOf = text => text.match(/\s+|[\p{L}\p{N}]+|[^\s\p{L}\p{N}]/gu) || [];
+
+  function diffTokens(a, b) {
+    const n = a.length;
+    const m = b.length;
+    const max = n + m;
+    const limit = Math.min(max, 300);
+    const off = limit + 1;
+    const v = new Int32Array(2 * limit + 3);
+    const trace = [];
+    let found = -1;
+    for (let d = 0; d <= limit && found < 0; d += 1) {
+      trace.push(v.slice());
+      for (let k = -d; k <= d; k += 2) {
+        let x = k === -d || (k !== d && v[k - 1 + off] < v[k + 1 + off]) ? v[k + 1 + off] : v[k - 1 + off] + 1;
+        let y = x - k;
+        while (x < n && y < m && a[x] === b[y]) {
+          x += 1;
+          y += 1;
+        }
+        v[k + off] = x;
+        if (x >= n && y >= m) {
+          found = d;
+          break;
+        }
+      }
+    }
+    if (found < 0) return null;
+    const ops = [];
+    let x = n;
+    let y = m;
+    for (let d = found; d >= 0; d -= 1) {
+      const vv = trace[d];
+      const k = x - y;
+      const prevK = k === -d || (k !== d && vv[k - 1 + off] < vv[k + 1 + off]) ? k + 1 : k - 1;
+      const prevX = vv[prevK + off];
+      const prevY = prevX - prevK;
+      while (x > prevX && y > prevY) {
+        ops.push(['=', a[x - 1]]);
+        x -= 1;
+        y -= 1;
+      }
+      if (d > 0) {
+        if (x === prevX) ops.push(['+', b[y - 1]]);
+        else ops.push(['-', a[x - 1]]);
+      }
+      x = prevX;
+      y = prevY;
+    }
+    return ops.reverse();
+  }
+
+  // 같은 종류끼리 이어 붙인 조각 목록 [[종류, 글], …]
+  function diffParts(before, after) {
+    const compact = wholeChange(before, after);
+    let middle = diffTokens(tokensOf(compact.oldText), tokensOf(compact.newText));
+    let ops = middle && [['=',before.slice(0,compact.a)], ...middle, ['=',before.slice(compact.b)]];
+    if (!ops) {
+      const c = wholeChange(before, after);
+      ops = [['=', before.slice(0, c.a)], ['-', c.oldText], ['+', c.newText], ['=', before.slice(c.b)]];
+    }
+    const parts = [];
+    for (const [type, text] of ops) {
+      if (!text) continue;
+      const lastPart = parts[parts.length - 1];
+      if (lastPart && lastPart[0] === type) lastPart[1] += text;
+      else parts.push([type, text]);
+    }
+    return parts;
+  }
+
+  // 한쪽(처음 글 = 'old', 지금 글 = 'new')을 그립니다. 바뀌지 않은 긴 부분은 앞뒤만 남기고 접습니다(full이면 다 보여 줌).
+  function diffPaneHtml(parts, side, full) {
+    const skip = side === 'old' ? '+' : '-';
+    const visible = parts.filter(([type]) => type !== skip);
+    return visible.map(([type, text], index) => {
+      if (type === '-') return `<del>${esc(text)}</del>`;
+      if (type === '+') return `<ins>${esc(text)}</ins>`;
+      if (full || text.length <= 260) return esc(text);
+      const head = index > 0 ? esc(text.slice(0, 90)) : '';
+      const tail = index < visible.length - 1 ? esc(text.slice(-90)) : '';
+      return `${head}<span class="gap">⋯</span>${tail}`;
+    }).join('');
+  }
+
+  function compareHtml(record, full) {
+    const parts = diffParts(record.base, record.current);
+    const changed = parts.filter(([type]) => type !== '=').length;
+    if (!changed) return '<div class="empty">처음 글과 지금 글이 같아요.</div>';
+    return `<div class="cmp"><div class="pane"><div class="lab">처음 글</div><div class="txt">${diffPaneHtml(parts, 'old', full)}</div></div><div class="pane"><div class="lab">지금 글</div><div class="txt">${diffPaneHtml(parts, 'new', full)}</div></div></div>
+<button class="sw cmp-full" data-act="cmp-full" aria-pressed="${Boolean(full)}"><i></i>바뀌지 않은 부분도 다 보기</button>`;
+  }
+
+  function ago(at) {
+    const sec = Math.max(0, (Date.now() - at) / 1000);
+    if (sec < 60) return '방금';
+    if (sec < 3600) return `${Math.floor(sec / 60)}분 전`;
+    if (sec < 86400) return `${Math.floor(sec / 3600)}시간 전`;
+    return `${Math.floor(sec / 86400)}일 전`;
+  }
+
+  const clip = (text, max = 160) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+  function openTrace(group, msgId, rect) {
+    // 쓰던 편집 창(글을 바꿨거나 저장 중)이 있으면 흔적 창으로 바꾸지 않습니다(입력이 사라지지 않게).
+    if (ui.pop?.edit) {
+      const area = ui.pop.querySelector('textarea');
+      const original = ui.pop.edit.source ? (ui.pop.edit.shown ?? ui.pop.edit.target.content) : ui.pop.edit.mapped.oldText;
+      if (ui.pop.busy || !area || area.value !== original) {
+        area?.focus({ preventScroll: true });
+        return;
+      }
+    }
+    const chatId = here().chatId;
+    const record = book(chatId)[msgId];
+    if (!record) return;
+    hideToolbar();
+    const pop = popShell('수정 흔적', `${record.edits.length}번 고침`);
+    const bridge = findBridge(group ? mdsOf(group)[0] : null);
+    const info = messageOf(group, bridge, new Set([msgId]));
+    const stale = !info || (info.fromStore ? normalize(info.content) !== normalize(record.current) : reloadNeeded.has(msgId) || coverage(record.current, info.mds) <= 0.97);
+    // 수정마다 '이것만 되돌리기'(가장 최근 것은 '방금 것'과 같음). 오래됐거나 뒤 수정과 겹치면 버튼을 두지 않습니다.
+    const lastIndex = record.edits.length - 1;
+    const canRevert = (edit, i) => {
+      if (stale || edit.old || edit.reverted) return false;
+      if (i === lastIndex) return typeof edit.prev === 'string';
+      const plan = planRevertOne(record, i);
+      return Boolean(plan && !plan.conflict);
+    };
+    const items = record.edits.map((edit, i) => {
+      const button = canRevert(edit, i) ? `<button class="mini" data-act="revert-one" data-at="${Number(edit.at)}" title="이 수정만 원래 글로 되돌려요">${ICONS.undo}이것만</button>` : '';
+      const tag = edit.reverted ? '<span class="tag">되돌림</span>' : '';
+      return `<div class="it${edit.old ? ' old' : ''}${edit.reverted ? ' gone' : ''}"><div class="meta"><b>${KIND_LABEL[edit.kind] || '수정'}</b><span>${ago(edit.at)}</span>${tag}<span class="grow"></span>${button}</div>${edit.before ? `<span class="del">${esc(clip(edit.before))}</span>` : ''}<span class="ins">${edit.after ? `<mark>${esc(clip(edit.after))}</mark>` : '<i>(지움)</i>'}</span></div>`;
+    }).reverse().join('');
+    const notes = [
+      stale && reloadNeeded.has(msgId)
+        ? '<div class="stale">서버에는 저장됐어요. 새로고침하면 흔적이 칠해지고 되돌리기도 쓸 수 있어요.</div>'
+        : stale ? '<div class="stale">이 메시지가 다른 곳에서 바뀌어서 흔적을 칠하지 못했어요. 되돌리기도 막아 두었어요.</div>' : '',
+      record.rebased ? '<div class="stale">중간에 다른 곳에서 글이 바뀌어서, 그 뒤의 수정만 되돌릴 수 있어요. 흐린 기록은 보기만 돼요.</div>' : '',
+    ].join('');
+    const seg = '<div class="seg"><button data-act="view" data-view="log" aria-pressed="true">기록</button><button data-act="view" data-view="cmp" aria-pressed="false">전후 비교</button></div>';
+    pop.querySelector('.bd').innerHTML = `${seg}<div class="v-log">${notes}<div class="list">${items || '<div class="empty">기록이 없어요.</div>'}</div></div><div class="v-cmp" hidden></div>`;
+    const last = record.edits[record.edits.length - 1];
+    const canUndo = !stale && last && typeof last.prev === 'string';
+    pop.querySelector('.ft').innerHTML = `<button class="sw" data-act="paint" aria-pressed="${settings.paint}"><i></i>색칠</button><span class="grow"></span><button class="btn danger" data-act="forget" title="글은 그대로 두고 기록만 지워요">기록 지우기</button><button class="btn" data-act="undo"${canUndo ? '' : ' disabled'}>${ICONS.undo}방금 것</button><button class="btn pri" data-act="restore"${stale ? ' disabled' : ''}>처음 글로</button>`;
+    pop.trace = { chatId, msgId, group };
+    place(pop, rect, 'below');
+    pop.focus({ preventScroll: true });
+  }
+
+  function onPanelKey(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      swallowKeyUp('Escape');
+      if (ui.pop) closePop();
+      else hideToolbar();
+      return;
+    }
+    if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return;
+    const pop = ui.pop;
+    if (!pop?.edit || (event.composedPath()[0] || event.target)?.tagName !== 'TEXTAREA') return;
+    if (pop.edit.source ? (event.ctrlKey || event.metaKey) : !event.shiftKey && !coarse()) {
+      event.preventDefault();
+      swallowKeyUp('Enter');
+      saveEditor();
+    }
+  }
+
+  // 키를 누르는 순간 창이 닫히면, 손을 뗄 때의 keyup이 본문으로 가서 크랙 단축키(Enter → 입력창 이동)가 움직입니다. 그 keyup 하나를 삼킵니다.
+  // 키를 누른 채로 있으면 반복 keydown도 새므로 같이 막고, keyup은 실제로 올 때까지(최대 5초) 기다립니다.
+  function swallowKeyUp(key) {
+    const onDown = event => {
+      if (event.key !== key || !event.repeat) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const onUp = event => {
+      if (event.key !== key) return;
+      event.stopPropagation();
+      stop();
+    };
+    const stop = () => {
+      window.removeEventListener('keydown', onDown, true);
+      window.removeEventListener('keyup', onUp, true);
+    };
+    listen(window, 'keydown', onDown, true);
+    listen(window, 'keyup', onUp, true);
+    later(stop, 5000);
+  }
+
+  async function runTrace(action, button) {
+    const pop = ui.pop;
+    if (pop.busy) return;
+    const { chatId, msgId, group } = pop.trace;
+    const live = group?.isConnected ? group : findGroup(msgId);
+    pop.busy = true;
+    button?.classList.add('busy');
+    try {
+      if (action === 'undo') doneToast(await undoLast(chatId, msgId, live), '방금 수정을 되돌렸어요');
+      if (action === 'restore') doneToast(await restoreBase(chatId, msgId, live), '처음 글로 되돌렸어요');
+      if (action === 'revert-one') doneToast(await revertOne(chatId, msgId, live, Number(button.dataset.at)), '그 수정만 되돌렸어요');
+      pop.busy = false;
+      if (ui.pop === pop) closePop();
+    } catch (error) {
+      pop.busy = false;
+      button?.classList.remove('busy');
+      failed(error);
+    }
+  }
+
+  // 흔적 창의 '기록 | 전후 비교' 전환. 비교는 처음 열 때 한 번 그립니다. 비교는 넓은 창으로 보여 줍니다.
+  function switchTraceView(view, full) {
+    const pop = ui.pop;
+    if (!pop?.trace) return;
+    const record = book(pop.trace.chatId)[pop.trace.msgId];
+    pop.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+    const log = pop.querySelector('.v-log');
+    const cmp = pop.querySelector('.v-cmp');
+    if (view === 'cmp' && record && (!cmp.dataset.ready || full !== undefined)) {
+      cmp.innerHTML = compareHtml(record, Boolean(full));
+      cmp.dataset.ready = '1';
+    }
+    log.hidden = view !== 'log';
+    cmp.hidden = view !== 'cmp';
+    pop.classList.toggle('wide', view === 'cmp');
+    const left = parseFloat(pop.style.left) || 10;
+    pop.style.left = `${Math.max(10, Math.min(innerWidth - pop.offsetWidth - 10, left))}px`;
+    const top = parseFloat(pop.style.top) || 10;
+    pop.style.top = `${Math.max(8, Math.min(innerHeight - pop.offsetHeight - 8, top))}px`;
+  }
+
+  function onPanelClick(event) {
+    const button = event.target.closest('button');
+    if (!button || !running || !isEnabled()) return;
+    const act = button.dataset.act;
+    if (act === 'disable') {onDisable(); return;}
+    if (act === 'open-record') {
+      const id = button.dataset.id;
+      if (ID_RE.test(id || '')) openTrace(findGroup(id), id, button.getBoundingClientRect());
+      return;
+    }
+    if (act === 'close') return closePop();
+    if (act === 'edit' || act === 'erase' || act === 'source') return startEdit(act);
+    if (act === 'save' || act === 'save-source') return saveEditor();
+    if (act === 'undo' || act === 'restore' || act === 'revert-one') return runTrace(act, button);
+    if (act === 'view') return switchTraceView(button.dataset.view);
+    if (act === 'cmp-full') return switchTraceView('cmp', button.getAttribute('aria-pressed') !== 'true');
+    if (act === 'forget') {
+      const { chatId, msgId } = ui.pop.trace;
+      forget(chatId, msgId);
+      closePop();
+      toast('기록만 지웠어요. 글은 그대로예요.');
+      return;
+    }
+    if (act === 'paint') {
+      settings.paint = !settings.paint;
+      writeValue(SETTINGS_KEY, settings);
+      button.setAttribute('aria-pressed', String(settings.paint));
+      schedulePaint(0);
+    }
+  }
+
+  // ---------- 선택 감지 ----------
+
+  const mdOf = node => (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest('.wrtn-markdown') || null;
+
+  // 선택 안에 다른 메시지의 글자가 들어 있는지
+  function otherMessageTextIn(range, group) {
+    for (const other of document.querySelectorAll('.wrtn-markdown')) {
+      if (group.contains(other)) continue;
+      const o = document.createRange();
+      o.selectNodeContents(other);
+      if (range.compareBoundaryPoints(Range.START_TO_END, o) <= 0 || range.compareBoundaryPoints(Range.END_TO_START, o) >= 0) continue;
+      const x = range.cloneRange();
+      if (x.compareBoundaryPoints(Range.START_TO_START, o) < 0) x.setStart(o.startContainer, o.startOffset);
+      if (x.compareBoundaryPoints(Range.END_TO_END, o) > 0) x.setEnd(o.endContainer, o.endOffset);
+      if (/[\p{L}\p{N}]/u.test(x.toString())) return true;
+    }
+    return false;
+  }
+
+  function currentSelection() {
+    const sel = document.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+    const range = sel.getRangeAt(0).cloneRange();
+    const home = mdOf(sel.anchorNode) || mdOf(range.startContainer) || mdOf(range.endContainer);
+    const group = groupOf(home);
+    if (!home || !group) return null;
+    const inGroup = node => {
+      const m = mdOf(node);
+      return Boolean(m && group.contains(m));
+    };
+    // 세 번 클릭처럼 끝이 메시지 글 밖(버튼·다음 블록 맨 앞)에 걸리면, 다른 메시지 글자가 없을 때만 이 메시지 글 끝으로 줄입니다.
+    if (!inGroup(range.startContainer) || !inGroup(range.endContainer)) {
+      // 시작 쪽이 다른 메시지에 있으면(목록 아래 빈틈까지 끈 경우) 화면에 칠해진 곳과 끈 곳이 달라서 거절합니다.
+      if (!inGroup(range.startContainer) && !group.contains(range.startContainer)) return null;
+      if (otherMessageTextIn(range, group)) return null;
+      const mds = mdsOf(group);
+      if (!inGroup(range.startContainer)) {
+        const first = mds.find(m => range.comparePoint(m, 0) === 0);
+        if (!first) return null;
+        range.setStart(first, 0);
+      }
+      if (!inGroup(range.endContainer)) {
+        const last = mds.slice().reverse().find(m => range.comparePoint(m, m.childNodes.length) === 0);
+        if (!last) return null;
+        range.setEnd(last, last.childNodes.length);
+      }
+    }
+    const md = mdOf(range.startContainer);
+    const el = node => (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement);
+    if (!md || md.closest('[contenteditable="true"]')) return null;
+    // 본문 안의 버튼 글자·입력 칸·핀셋 UI를 고른 것은 무시합니다.
+    if ([range.startContainer, range.endContainer].some(node => el(node)?.closest('[contenteditable="true"], button, textarea, input, select, .cpn-ui'))) return null;
+    if (!here().chatId || !/[\p{L}\p{N}]/u.test(range.toString())) return null;
+    return { md, group, range };
+  }
+
+  // 이미 더 빨리 확인하기로 한 게 있으면 미루지 않습니다(마우스를 뗀 직후에 막대가 바로 뜨게).
+  let selTimer = 0;
+  let selDue = 0;
+  let pointerHeld = false;
+  function checkSelection(delay) {
+    if (!running || document.hidden || !isEnabled()) return;
+    const due = Date.now() + delay;
+    if (selTimer && selDue <= due) return;
+    clearLater(selTimer);
+    selDue = due;
+    selTimer = later(() => {
+      selTimer = 0;
+      if (!running || document.hidden || ui.pop) return;
+      const sel = currentSelection();
+      // 답변을 만드는 중(글자가 아직 안 나오는 대기 구간 포함)에는 막대를 띄우지 않습니다.
+      const state = sel ? findBridge(sel.md).state : null;
+      if (!sel || streamingNow() || (state && String(state.status).toUpperCase() !== 'IDLE')) {
+        hideToolbar();
+        return;
+      }
+      if (ui.toolbar && ui.sel && ui.sel.md === sel.md && ui.sel.range.toString() === sel.range.toString()) return;
+      showToolbar(sel);
+    }, delay);
+  }
+
+  let downAt = null;
+  let warnedBlocked = false;
+  function bindSelectionEvents() {
+  listen(document, 'pointerup', event => {
+    pointerHeld = false;
+    if (event.composedPath().includes(ui.host)) return;
+    if (!ui.toolbar && !downAt && document.getSelection()?.isCollapsed) return;
+    // 메시지 글을 마우스로 끌었는데 선택이 안 되면, 다른 확프가 글자 선택을 막고 있는 것입니다(한 번만 알림).
+    if (!warnedBlocked && event.pointerType === 'mouse' && downAt && Math.hypot(event.clientX - downAt.x, event.clientY - downAt.y) > 12) {
+      const md = event.target instanceof Element ? event.target.closest('.wrtn-markdown') : null;
+      if (md && document.getSelection()?.isCollapsed && getComputedStyle(md).userSelect === 'none') {
+        warnedBlocked = true;
+        toast('다른 확프(모바일 유틸의 길게 누르기 메뉴)가 글자 선택을 막고 있어요. 그 설정을 끄면 핀셋을 쓸 수 있어요.', { error: true, ms: 6000 });
+      }
+    }
+    downAt = null;
+    checkSelection(30);
+  }, true);
+  listen(document, 'pointercancel', () => { pointerHeld = false; }, true);
+  listen(document, 'keyup', event => {
+    if (event.shiftKey || event.key === 'Shift') checkSelection(60);
+  }, true);
+  // 마우스로 끄는 중에는 기다렸다가 뗄 때 확인합니다. 휴대폰은 선택 손잡이를 움직여도 포인터 이벤트가 없어서 이것으로 확인합니다.
+  listen(document, 'selectionchange', () => {
+    if (!ui.toolbar && document.getSelection()?.isCollapsed) return;
+    if (coarse()) {
+      // 휴대폰: 손잡이를 끄는 동안에는 막대를 다시 만들지 않고, 멈춘 뒤 한 번만 확인합니다.
+      clearLater(selTimer);
+      selTimer = 0;
+      checkSelection(450);
+      return;
+    }
+    if (pointerHeld) return;
+    checkSelection(250);
+  });
+  listen(document, 'pointerdown', event => {
+    const path = event.composedPath();
+    if (path.includes(ui.host)) return;
+    pointerHeld = event.pointerType === 'mouse';
+    downAt = mdOf(event.target) ? { x: event.clientX, y: event.clientY } : null;
+    // 새로 누르면 옛 선택의 막대는 바로 숨깁니다(새 선택을 옛 막대 위에서 놓아 옛 선택을 고치지 않게).
+    hideToolbar();
+    if (ui.pop && !ui.pop.edit) closePop();
+  }, true);
+  listen(window, 'scroll', () => hideToolbar(), true);
+  listen(window, 'resize', () => hideToolbar());
+
+  // 칠해진 흔적을 누르면 흔적 창을 엽니다.
+  // 크랙 메시지 칸이 클릭 전파를 막아 두어서, 잡는 단계(capture)에서 듣습니다.
+  listen(document, 'click', event => {
+    if (!document.getSelection()?.isCollapsed || event.composedPath().includes(ui.host)) return;
+    const md = event.target instanceof Element ? event.target.closest('.wrtn-markdown') : null;
+    const hit = md && hits.get(md);
+    if (!hit) return;
+    let node = null;
+    let offset = 0;
+    if (document.caretRangeFromPoint) {
+      const caret = document.caretRangeFromPoint(event.clientX, event.clientY);
+      node = caret?.startContainer;
+      offset = caret?.startOffset ?? 0;
+    } else if (document.caretPositionFromPoint) {
+      const caret = document.caretPositionFromPoint(event.clientX, event.clientY);
+      node = caret?.offsetNode;
+      offset = caret?.offset ?? 0;
+    }
+    if (!node) return;
+    const inside = hit.ranges.some(range => {
+      try {
+        return range.isPointInRange(node, offset) && (range.comparePoint(node, offset) === 0);
+      } catch (error) {
+        return false;
+      }
+    });
+    if (inside) openTrace(hit.group, hit.id, { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY + 8, width: 0, height: 8 });
+  }, true);
+
+  }
+
+  // ---------- CMU lifecycle (no interval, shared route/DOM refresh) ----------
+  let observedList = null;
+  let lastPath = location.pathname;
+
+  function updateViewport() {
+    if (!ui.stage) return;
+    const vv = pageWindow.visualViewport;
+    const height = vv?.height || innerHeight;
+    ui.stage.style.setProperty('--cpn-vh', `${Math.round(height)}px`);
+    ui.stage.style.setProperty('--cpn-kb', `${Math.max(0, Math.round(innerHeight - height - (vv?.offsetTop || 0)))}px`);
+    hideToolbar();
+  }
+
+  function removeRoomWatches() {
+    watchedStores.forEach(unsubscribe => { try { unsubscribe?.(); } catch (_) {} });
+    watchedStores.clear();
+    for (const [key,id] of valueListeners) {
+      if (key === SETTINGS_KEY) continue;
+      try { if (typeof GM_removeValueChangeListener === 'function') GM_removeValueChangeListener(id); } catch (_) {}
+      valueListeners.delete(key);
+    }
+    books.clear(); pendingNative.clear(); revertSeen.clear(); reloadNeeded.clear();
+    clearLater(nativeCleanupTimer); nativeCleanupTimer = 0;
+    rangeCache = new WeakMap(); hits.clear();
+  }
+
+  function refresh(changedGroups = null) {
+    if (!running) return;
+    if (!isEnabled()) { stop(); return; }
+    if (location.pathname !== lastPath) {
+      lastPath = location.pathname; epoch += 1;
+      ui.toolbar?.remove(); ui.toolbar=null;
+      ui.pop?.remove(); ui.pop=null; ui.sel=null;
+      removeRoomWatches();
+      observedList=null;
+      document.querySelectorAll('.cpn-badge').forEach(node=>node.remove());
+      try { registry()?.delete('cpn-edit'); registry()?.delete('cpn-cut'); } catch (_) {}
+    }
+    if (document.hidden) { clearLater(paintTimer); paintTimer=0; return; }
+    const theme=currentTheme();
+    if(document.documentElement.dataset.cpnTheme!==theme) document.documentElement.dataset.cpnTheme=theme;
+    if(ui.stage&&ui.stage.dataset.theme!==theme) ui.stage.dataset.theme=theme;
+    const list = here().chatId ? document.querySelector('[data-message-group-id]')?.parentElement || null : null;
+    if (changedGroups && typeof changedGroups[Symbol.iterator] === 'function') {
+      for (const group of changedGroups) if (group && typeof group === 'object') rangeCache.delete(group);
+    } else {
+      rangeCache = new WeakMap();
+    }
+    if(list!==observedList) {
+      observedList=list;
+      if(list) findBridge();
+    }
+    if(list) schedulePaint(250);
+  }
+
+  function start() {
+    if(running) { refresh(); return true; }
+    if(!isEnabled()) return false;
+    if(pageWindow.__crackPinsetRunning && pageWindow.__cmuPinsetOwner!==owner) {
+      if (!blockedNoticeShown) {
+        blockedNoticeShown = true;
+        notify('별도 핀셋 확장이 실행 중이에요. 별도 확장을 끈 뒤 새로고침해 주세요.');
+      }
+      onStateChange(false); return false;
+    }
+    blockedNoticeShown=false;
+    running=true; epoch+=1; lastPath=location.pathname;
+    pageWindow.__crackPinsetRunning=true; pageWindow.__cmuPinsetOwner=owner;
+    document.documentElement.dataset.cmuPinset='on';
+    injectHostStyle(); watchSettings(); bindSelectionEvents();
+    diagState.xhrHooked=diagState.fetchHooked=true;
+    listen(document,'visibilitychange',()=>{ if(document.hidden) {clearLater(paintTimer);paintTimer=0;hideToolbar();} else {refresh();schedulePaint(100);} });
+    if(pageWindow.visualViewport) {listen(pageWindow.visualViewport,'resize',updateViewport,{passive:true});listen(pageWindow.visualViewport,'scroll',updateViewport,{passive:true});}
+    refresh(); onStateChange(true); return true;
+  }
+
+  function stop() {
+    if(!running) return;
+    running=false; epoch+=1;
+    timers.forEach(id=>clearTimeout(id)); timers.clear();
+    paintTimer=selTimer=nativeCleanupTimer=0; selDue=0; pointerHeld=false; downAt=null;
+    observedList=null;
+    listeners.splice(0).forEach(remove=>{try{remove();}catch(_){}});
+    removeRoomWatches();
+    valueListeners.forEach(id=>{try{if(typeof GM_removeValueChangeListener==='function')GM_removeValueChangeListener(id);}catch(_){}});
+    valueListeners.clear();
+    ui.host?.remove(); Object.assign(ui,{host:null,shadow:null,stage:null,toolbar:null,pop:null,busy:false,sel:null,keyGuard:false});
+    document.getElementById('cpn-host-style')?.remove();
+    document.querySelectorAll('.cpn-badge').forEach(node=>node.remove());
+    try {registry()?.delete('cpn-edit');registry()?.delete('cpn-cut');}catch(_){}
+    delete document.documentElement.dataset.cpnTheme; delete document.documentElement.dataset.cmuPinset;
+    if (!inFlight.size) ownWrites.clear();
+    diagState.xhrHooked=diagState.fetchHooked=diagState.xhrWrapped=false;
+    if(pageWindow.__cmuPinsetOwner===owner) { delete pageWindow.__cmuPinsetOwner; pageWindow.__crackPinsetRunning=false; }
+    onStateChange(false);
+  }
+
+  function open() {
+    if(!running) {notify('설정에서 핀셋 수정을 먼저 켜 주세요.');return false;}
+    refresh();
+    if(ui.pop?.edit) {ui.pop.querySelector('textarea')?.focus({preventScroll:true});return true;}
+    hideToolbar();
+    const pop=popShell('핀셋 수정','부분 수정 · 기록 · 되돌리기');
+    const records=Object.entries(book(here().chatId)).sort((a,b)=>(b[1].at||0)-(a[1].at||0));
+    pop.querySelector('.bd').innerHTML='<div class="stale">메시지 글자를 길게 눌러 선택한 뒤 <b>고치기</b>를 누르세요. 입력 내용을 확인하고 저장하면 선택한 부분만 바뀝니다. 주황색 흔적이나 아래 기록에서 원문 비교·되돌리기를 할 수 있어요.</div>'+
+      '<div class="list">'+(records.map(([id,record])=>`<button class="it btn" style="height:auto;min-height:40px;display:block;text-align:left;white-space:normal" data-act="open-record" data-id="${esc(id)}"><b>${record.edits.length}번 수정 · ${ago(record.at)}</b><br>${esc(clip(record.current,80))}</button>`).join('')||'<div class="empty">이 채팅방의 수정 기록이 아직 없어요.</div>')+'</div>';
+    pop.querySelector('.ft').innerHTML=`<button class="sw" data-act="paint" aria-pressed="${settings.paint}"><i></i>수정 흔적 색칠</button><span class="grow"></span><button class="btn" data-act="disable">핀셋 끄기</button><button class="btn" data-act="close">닫기</button>`;
+    const rect={left:innerWidth/2,top:innerHeight/3,bottom:innerHeight/3,width:0,height:0};place(pop,rect,'below');
+    pop.focus({preventScroll:true});return true;
+  }
+
+  // 실기기 점검용: 개발자 도구 콘솔에서 CrackPinset.diag() 를 실행하면 연결 상태를 보여 줍니다.
+  const diagnostics = {
+    version: VERSION,
+    diag() {
+      const h = here();
+      const md = document.querySelector('[data-message-group-id] .wrtn-markdown');
+      const bridge = findBridge(md);
+      const state = bridge.store ? bridge.store.getState() : null;
+      const info = md ? messageOf(groupOf(md), bridge) : null;
+      return {
+        version: VERSION,
+        route: h,
+        fiber: bridge.fiber,
+        actions: bridge.actions ? Object.keys(bridge.actions).sort() : null,
+        chatState: bridge.state ? { status: bridge.state.status, chatId: bridge.state.chatId, selectedMessageId: bridge.state.selectedMessageId } : null,
+        chatIdMismatch: bridge.mismatch,
+        store: state ? { messages: state.messages.size, groups: state.messageGroups ? state.messageGroups.length : null, updateMessage: typeof state.updateMessage === 'function' } : null,
+        firstMessage: info ? { groupId: info.groupId, ids: info.ids, msgId: info.msgId, fromStore: info.fromStore, contentLength: info.content?.length ?? null, mds: info.mds.length, coverage: info.content ? Number(coverage(info.content, info.mds).toFixed(3)) : null } : null,
+        highlightApi: Boolean(HL && registry()),
+        // 다른 확프(모바일 유틸 길게 누르기 메뉴 등)가 메시지 글자 선택을 막고 있는지
+        selectBlocked: md ? getComputedStyle(md).userSelect === 'none' : null,
+        network: { xhr: diagState.xhrHooked, xhrWrapped: diagState.xhrWrapped, fetch: diagState.fetchHooked },
+        lastPath: diagState.lastPath,
+        lastError: diagState.lastError,
+        nativeCaptured: diagState.nativeCaptured,
+        records: Object.keys(book(h.chatId)).length,
+      };
+    },
+    records: () => JSON.parse(JSON.stringify(book(here().chatId))),
+    debug(on = true) {
+      debug = Boolean(on);
+      try { pageWindow.localStorage.setItem('cpn:debug', debug ? '1' : '0'); } catch (error) { /* 무시 */ }
+      return debug;
+    },
+    // 원문 대조 시험: CrackPinset.mapTest() → 현재 선택한 글이 원문 어디에 해당하는지
+    async mapTest() {
+      const sel = currentSelection();
+      if (!sel) return '메시지 안에서 글자를 먼저 선택해 주세요.';
+      const { target, mapped } = await prepare(sel);
+      const { vpos, ...rest } = mapped;
+      const erase = mapped.ok ? planSplice(target.content, mapped, '') : null;
+      return { msgId: target.msgId, via: target.via, ...rest, sourceSlice: mapped.ok ? target.content.slice(mapped.a, mapped.b) : null, eraseWouldGive: erase ? erase.next.slice(Math.max(0, erase.a - 30), erase.a + erase.kept.length + 30) : '(원문 창으로 넘어감)' };
+    },
+  };
+  return { start, stop, open, close: () => { hideToolbar(); closePop(); }, refresh, captureRequest, observeMessage, isRunning: () => running, destroy: stop, diag: diagnostics.diag };
+}
+
+    CMU_ADDONS.sorter = CMU_EARLY_SORTER;
+    CMU_EARLY_BRIDGE.isEnabled = () => shouldRun() && !!settings.shortcutSorterEnabled;
+    CMU_EARLY_BRIDGE.notify = showToast;
+    CMU_EARLY_BRIDGE.onStateChange = cmuAddonStateChanged;
+    CMU_ADDONS.pinset = createCmuPinset({
+        isEnabled: () => shouldRun() && !!settings.pinsetEnabled && isChatRoomPath(),
+        notify: showToast, onStateChange: cmuAddonStateChanged,
+        onDisable: () => setSettingFromQ('pinsetEnabled', false),
+    });
+    CMU_RESOURCES.cleanups.push(() => { CMU_ADDONS.pinset?.destroy?.(); CMU_ADDONS.sorter?.destroy?.(); });
+    addStyle(`
+      #chud-sidebar .cmu-addon-off { opacity:.46; }
+      html.cmu-pinset-selecting main [data-message-group-id] :is(.wrtn-markdown, [class*="wrtn-markdown"], .markdown-body, .prose),
+      html.cmu-pinset-selecting main [data-message-group-id] :is(.wrtn-markdown, [class*="wrtn-markdown"], .markdown-body, .prose) * {
+        user-select:text !important; -webkit-user-select:text !important; -webkit-touch-callout:default !important;
+      }
+    `);
+
     if (settings.logCapture)
         installLogCaptureHandlers();
     hookHistory();
@@ -27535,4 +31078,13 @@
         catch (_) { }
     };
     log(`loaded ${VERSION}`);
+}
+
+    function startCmuOnce() {
+        delete page.__CMU_4605_BOOT_PENDING__;
+        try { cmuMain(); }
+        catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startCmuOnce, { once: true });
+    else startCmuOnce();
 })();

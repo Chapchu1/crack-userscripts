@@ -1,18 +1,24 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.4
-// @description  4.6.0.4: 모델 선택창을 미니사이드바 버튼 위에 배치·키보드 크기 변화 대응. 글 감싸기 수동 호출·복사 메뉴 충돌 완화, 통합 기능 접이식 ON/OFF, 라존데 상태 아이콘 6종, 상황 이미지 바로가기 보완, 모델 선택창 포커스·키보드·중복 동작 안정화.
+// @version      4.6.0.5
+// @description  4.6.0.5: 단축어 순서 정렬·핀셋 부분 수정 통합, 개별 ON/OFF·미니사이드바 바로가기, 선택 메뉴 충돌 방지·반복 감시 축소. 기존 모델·테마·키보드·프로필 기능 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.meta.js
 // @match        *://crack.wrtn.ai/*
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @grant        unsafeWindow
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_addValueChangeListener
+// @grant        GM_removeValueChangeListener
+// @noframes
 // @connect      old.rs.igx.kr
 // @connect      rs.igx.kr
 // @connect      igx-radiosonde-api-striker.b-cdn.net
