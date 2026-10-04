@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.35
+// @version      0.5.36
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -24,6 +24,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.36 · 모바일 상세 편집기·정리 완료 안내
+ * 위시 RP 매니저 상세 화면의 경고·주입 목록 박스와 모바일 버튼 배치를 보완합니다.
+ * 실제 보이는 화면 높이에 맞추고, 상세 편집기 이름에 위시 RP 매니저를 명시합니다.
+ * 정상 정리 완료 팝업은 짧게 표시하며 상세 진행 상태와 오류·보류 안내는 유지합니다.
+ */
 
 /* 0.5.35 · 특정 방의 빈 주입 원문 확인·복구 보완
  * 주입 원문의 식별자·역할·본문 필드를 확인하고 불완전한 조회만 제한적으로 다시 읽습니다.
@@ -376,7 +382,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.35'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.36'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -8700,13 +8706,13 @@ if (btnTurnInfo && turnInfoPopover) {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if (window.__WISH_RP_MANAGER_LOADED__) return;
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.35-suite', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.36-suite', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Suite',
-    version: '0.5.35-suite',
+    version: '0.5.36-suite',
     dbName: 'WishRPManagerDB_v2',
     dbVersion: 2,
     storeName: 'rooms',
@@ -30766,7 +30772,7 @@ ${dialogueText}`;
       html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace .rpcm-overview,
       html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace .rpcm-summary,
       html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace .rpcm-warnings,
-      html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace .rpcm-auto-active{display:initial}
+      html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace .rpcm-auto-active{display:block}
       html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace .rpcm-overview{display:grid}
       html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace .rpcm-summary{display:block}
       html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace .rpcm-ai-launchbar{display:flex}
@@ -32711,7 +32717,7 @@ html:not(.rpcm-mobile-layout) #rpcm-modal .rpcm-work-content>*{max-width:948px;m
 @keyframes rpcm-wish-shell-in{from{opacity:0;transform:translateY(14px) scale(.985)}}
 @keyframes rpcm-wish-pulse{50%{filter:brightness(1.15)}}
 html.rpcm-mobile-layout #rpcm-overlay{padding:0!important}
-html.rpcm-mobile-layout #rpcm-modal-wrap,html.rpcm-mobile-layout #rpcm-modal{width:100vw!important;height:100dvh!important;max-height:100dvh!important;border-radius:0!important;animation:none!important;transform:none!important}
+html.rpcm-mobile-layout #rpcm-modal-wrap,html.rpcm-mobile-layout #rpcm-modal{width:100%!important;height:100%!important;max-height:100%!important;box-sizing:border-box!important;border-radius:0!important;animation:none!important;transform:none!important}
 html.rpcm-mobile-layout #rpcm-modal .rpcm-side-surface{display:none!important}
 html.rpcm-mobile-layout #rpcm-modal .rpcm-workspace{display:block!important}
 html.rpcm-mobile-layout #rpcm-modal .rpcm-work-content{height:auto!important;overflow:visible!important;padding:12px 12px calc(76px + env(safe-area-inset-bottom))!important}
@@ -32924,6 +32930,31 @@ html.rpcm-mobile-layout #rpcm-modal :is(.rpcm-section,.rpcm-overview,.rpcm-tools
 html.rpcm-mobile-layout #rpcm-modal :is(input:not([type=checkbox]):not([type=radio]),select,textarea){max-width:100%;min-width:0;box-sizing:border-box}
 html.rpcm-mobile-layout #rpcm-modal :is(.rpcm-section-head,.rpcm-charlib-actions,.rpcm-item-folder-field,.rpcm-extra-category-field,.rpcm-tool-actions,.rpcm-maintenance-actions){min-width:0;max-width:100%;flex-wrap:wrap}
 html.rpcm-mobile-layout #rpcm-modal :is(.rpcm-section-title,.rpcm-section-desc,.rpcm-slot-name,.rpcm-item-readable,.rpcm-read-text,.rpcm-tool-card p,.rpcm-settings-card p){overflow-wrap:anywhere;word-break:break-word}
+/* Suite 0.5.36: keep the Manager's mobile cards and actions inside their surfaces. */
+html.rpcm-mobile-layout #rpcm-modal :is(.rpcm-warnings,.rpcm-auto-active){min-width:0;max-width:100%;box-sizing:border-box}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-warnings>div{overflow-wrap:anywhere}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-warning-action{max-width:100%;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere;min-height:40px;margin:8px 6px 0 0}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-auto-active-title{flex-wrap:wrap;min-width:0;gap:8px}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-auto-active-title>span{flex:1 1 160px;min-width:0;overflow-wrap:anywhere}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-related-add{max-width:100%;white-space:normal;min-height:40px}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-auto-active-row{grid-template-columns:auto minmax(0,1fr);gap:8px 10px;align-items:start;padding:12px 0;min-width:0}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-auto-active-copy{min-width:0;overflow-wrap:anywhere}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-auto-active-meta{grid-column:1/-1;min-width:0;display:flex;flex-wrap:wrap;gap:8px;white-space:normal}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-auto-active-meta>span{flex:1 1 140px;min-width:0;overflow-wrap:anywhere}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-auto-active-meta>button{min-height:40px;max-width:100%;white-space:normal}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-auto-inline-toggle{width:40px!important;min-width:40px!important;height:40px!important;min-height:40px!important}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-auto-inline-content{grid-column:1/-1;min-width:0;max-width:100%;box-sizing:border-box;overflow-wrap:anywhere;white-space:pre-wrap}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-summary-head{flex-wrap:wrap;gap:8px}
+html.rpcm-mobile-layout #rpcm-modal .rpcm-summary-head>span{min-width:0;max-width:100%}
+@media(max-width:380px){
+  html.rpcm-mobile-layout #rpcm-modal .rpcm-header{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+  html.rpcm-mobile-layout #rpcm-modal .rpcm-header>div:first-child{grid-column:1/-1}
+  html.rpcm-mobile-layout #rpcm-modal .rpcm-header>.rpcm-spacer{display:none}
+  html.rpcm-mobile-layout #rpcm-modal .rpcm-header>.rpcm-iconbtn,
+  html.rpcm-mobile-layout #rpcm-modal .rpcm-header>.rpcm-header-menu>summary{width:100%!important;min-width:0!important;min-height:40px;box-sizing:border-box}
+  html.rpcm-mobile-layout #rpcm-modal .rpcm-header>.rpcm-header-menu{min-width:0}
+}
+
     `);
   }
 
@@ -43085,7 +43116,7 @@ reason은 각 항목에서 무엇을 줄이거나 합쳤는지와 그 이유를 
       <div id="rpcm-modal-wrap">
         <div id="rpcm-modal">
           <div class="rpcm-header">
-            <div><div class="rpcm-title">${esc(APP.name)}</div><div class="rpcm-sub">${esc(room.label || '현재 채팅방')} · v${esc(APP.version)}</div></div>
+            <div><div class="rpcm-title">🪽위시 RP 매니저</div><div class="rpcm-sub">${esc(room.label || '현재 채팅방')} · v${esc(APP.version)}</div></div>
             <div class="rpcm-spacer"></div>
             <button class="rpcm-iconbtn rpcm-header-search-button" type="button" id="rpcm-header-search-toggle" aria-label="통합 검색 열기" aria-expanded="false" title="통합 검색">${rpcmUiIcon('search')}</button>
             <button class="rpcm-iconbtn rpcm-user-memo-open" type="button" id="rpcm-user-memo-open" aria-label="사용자 메모 열기 · 활성 ${activeUserCanonMemos(room).length}개" title="사용자 메모">${rpcmUiIcon('doc')}<span class="rpcm-user-memo-badge" id="rpcm-user-memo-badge" ${activeUserCanonMemos(room).length?'':'hidden'}>${activeUserCanonMemos(room).length>99?'99+':activeUserCanonMemos(room).length}</span></button>
@@ -46960,7 +46991,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.35-suite';
+  const SCRIPT_VERSION = '0.5.36-suite';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -50913,9 +50944,10 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     await atomicCommit(room,commitCog,livePacks(),staged);
     try{await bridge().refresh();if(room.pending)await refreshPendingAfterAutomaticMemory(room);}catch(e){WLOG.fail('최종 기억 반영 후 동기화',e);recordPendingSyncError(room,e);notify('검증된 기억은 저장됐습니다. 서버 주입 갱신은 다음 전송 때 재시도합니다.','warn',6000);}
     try{state.v2Cognition=await(bridge().getView||bridge().getRoom).call(bridge(),apiChatIdOf(room));}catch{}
-    updateCounts(room,latest);if(d.notices?.length)WishMemorySafety.reportNotices(d.notices,room.unified.status);else notify(room.unified.status,d.deferredFailure?'warn':'success',5000);return true;
+    updateCounts(room,latest);if(d.notices?.length)WishMemorySafety.reportNotices(d.notices,room.unified.status);else notify(d.deferredFailure?room.unified.status:tidyCompletionText(d.memoryChanged,d.observeChanged),d.deferredFailure?'warn':'success',5000);return true;
   }
 
+  function tidyCompletionText(memory,observe){return memory?(observe?'기억·인물 통합 정리 완료':'기억 정리 완료'):observe?'인물 정리 완료':'정리 완료';}
   function hasCatchup(u,kind){return !!u.catchup?.[kind]&&String(u.catchup[kind])!==String(u[kind+'Cursor']||'');}
   function resumeBatchPlan(p,u,force=''){
     if(force||!u.settings.enabled)return p;
@@ -51791,7 +51823,7 @@ issue는 kind/ref/message/source_turn_key/source_quote 필드만 쓴다. message
         counts.set(room,{memory:after(turns(latest),room.unified.memoryCursor).length,observe:after(turns(latest),room.unified.observeCursor).length});
         for(const failure of staged.partialFailures)WLOG.fail((failure.kind==='memory'?'기억':'인물')+' 정리 검증 보류',failure.error,{stage:'다른 묶음 저장 완료 · 보류 묶음의 기준 대화 유지'});
         if(staged.notices?.length)WishMemorySafety.reportNotices(staged.notices,room.unified.status);
-        else if(hasPartialFailure(room.unified)||!automationEnabled(room)||!['memory','observe'].some(kind=>settings(room)[kind+'Enabled']&&hasCatchup(room.unified,kind)))notify(room.unified.status,hasPartialFailure(room.unified)?'warn':'success',4500);return true;
+        else if(hasPartialFailure(room.unified)||!automationEnabled(room)||!['memory','observe'].some(kind=>settings(room)[kind+'Enabled']&&hasCatchup(room.unified,kind)))notify(hasPartialFailure(room.unified)?room.unified.status:tidyCompletionText(staged.completed.memory,staged.completed.observe),hasPartialFailure(room.unified)?'warn':'success',4500);return true;
       }catch(e){
         if(state.currentRoom!==room)return false;
         if(await handleCancelledAttempt(room,e)){cancelledByUser=e?.code==='WISH_USER_ABORT';return false;}
@@ -62482,7 +62514,7 @@ relation:'<circle cx="12" cy="5" r="2.4"/><circle cx="5.5" cy="19" r="2.4"/><cir
     const pages=[['general','화면·도움말'],['transfer','백업·이동'],['rebuild','재구축'],['history','정리·복구']];
     if(!pages.some(([k])=>k===S.settingsPage))S.settingsPage='general';
     let body=S.settingsPage==='general'?`<section class="m3-panel"><b>화면 표시</b>${tog('입력창 상태 버튼 표시','display.monitor',WishDisplay.visible(),'OFF·남은 턴 숫자 버튼')}<p class="m3-muted">모바일 합본의 위시 RP 버튼을 사용하면 숨겨도 됩니다. 변경 즉시 모든 방에 적용됩니다.</p></section><section class="m3-panel"><b>설정을 찾고 있나요?</b><div class="m3-card-actions">${btn('API 연결','unifiedRoute',{arg:'ai:connection',cls:'mini',icon:'key'})}${btn('자동 정리','unifiedRoute',{arg:'ai:automation',cls:'mini'})}${btn('응답 교정','unifiedRoute',{arg:'ai:refiner',cls:'mini'})}${btn('진행 규칙·프리셋','unifiedRoute',{arg:'memory:extra',cls:'mini',icon:'book'})}${btn('실패·주의 기록','errorLogs',{cls:'mini',icon:'doc'})}${btn('저장 공간 관리','storageManage',{cls:'mini',icon:'database'})}</div></section>`:vTools(S.settingsPage);
-    if(S.settingsPage==='history')body+=fold('legacy-all-tools','고급 · 기존 상세 편집기',`<p class="m3-muted">이전 양식과 전문 도구가 필요한 경우에만 엽니다. 일반 기억·자료·인물 편집은 각각의 메뉴에서 가능합니다.</p>${btn('기존 상세 편집기 열기','suiteLegacy',{cls:'mini',icon:'edit'})}`);
+    if(S.settingsPage==='history')body+=fold('legacy-all-tools','고급 · 기존 상세 편집기 (위시 RP 매니저)',`<p class="m3-muted">통합본에 포함된 위시 RP 매니저의 상세 화면입니다. 기존 인물·물품의 세부 편집, 수동 업데이트·자료 압축 등 전문 도구를 엽니다. 일반 기억·자료·인물 편집은 각각의 메뉴에서 가능합니다.</p>${btn('위시 RP 매니저 상세 편집기 열기','suiteLegacy',{cls:'mini',icon:'edit'})}`);
     return pageHead('설정')+unifiedTabs(pages,S.settingsPage,'settingsSub')+`<div class="m3-sub" data-key="settings-${S.settingsPage}">${body}</div>`;
   }
 
