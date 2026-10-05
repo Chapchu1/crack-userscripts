@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.38
+// @version      0.5.39
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -24,6 +24,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.39 · 오류 후 정리 버튼 가독성 수정
+ * 홈의 재시작·재시도·API 연결 버튼에서 기본 배경이 강조 배경을 덮는 충돌을 수정합니다.
+ * 모델 변경 시 재시작 확인, 일반 오류 시 이어가기, 작업 중 중복 실행 방지는 유지합니다.
+ * 저장된 기억·임시 진행 데이터·AI 호출·재시도 정책과 기존 성능 최적화는 변경하지 않습니다.
+ */
 
 /* 0.5.38 · 원작자 0.17.14 TEMP2 기능·안전장치 통합
  * 응답 교정의 이슈별 선택·수동 편집·전체 비교와 오류 원인·해결 도움말을 연결합니다.
@@ -398,7 +404,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.38'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.39'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -8743,13 +8749,13 @@ if (btnTurnInfo && turnInfoPopover) {
   // 버전별 키를 쓰면 구버전과 신버전이 동시에 설치됐을 때 둘 다 실행될 수 있습니다.
   // 모든 버전이 공유하는 고정 키로 중복 실행을 막습니다.
   if (window.__WISH_RP_MANAGER_LOADED__) return;
-  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.38-suite', loadedAt: Date.now() };
+  window.__WISH_RP_MANAGER_LOADED__ = { version: '0.5.39-suite', loadedAt: Date.now() };
   // 같은 페이지에 남아 있는 v0.8.10 복사본이 뒤늦게 시작되는 경우도 차단합니다.
   window.__RP_MANAGER_0810_LOADED__ = true;
 
   const APP = {
     name: '🪽위시 RP Suite',
-    version: '0.5.38-suite',
+    version: '0.5.39-suite',
     releaseStage: '',
     dbName: 'WishRPManagerDB_v2',
     dbVersion: 2,
@@ -48529,7 +48535,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.38-suite';
+  const SCRIPT_VERSION = '0.5.39-suite';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -63640,7 +63646,7 @@ html.rpcm-custom-surface body[data-theme="dark"] :is(#wish-rp-root,#wish-suite-e
 #wish-rp-root .m3-cadence-target{padding:2px 8px;border-radius:7px;background:var(--m3-card2);color:var(--m3-accent);font-size:11px;white-space:nowrap}
 /* A single contextual action for the whole home memory workflow. */
 #wish-rp-root .m3-memory-primary-row{margin:12px 0}
-#wish-rp-root .m3-memory-primary-row>.m3-btn{width:100%;min-height:44px;justify-content:center;background:var(--m3-accent);color:var(--m3-accent-ink,#151824);border-color:var(--m3-accent);font-weight:700;font-size:13px}
+#wish-rp-root .m3-memory-primary-row>.m3-btn{width:100%;min-height:44px;justify-content:center;background:var(--m3-accent)!important;color:var(--m3-accent-ink,#151824);border-color:var(--m3-accent)!important;font-weight:700;font-size:13px}
 #wish-rp-root .m3-memory-work>.m3-fold2{margin:12px 0}
 #wish-rp-root .m3-memory-work>.m3-compact-status{line-height:1.65;overflow-wrap:anywhere}
 #wish-rp-root .m3-memory-note{font-size:12px;line-height:1.65;color:var(--m3-muted);margin:8px 0}
