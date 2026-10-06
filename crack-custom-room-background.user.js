@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         🖼️ Crack Custom Room Image Background (배경 이미지&테마)
 // @namespace    crack-custom-room-background
-// @version      4.3.0.2
-// @description  기존 테마·방별 이미지·사용자 디자인과 최적화를 보존하고 NYANG 5종·사이트 전체 웹폰트를 추가한 4.3.0.2 통합판.
+// @version      4.3.0.3
+// @description  방별 이미지·기존 테마·NYANG 5종·웹폰트를 유지하고 CSP와 동일한 사용자 테마 24종·장식선·전용 채팅창 이미지를 추가한 4.3.0.3 통합판.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        none
@@ -10,6 +10,7 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-custom-room-background.meta.js
 // ==/UserScript==
 
+// 2026-10-06: CSP 4.3.35의 사용자 테마 24종을 이미지·장식선·밝기별 색상·모바일 배치까지 이식.
 // UI 디자인 참고 출처 (Design reference / credit):
 // fooontic — CodePen: https://codepen.io/fooontic/pen/KwpRaGr
 
@@ -52,7 +53,1345 @@
   }
 
   const SCRIPT_NAME = 'Custom Room Image Background';
-  const VERSION = '4.3.0.2';
+  const VERSION = '4.3.0.3';
+
+  // User artwork: original filenames are the visible theme names.
+  const USER_THEME_PACK = Object.freeze([
+    {
+      "value": "pack29-sess-kikyo",
+      "label": "셋쇼x금강",
+      "group": "셋쇼마루&슈슈룬",
+      "desc": "벚꽃 · 은빛 곡선",
+      "art": "a03e129486d97",
+      "chatArt": "a6db57c35819b",
+      "chatName": "셋쇼마루 채팅창(하단)",
+      "align": "bottom",
+      "motif": "blossom",
+      "accent": "#eac7d2",
+      "secondary": "#c6cced",
+      "highlight": "#ecdca8",
+      "sceneHeight": 68,
+      "sceneMobile": 60,
+      "sceneRatio": 1.475369,
+      "chatHeight": 56,
+      "chatRatio": 1.612108,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-sess-kikyo-2",
+      "label": "셋쇼x금강2",
+      "group": "셋쇼마루&슈슈룬",
+      "desc": "깃털 · 별빛 가랜드",
+      "art": "af6697ce18559",
+      "chatArt": "a6db57c35819b",
+      "chatName": "셋쇼마루 채팅창(하단)",
+      "align": "bottom",
+      "motif": "feather",
+      "accent": "#d7c2dc",
+      "secondary": "#cfaaa8",
+      "highlight": "#e3d6b4",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 1.042889,
+      "chatHeight": 56,
+      "chatRatio": 1.612108,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-sess-sword",
+      "label": "셋쇼마루 칼",
+      "group": "셋쇼마루&슈슈룬",
+      "desc": "검빛 · 꽃잎",
+      "art": "a4d15ab3babba",
+      "chatArt": "a6db57c35819b",
+      "chatName": "셋쇼마루 채팅창(하단)",
+      "align": "bottom",
+      "motif": "blade",
+      "accent": "#edb9be",
+      "secondary": "#d8d9ef",
+      "highlight": "#e6c987",
+      "sceneHeight": 59,
+      "sceneMobile": 51,
+      "sceneRatio": 1.781022,
+      "chatHeight": 56,
+      "chatRatio": 1.612108,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-sesshomaru",
+      "label": "셋쇼마루",
+      "group": "셋쇼마루&슈슈룬",
+      "desc": "초승달 · 은빛 별빛",
+      "art": "a5636ed62d866",
+      "chatArt": "a6db57c35819b",
+      "chatName": "셋쇼마루 채팅창(하단)",
+      "align": "bottom",
+      "motif": "crescent",
+      "accent": "#dcdbee",
+      "secondary": "#c9b5d9",
+      "highlight": "#ecd6a2",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.692857,
+      "chatHeight": 56,
+      "chatRatio": 1.612108,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-sugar-rune",
+      "label": "슈슈룬",
+      "group": "셋쇼마루&슈슈룬",
+      "desc": "하트 보석 · 리본",
+      "art": "a5c5c872cced1",
+      "chatArt": "a16ca5d31b16f",
+      "chatName": "슈슈룬 채팅창(하단)",
+      "align": "bottom",
+      "motif": "gem",
+      "accent": "#edbfd9",
+      "secondary": "#c4e3db",
+      "highlight": "#eed3a1",
+      "sceneHeight": 68,
+      "sceneMobile": 60,
+      "sceneRatio": 1.403893,
+      "chatHeight": 56,
+      "chatRatio": 1.156051,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-touya-yukito",
+      "label": "도진x청명",
+      "group": "유에",
+      "desc": "리본 · 작은 별",
+      "art": "a05f222784f8b",
+      "chatArt": "acde749507d37",
+      "chatName": "도진x청명 채팅창(하단)",
+      "align": "bottom",
+      "motif": "ribbon",
+      "accent": "#bfd8e9",
+      "secondary": "#c6d8c6",
+      "highlight": "#e4d7af",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 1.033898,
+      "chatHeight": 56,
+      "chatRatio": 1.104072,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-yue-card",
+      "label": "유에 카드",
+      "group": "유에",
+      "desc": "섬세한 곡선 · 반짝임",
+      "art": "a2dcc44bfbff6",
+      "chatArt": "a396741605753",
+      "chatName": "유에 채팅창(중앙)",
+      "align": "center",
+      "motif": "filigree",
+      "accent": "#ded4e9",
+      "secondary": "#c5dae4",
+      "highlight": "#ead7b7",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.644495,
+      "chatHeight": 0,
+      "chatRatio": 0.995772,
+      "chatOpacity": 0.14,
+      "lightChatOpacity": 0.22
+    },
+    {
+      "value": "pack29-yue",
+      "label": "유에",
+      "group": "유에",
+      "desc": "깃털 · 별빛 가랜드",
+      "art": "a43045e6a77de",
+      "chatArt": "a396741605753",
+      "chatName": "유에 채팅창(중앙)",
+      "align": "center",
+      "motif": "feather",
+      "accent": "#c5dbea",
+      "secondary": "#d8cfee",
+      "highlight": "#e4ecf5",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 1.00274,
+      "chatHeight": 0,
+      "chatRatio": 0.995772,
+      "chatOpacity": 0.14,
+      "lightChatOpacity": 0.22
+    },
+    {
+      "value": "pack29-yue-kero",
+      "label": "유에x케로",
+      "group": "유에",
+      "desc": "깃털 · 별빛 가랜드",
+      "art": "ae087493203bf",
+      "chatArt": "a396741605753",
+      "chatName": "유에 채팅창(중앙)",
+      "align": "center",
+      "motif": "feather",
+      "accent": "#ecd49d",
+      "secondary": "#d7ccec",
+      "highlight": "#f1e7ce",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.971014,
+      "chatHeight": 0,
+      "chatRatio": 0.995772,
+      "chatOpacity": 0.14,
+      "lightChatOpacity": 0.22
+    },
+    {
+      "value": "pack29-hope-card",
+      "label": "호프 카드",
+      "group": "유에",
+      "desc": "마법 카드 · 날개",
+      "art": "adff246b28a08",
+      "chatArt": "b863e267b26e1",
+      "chatName": "호프 카드 채팅창(중앙)",
+      "align": "center",
+      "motif": "card",
+      "accent": "#f0c0d6",
+      "secondary": "#e8d49a",
+      "highlight": "#d1e6dc",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.439458,
+      "chatHeight": 0,
+      "chatRatio": 0.997920997920998,
+      "chatOpacity": 1,
+      "lightChatOpacity": 1
+    },
+    {
+      "value": "pack29-usagi-bouquet",
+      "label": "꽃다발 우사기",
+      "group": "쿠로미&우사기",
+      "desc": "장미 · 잎사귀",
+      "art": "a505850e82890",
+      "chatArt": "a9e172e7ffb31",
+      "chatName": "우사기 채팅창(하단)",
+      "align": "bottom",
+      "motif": "rose",
+      "accent": "#ecc2ce",
+      "secondary": "#bdd7b5",
+      "highlight": "#f3e4b7",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.782677,
+      "chatHeight": 56,
+      "chatRatio": 1.090452,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-usagi-baby",
+      "label": "우사기 베베",
+      "group": "쿠로미&우사기",
+      "desc": "구름 · 별빛",
+      "art": "ae47a14242921",
+      "chatArt": "a9e172e7ffb31",
+      "chatName": "우사기 채팅창(하단)",
+      "align": "bottom",
+      "motif": "cloud",
+      "accent": "#f2dfae",
+      "secondary": "#e4c9da",
+      "highlight": "#f2e9d4",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.803965,
+      "chatHeight": 56,
+      "chatRatio": 1.090452,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-usagi-school",
+      "label": "유치원 우사기",
+      "group": "쿠로미&우사기",
+      "desc": "유치원 모자 · 하트와 별빛",
+      "art": "a93dbee43b48e",
+      "chatArt": "a9e172e7ffb31",
+      "chatName": "우사기 채팅창(하단)",
+      "align": "bottom",
+      "motif": "schoolhat",
+      "accent": "#efd694",
+      "secondary": "#bbd5e8",
+      "highlight": "#efc4ce",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.83908,
+      "chatHeight": 56,
+      "chatRatio": 1.090452,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-kuromi",
+      "label": "쿠로미",
+      "group": "쿠로미&우사기",
+      "desc": "리본 · 하트",
+      "art": "a40f366c19a3f",
+      "chatArt": "a97e89ddcfb05",
+      "chatName": "쿠로미 채팅창(하단)",
+      "align": "bottom",
+      "motif": "bow",
+      "accent": "#ccb6e8",
+      "secondary": "#edbfd8",
+      "highlight": "#dccfee",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.811918,
+      "chatHeight": 56,
+      "chatRatio": 1.038806,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-kuromi-melody",
+      "label": "쿠로미x마멜",
+      "group": "쿠로미&우사기",
+      "desc": "날개 · 하트",
+      "art": "a20c5d2ff94a7",
+      "chatArt": "a067159a5d100",
+      "chatName": "쿠로미x마멜 채팅창(하단)",
+      "align": "bottom",
+      "motif": "wingheart",
+      "accent": "#e9bdd4",
+      "secondary": "#c6b5e3",
+      "highlight": "#b7dce8",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 1.146127,
+      "chatHeight": 56,
+      "chatRatio": 1.176685,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-gojo-dark",
+      "label": "고죠 Dark",
+      "group": "주술회전",
+      "desc": "인피니티 · 별무리",
+      "art": "a7be666214d46",
+      "chatArt": "a02f91dc2b16f",
+      "chatName": "고죠 채팅창(하단)",
+      "align": "bottom",
+      "motif": "infinity",
+      "accent": "#a7c8ee",
+      "secondary": "#aab6de",
+      "highlight": "#d5eafa",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.694497,
+      "chatHeight": 56,
+      "chatRatio": 1.019499,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-gojo-dark-2",
+      "label": "고죠 Dark2",
+      "group": "주술회전",
+      "desc": "궤도 · 빛의 파편",
+      "art": "a3b7fbadbb7a8",
+      "chatArt": "a02f91dc2b16f",
+      "chatName": "고죠 채팅창(하단)",
+      "align": "bottom",
+      "motif": "orbit",
+      "accent": "#94d0ed",
+      "secondary": "#9eafd9",
+      "highlight": "#d4eaf9",
+      "sceneHeight": 59,
+      "sceneMobile": 51,
+      "sceneRatio": 1.819193,
+      "chatHeight": 56,
+      "chatRatio": 1.019499,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-gojo-geto-smile",
+      "label": "고죠x게토 미소",
+      "group": "주술회전",
+      "desc": "섬세한 곡선 · 반짝임",
+      "art": "ac96cea4e2394",
+      "chatArt": "ad93c58078201",
+      "chatName": "고죠X게토 채팅방(하단)",
+      "align": "bottom",
+      "motif": "filigree",
+      "accent": "#c8d8c7",
+      "secondary": "#d9c5a3",
+      "highlight": "#d2c7e3",
+      "sceneHeight": 59,
+      "sceneMobile": 51,
+      "sceneRatio": 1.786885,
+      "chatHeight": 56,
+      "chatRatio": 1.149137,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-gojo-geto-v",
+      "label": "고죠X게토 브이",
+      "group": "주술회전",
+      "desc": "궤도 · 빛의 파편",
+      "art": "a464377a09002",
+      "chatArt": "ad93c58078201",
+      "chatName": "고죠X게토 채팅방(하단)",
+      "align": "bottom",
+      "motif": "orbit",
+      "accent": "#b7d9f0",
+      "secondary": "#c2b3df",
+      "highlight": "#e6d6b1",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.979138,
+      "chatHeight": 56,
+      "chatRatio": 1.149137,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-meowth",
+      "label": "나옹",
+      "group": "포켓몬&디지몬",
+      "desc": "금빛 코인 · 발자국",
+      "art": "ade244e01c459",
+      "chatArt": "abba574d0570e",
+      "chatName": "나옹 채팅창(하단)",
+      "align": "bottom",
+      "motif": "coin",
+      "accent": "#ecd59f",
+      "secondary": "#acd5df",
+      "highlight": "#ecc2b1",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.878683,
+      "chatHeight": 56,
+      "chatRatio": 1.722359,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-ditto",
+      "label": "메타몽",
+      "group": "포켓몬&디지몬",
+      "desc": "물방울 · 반짝임",
+      "art": "a3ed0f102c1a9",
+      "chatArt": "a6f2e3834c183",
+      "chatName": "메타몽 채팅창(하단)",
+      "align": "bottom",
+      "motif": "droplet",
+      "accent": "#d7bee5",
+      "secondary": "#dce9b5",
+      "highlight": "#eccee0",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.800971,
+      "chatHeight": 56,
+      "chatRatio": 1.122186,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-terriermon",
+      "label": "테리어몬",
+      "group": "포켓몬&디지몬",
+      "desc": "네잎클로버 · 작은 잎",
+      "art": "a4feccb6c0b27",
+      "chatArt": "a882d97301f41",
+      "chatName": "테리어몬 채팅창(하단)",
+      "align": "bottom",
+      "motif": "clover",
+      "accent": "#ccddb0",
+      "secondary": "#e7dca9",
+      "highlight": "#cee6d5",
+      "sceneHeight": 68,
+      "sceneMobile": 60,
+      "sceneRatio": 1.294479,
+      "chatHeight": 56,
+      "chatRatio": 1.461538,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-tokomon",
+      "label": "토코몬",
+      "group": "포켓몬&디지몬",
+      "desc": "날개 · 하트",
+      "art": "aca86d7aa8a1f",
+      "chatArt": "a4ba537d3cfdb",
+      "chatName": "토코몬 채팅창(하단)",
+      "align": "bottom",
+      "motif": "wingheart",
+      "accent": "#e9c9dc",
+      "secondary": "#cbd1e9",
+      "highlight": "#eedecd",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 0.925595,
+      "chatHeight": 56,
+      "chatRatio": 1.813456,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    },
+    {
+      "value": "pack29-pikachu",
+      "label": "피카츄",
+      "group": "포켓몬&디지몬",
+      "desc": "번개 · 빛의 조각",
+      "art": "a609026bea456",
+      "chatArt": "a2d5ce9a17de7",
+      "chatName": "피카츄 채팅창(하단)",
+      "align": "bottom",
+      "motif": "bolt",
+      "accent": "#f0d689",
+      "secondary": "#e9b8a6",
+      "highlight": "#f5e6ba",
+      "sceneHeight": 80,
+      "sceneMobile": 72,
+      "sceneRatio": 1.011158,
+      "chatHeight": 56,
+      "chatRatio": 1.697802,
+      "chatOpacity": 0.38,
+      "lightChatOpacity": 0.54
+    }
+  ]);
+  const USER_THEME_INDEX = new Map(USER_THEME_PACK.map(theme => [theme.value, theme]));
+  const USER_THEME_ASSETS = Object.freeze({
+    "a03e129486d97": {
+      "width": 599,
+      "height": 406,
+      "bytes": 189664,
+      "sha256": "0a3a83dc3af50c12f3027dae2311605be18bb8e58bd0b176434de3140d156882"
+    },
+    "a6db57c35819b": {
+      "width": 719,
+      "height": 446,
+      "bytes": 202172,
+      "sha256": "197a868918f9081e32c25578be132a80bf02987a8d7ad1eb39464d5b39ff98df"
+    },
+    "af6697ce18559": {
+      "width": 462,
+      "height": 443,
+      "bytes": 174604,
+      "sha256": "2bfcc0e25ee014be6ca1e89f7d61f34cc4792d4885667be36661febaf3d9e394"
+    },
+    "a61ce0d916de0": {
+      "width": 732,
+      "height": 411,
+      "bytes": 299598,
+      "sha256": "fcb00aea5050fcf9b9978ae2500d2489c7e8d35248cec689ff073cbc54093dd0"
+    },
+    "a4d15ab3babba": {
+      "width": 732,
+      "height": 411,
+      "bytes": 279420,
+      "sha256": "2d84c6c54238ca9d8f756d4a59b2f951a1cc352adc4d01dc76d99658d9ece82c"
+    },
+    "a5636ed62d866": {
+      "width": 679,
+      "height": 980,
+      "bytes": 382758,
+      "sha256": "66f3c87dc4284e42c0a40d6375189956620191d29da46260904764e3a858d160"
+    },
+    "a5c5c872cced1": {
+      "width": 577,
+      "height": 411,
+      "bytes": 220070,
+      "sha256": "f1dee008a8d2c69953ddeb232c1e7d4af91b035441c7808b50f731ad82fc5eed"
+    },
+    "a16ca5d31b16f": {
+      "width": 363,
+      "height": 314,
+      "bytes": 53408,
+      "sha256": "bd46dd13c998e35d9043eb473c3088572757cab802b768cd01a639bf9e306409"
+    },
+    "a05f222784f8b": {
+      "width": 732,
+      "height": 708,
+      "bytes": 256648,
+      "sha256": "9bfa797938b111916c5b0be997c02bc093c525f97fde751d6dc648ad6247c438"
+    },
+    "acde749507d37": {
+      "width": 732,
+      "height": 663,
+      "bytes": 309598,
+      "sha256": "552d1312984bb8a0e0a3e68c1c3602caf1cb33aca5898636556cc705d8be0436"
+    },
+    "aaf1a62bfdec9": {
+      "width": 724,
+      "height": 732,
+      "bytes": 307046,
+      "sha256": "8d872bf2286a6e317f28da38994bc1eb4b2b0b3d0d956dcf63202d00a97c169b"
+    },
+    "a396741605753": {
+      "width": 471,
+      "height": 473,
+      "bytes": 248514,
+      "sha256": "52ab9437715012e055ffe09cd276eda966e4ca19bc3a708908b1abdd761addc1"
+    },
+    "a2dcc44bfbff6": {
+      "width": 281,
+      "height": 436,
+      "bytes": 123014,
+      "sha256": "5e8970067675d8f9924b5b2247d73f69db71c8877700555added6c29ea088e32"
+    },
+    "a43045e6a77de": {
+      "width": 732,
+      "height": 730,
+      "bytes": 289108,
+      "sha256": "553ff9a8432968b116e3b210bc7419129a09a557a7b81ce65f55b3510d915054"
+    },
+    "ae719bc67505e": {
+      "width": 623,
+      "height": 563,
+      "bytes": 263840,
+      "sha256": "8197a0bc74447c7186623306916f8a0f1788d82b70a8f5a55cc13427960a99ee"
+    },
+    "a78b290343750": {
+      "width": 505,
+      "height": 383,
+      "bytes": 172504,
+      "sha256": "9acbf04d1e92b144fcf552317df7137b3621544a7f2b38173ea0a257632eeed3"
+    },
+    "aadbbb6b1f246": {
+      "width": 712,
+      "height": 1091,
+      "bytes": 603834,
+      "sha256": "19f11d70aa6c201ae52451eca6f02b850a191aa59cab04cfda9fa541b73d6b45"
+    },
+    "a3ee9cd0f63d0": {
+      "width": 553,
+      "height": 767,
+      "bytes": 339132,
+      "sha256": "c21844805dd293a35a617707f9feb9d6a57a74a649ca311c6273586681394b5b"
+    },
+    "a6c3a63e89a73": {
+      "width": 496,
+      "height": 372,
+      "bytes": 219606,
+      "sha256": "b598c8784f1d598041885fc21513f732031ed077fc206c8479426c7c77a39184"
+    },
+    "ae087493203bf": {
+      "width": 536,
+      "height": 552,
+      "bytes": 184478,
+      "sha256": "10484dc013bc1a085281eff3e2e9ba0def334f9c9599be5177525f7ac602c243"
+    },
+    "adff246b28a08": {
+      "width": 519,
+      "height": 1181,
+      "bytes": 396582,
+      "sha256": "fa7afee1cbdc6e0e2f35a90b81911843f381cc7a2929274746d5059bea94eace"
+    },
+    "a9ccd4b9f7df8": {
+      "width": 732,
+      "height": 739,
+      "bytes": 503356,
+      "sha256": "d8ca2553c49397e874f737bc386cf0aff787e94765ac8a3464ac9405065372a8"
+    },
+    "a505850e82890": {
+      "width": 497,
+      "height": 635,
+      "bytes": 189504,
+      "sha256": "a15cc32f9721f549074a2fd5046f37fbf4391e21204a62656772d25b40d3b633"
+    },
+    "a9e172e7ffb31": {
+      "width": 434,
+      "height": 398,
+      "bytes": 92152,
+      "sha256": "36260d7eb1722ad1064ff364a7eb2fb71a76171185f6c065e2349048dd5b3dea"
+    },
+    "ae47a14242921": {
+      "width": 365,
+      "height": 454,
+      "bytes": 101876,
+      "sha256": "8f5338bd0f21099445f108891e9fd95a6190915a02c410c37a88b44a6e483a42"
+    },
+    "a93dbee43b48e": {
+      "width": 511,
+      "height": 609,
+      "bytes": 204666,
+      "sha256": "4e68bd848e14fb725f1790e20d02a3dd83067533813f1c78519c6293e88ed148"
+    },
+    "a40f366c19a3f": {
+      "width": 436,
+      "height": 537,
+      "bytes": 102138,
+      "sha256": "4a6c7b0a73873e3d46bd8f27dea52b029c607882deb7239e56c211ef3cfdcd6b"
+    },
+    "a97e89ddcfb05": {
+      "width": 696,
+      "height": 670,
+      "bytes": 192298,
+      "sha256": "4bb73ce0f7e25f3a1624526db32612b57a568b72d0b1676a26ff60297ddda592"
+    },
+    "a20c5d2ff94a7": {
+      "width": 651,
+      "height": 568,
+      "bytes": 199450,
+      "sha256": "ad42e05301409f893dcde9e5df405cd9a1d81f8cb4a51f177b332b06f5ec4781"
+    },
+    "a067159a5d100": {
+      "width": 646,
+      "height": 549,
+      "bytes": 198362,
+      "sha256": "4d8959972ffcb475852a5a9e9927dec1727c1ab31cac23db813a79f7fc51c1ac"
+    },
+    "a7be666214d46": {
+      "width": 732,
+      "height": 1054,
+      "bytes": 254090,
+      "sha256": "ed82d8df58ac41a74c97c783718e268a6b0eb7bf21bbdd624ae66f4600e4731d"
+    },
+    "a02f91dc2b16f": {
+      "width": 732,
+      "height": 718,
+      "bytes": 292462,
+      "sha256": "7fb14d604175de0aa38ed6f1f090c1d813a4d6e5eae9da04e641d2b6bfae48b1"
+    },
+    "a3b7fbadbb7a8": {
+      "width": 1308,
+      "height": 719,
+      "bytes": 390708,
+      "sha256": "e2d8c8bf1b70c85b2e3c52e37e9f5e7a8dbc18536bed202bd075c3e98a1fbc2b"
+    },
+    "a962457b6a502": {
+      "width": 732,
+      "height": 1262,
+      "bytes": 451692,
+      "sha256": "1dc3b7da77083d65d786a3cd73a131f94a89e9cf703a4139c0d40d7d758f6954"
+    },
+    "a1e8410df0c74": {
+      "width": 704,
+      "height": 941,
+      "bytes": 457298,
+      "sha256": "8462821b7e16835bbc6806967ffcadda0812b37fad51607b22cb677035e18b29"
+    },
+    "ad93c58078201": {
+      "width": 732,
+      "height": 637,
+      "bytes": 245146,
+      "sha256": "4ac2d36a1e1934e619393276d11033c912d7be9b8a4df2f2b9085dc2f84641b4"
+    },
+    "ac96cea4e2394": {
+      "width": 1308,
+      "height": 732,
+      "bytes": 736980,
+      "sha256": "136a8ec734c0f6f4364f15c253b181e86f8977632d7d45dae8c1070cb2eea748"
+    },
+    "a464377a09002": {
+      "width": 704,
+      "height": 719,
+      "bytes": 380254,
+      "sha256": "1aef0f611b5589bb3aaa0f93946e0fd1b47e635a75d99075f6a3b479934c23e3"
+    },
+    "ade244e01c459": {
+      "width": 507,
+      "height": 577,
+      "bytes": 190300,
+      "sha256": "706a1e9edde06c2609847679a7f01ec0780b0a972759344f60261871bd422154"
+    },
+    "abba574d0570e": {
+      "width": 701,
+      "height": 407,
+      "bytes": 164592,
+      "sha256": "82843fbb8b85a7cecbe6c5c496aef5f152b37a153e6a57c3a90d136e5ea53ea1"
+    },
+    "a3ed0f102c1a9": {
+      "width": 330,
+      "height": 412,
+      "bytes": 88538,
+      "sha256": "364649503bad6025d4c99c7a75e15680228d0f45c2102278e547ed0aac47484b"
+    },
+    "a6f2e3834c183": {
+      "width": 349,
+      "height": 311,
+      "bytes": 49708,
+      "sha256": "c78a36b196e71b15eecc776179f1ecc7e64ff9a72d932f7e3249eb2272021bae"
+    },
+    "a4feccb6c0b27": {
+      "width": 633,
+      "height": 489,
+      "bytes": 118678,
+      "sha256": "34545f40ff02edf302b7ab29bfb82341017c0ce44ed2bb8a9d569d9fcbb63edc"
+    },
+    "a882d97301f41": {
+      "width": 703,
+      "height": 481,
+      "bytes": 119042,
+      "sha256": "7d4a308348a5e4c09e531e3e719dcca16a3a6dbf1d8c8caad6c4f591f7587d4d"
+    },
+    "aca86d7aa8a1f": {
+      "width": 311,
+      "height": 336,
+      "bytes": 58150,
+      "sha256": "40ee365481fea71b9a34c1f303478477a2459d3ec551b7d41c5c294401148ea6"
+    },
+    "a4ba537d3cfdb": {
+      "width": 593,
+      "height": 327,
+      "bytes": 77574,
+      "sha256": "c4b04de3e01928a86af1a61feb4d0294f325de3e573cd3d3ff946435180e267f"
+    },
+    "a609026bea456": {
+      "width": 725,
+      "height": 717,
+      "bytes": 222790,
+      "sha256": "86f45588e0f4b94cb6d7efefbfaca04cff25461e1de83003ffa99c20547ad75d"
+    },
+    "a2d5ce9a17de7": {
+      "width": 618,
+      "height": 364,
+      "bytes": 100616,
+      "sha256": "33f753122386a58282c83d9a8e736673bbc47a837e23b577c46f9c0a7993f477"
+    }
+  });
+  const LEGACY_THEME_ASSETS = Object.freeze({
+    "bb4f26ed8e9d6": {
+      "width": 530,
+      "height": 309,
+      "bytes": 101764,
+      "sha256": "fa37fe8035dffce280c17c51cbb2521504e01030b30ce5360e54ff7e88b50d39"
+    },
+    "bad94ff9911f5": {
+      "width": 1200,
+      "height": 620,
+      "bytes": 41962,
+      "sha256": "a7fbcf172582c7b7a52b9d396745bc0386a0c555e5036715bf50a4ef4fcd3178"
+    },
+    "bfda594d20dd2": {
+      "width": 360,
+      "height": 342,
+      "bytes": 63304,
+      "sha256": "53426efddbfe45fb4ef4f7e2816458ff0dfda7133ce67fc1aa0d55977a375c88"
+    },
+    "bbd90321907e5": {
+      "width": 500,
+      "height": 323,
+      "bytes": 64212,
+      "sha256": "843e80bc85cfd5817513a947e02b9976a2efa4f41112885fbca7a59b1b8d2a61"
+    },
+    "b6076b659e665": {
+      "width": 600,
+      "height": 201,
+      "bytes": 57026,
+      "sha256": "b67e0176d61dcc827e6f9bbea4ff84716d0d38d9ad6115e4eb03f6e56ea81cf2"
+    },
+    "bfcc1e9313930": {
+      "width": 1200,
+      "height": 620,
+      "bytes": 51854,
+      "sha256": "a9bd212fa74b96001a66f324da6569dcd8117cc09d67e9baaec1d802012fad1a"
+    },
+    "b2fd3640f0c41": {
+      "width": 516,
+      "height": 320,
+      "bytes": 82812,
+      "sha256": "1a76288a711569fecf2178dde606da958f3cb96992e9eebf0d49c6d2d0fc421e"
+    },
+    "b229c13b6f6a7": {
+      "width": 457,
+      "height": 320,
+      "bytes": 72944,
+      "sha256": "091d3f5279ae6b1ed2ff7e3a433bcab22702a069a4b9483d4904ef184c2d8668"
+    },
+    "b25ff0ef9133a": {
+      "width": 243,
+      "height": 320,
+      "bytes": 59980,
+      "sha256": "d5cec33aede50373d24e9da1808c6321972074d9750b635900e9b1751d5be767"
+    },
+    "bd194a83239c5": {
+      "width": 266,
+      "height": 320,
+      "bytes": 34684,
+      "sha256": "00f9d5b95dfd4397ff9b5fdcd9c33d09e8a4d7a41d0ebd0a24be7206c1db48b2"
+    },
+    "bacb7d421719c": {
+      "width": 347,
+      "height": 320,
+      "bytes": 70062,
+      "sha256": "79b599b5aa327907e977ef669631c9fa1e31edf78e7a4a03da78e62f88dfaeca"
+    },
+    "be293aefc03d3": {
+      "width": 716,
+      "height": 320,
+      "bytes": 136252,
+      "sha256": "fac918bbf977af8db390dabb0b2e7df956a624a289e876295d13fb016ce36374"
+    },
+    "b39167a6e9262": {
+      "width": 765,
+      "height": 320,
+      "bytes": 116882,
+      "sha256": "39a406da855850e5950a26fb5a935a2282d1ac69bfa25ba2eecff4ffb1d8df72"
+    },
+    "b04218c75ccc9": {
+      "width": 264,
+      "height": 320,
+      "bytes": 82474,
+      "sha256": "4458dd7051d278757133317b305979447960df815beb84b19b57222ac48daf19"
+    },
+    "b5138a156a6db": {
+      "width": 304,
+      "height": 320,
+      "bytes": 52884,
+      "sha256": "cdf47481be78a7364d962643aa44998a18a42f2bf67ab51e455eca291e2fbc92"
+    },
+    "b13fe5423fdb3": {
+      "width": 459,
+      "height": 320,
+      "bytes": 73038,
+      "sha256": "f50d18649d2c8f67e92cb7852811c69e2867d3e5baa1d5ce29ef9dced975bc53"
+    },
+    "b4a42bc8459da": {
+      "width": 387,
+      "height": 320,
+      "bytes": 74096,
+      "sha256": "34a467511dda486817279f594da95cf22e99e69e80494265fb17d41f8eb6f6e3"
+    },
+    "bb6ac413d8f95": {
+      "width": 208,
+      "height": 320,
+      "bytes": 63260,
+      "sha256": "944cbc54f49f1cc664dc106657dbc9903c1cd2cc010c90b43cf358a5ac002eac"
+    },
+    "ba906993503fa": {
+      "width": 320,
+      "height": 320,
+      "bytes": 107970,
+      "sha256": "600552c603582bdcb39a878e26ac37b2e2993d4baab531193a97c6dcba483258"
+    },
+    "b065361b86445": {
+      "width": 321,
+      "height": 320,
+      "bytes": 42202,
+      "sha256": "c96a6f59790d9ec44f97fdad103944abf7b9e9b5dcc060249d8cbd672186cd75"
+    },
+    "b3be5d9de48b9": {
+      "width": 1075,
+      "height": 772,
+      "bytes": 354974,
+      "sha256": "167be8f1ad0b17f1fa3d69f81640cfd9c13508c99cfce8f53c172f8498633071"
+    },
+    "b8c06ce45ad90": {
+      "width": 315,
+      "height": 320,
+      "bytes": 41210,
+      "sha256": "c49b88eb969eda48f0d521460514d65c4e5063905d3267a979b8397a0b947d57"
+    },
+    "b47a19e4c8d8c": {
+      "width": 339,
+      "height": 320,
+      "bytes": 74172,
+      "sha256": "4e01feeba7074e9ef92aeb141a530a9412c9ebf38cae23712085b581422b3016"
+    },
+    "b863e267b26e1": {
+      "width": 480,
+      "height": 481,
+      "bytes": 88738,
+      "sha256": "4af67a3d04898100d104f4bc265dc6a7e84f867643851983bbb75d98b39a6586"
+    },
+    "bc53a6e30877c": {
+      "width": 970,
+      "height": 1116,
+      "bytes": 544002,
+      "sha256": "9a91cbdb0573a69c78fd13820e261e470f46a4d10bd1c033fb29139e46ad561e"
+    },
+    "bc389bb14dbfc": {
+      "width": 241,
+      "height": 320,
+      "bytes": 62426,
+      "sha256": "707405f295eda11fa839ed69e22684c87b45abef8cbd002702db15615d2d26f6"
+    },
+    "b176b43e30362": {
+      "width": 487,
+      "height": 320,
+      "bytes": 129234,
+      "sha256": "4eba9760800bd96079539cf55bb20cd83b9d7de34cc771b180000be694ae026f"
+    }
+  });
+  function userPackMix(color, target, amount) {
+    const read = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+    const a = read(color), b = read(target);
+    return '#' + a.map((n, i) => Math.round(n + (b[i] - n) * amount).toString(16).padStart(2, '0')).join('');
+  }
+
+  function userPackTextPatch(theme, light = false) {
+    const a = theme.accent, b = theme.secondary;
+    return {
+      textColor: userPackMix(a, light ? '#17212e' : '#ffffff', light ? .79 : .81),
+      emColor: userPackMix(b, light ? '#263242' : '#d4dae6', light ? .56 : .55),
+      strongColor: light ? userPackMix(a, '#151d29', .79) : '#ffffff',
+      italicTextColor: userPackMix(b, light ? '#253143' : '#e5e9f2', light ? .58 : .55),
+      strongBgTextColor: light ? '#263044' : '#ffffff',
+      dialogueBg: a,
+      dialogueTextColor: light ? userPackMix(a, '#10213a', .77) : userPackMix(a, '#ffffff', .77),
+      thoughtBg: b,
+      thoughtTextColor: light ? userPackMix(b, '#253046', .70) : userPackMix(b, '#ffffff', .55),
+      italicBg: userPackMix(b, light ? '#ffffff' : '#778499', light ? .46 : .24),
+      strongBg: userPackMix(a, light ? '#ffffff' : '#8f9aaa', light ? .32 : .20),
+      codeAccent: light ? userPackMix(a, '#203149', .60) : a
+    };
+  }
+
+  function userPackSvgUrl(inner, viewBox = '0 0 24 24', stretch = false) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${viewBox}" preserveAspectRatio="${stretch ? 'none' : 'xMidYMid meet'}">${inner}</svg>`;
+    return 'url("data:image/svg+xml,' + encodeURIComponent(svg).replace(/'/g, '%27').replace(/\(/g, '%28').replace(/\)/g, '%29') + '")';
+  }
+
+
+
+  function userPackMotif(name, a, b, c) {
+    const shapes = {
+      softheart: `<path d="M12 20.4C9.4 18.4 3 14.2 3 8.8c0-5.2 6.3-6.8 9-2.2 2.7-4.6 9-3 9 2.2 0 5.4-6.4 9.6-9 11.6Z" fill="${b}" fill-opacity=".22" stroke="${b}" stroke-width="1.7"/>`,
+      softstar: `<path d="m12 2.6 2.9 5.9 6.5.9-4.7 4.6 1.1 6.4-5.8-3-5.8 3 1.1-6.4-4.7-4.6 6.5-.9Z" fill="${c}" fill-opacity=".83" stroke="${c}" stroke-width=".65"/>`,
+      softglint: `<path d="M12 2c1.1 6.5 3.1 8.9 10 10-6.9 1.1-8.9 3.5-10 10C10.9 15.5 8.9 13.1 2 12c6.9-1.1 8.9-3.5 10-10Z" fill="${a}" stroke="none"/>`,
+      schoolhat: `<path d="M5.6 13v-2.4a6.4 6.4 0 0 1 12.8 0V13" fill="${a}" fill-opacity=".65"/><path d="M6 11.7q6 1.7 12 0v2q-6 1.6-12 0Z" fill="${c}" fill-opacity=".66" stroke="none"/><path d="M5.6 12.4C4 13 2 14 2 15.1c0 1.6 4.5 3 10 3s10-1.4 10-3c0-1.1-2-2.1-3.6-2.7-.9 2-11.9 2-12.8 0Z" fill="${a}" fill-opacity=".72"/><path d="M11.2 5.3C9.6 6.7 9 8.4 9 10" stroke="${c}" stroke-opacity=".78"/><path d="m17.7 13.8 2.2 2.2-2.4-.2-.6 2-1-3.3" fill="${b}" stroke="${b}" stroke-width=".7"/>`,
+      crescent: `<path d="M16 2.6C7 2 4.8 15 14 18.4A8.3 8.3 0 1 1 16 2.6Z" fill="${a}" fill-opacity=".24"/><path d="m19 5 .9 2.2 2.3.8-2.3.8L19 11l-.8-2.2L16 8l2.2-.8Z" fill="${c}"/>`,
+      feather: `<path d="M5 21C6 14 10 7 19 2c3 8-1 15-9 15l-3 3" fill="${b}" fill-opacity=".14"/><path d="m6 20 9-12m-5 7 5 .2m-3-4 4 .1M9 15l-.3-4"/>`,
+      blossom: `<path d="M12 12C3 9 8 0 12 7c4-7 10 2 2 5 8-1 6 9 0 4-1 8-10 3-5-1-8 2-7-8 0-4" fill="${a}" fill-opacity=".18"/><circle cx="12" cy="12" r="1.9" fill="${c}" stroke="none"/>`,
+      blade: `<path d="m5 21 5-8 9-11-2 12-6 3Z" fill="${a}" fill-opacity=".15"/><path d="m7 13 7 5m-4-3L5 21m6-8 7-9"/><path d="m3 5 2-2 2 2-2 2Z" fill="${c}"/>`,
+      gem: `<path d="m3 8 5-5h8l5 5-9 13Z" fill="${a}" fill-opacity=".23"/><path d="M3 8h18M8 3l-1 5 5 13 5-13-1-5M7 8l5-5 5 5" stroke="${b}"/>`,
+      ribbon: `<path d="M12 10C6 1-2 9 5 12l7-2c6-9 14-1 7 2ZM10 11l-3 10 4-3 2 2 1-9m0 0 5 9 1-4 3-1-8-5" fill="${a}" fill-opacity=".20"/><circle cx="12" cy="10" r="1.8" fill="${c}"/>`,
+      filigree: `<path d="M12 21V5c-5-8-12 1-4 5-7-1-6 7 0 5m4-10c5-8 12 1 4 5 7-1 6 7 0 5M7 18c2-5 8-5 10 0"/><path d="m12 2 2 3-2 3-2-3Z" fill="${b}" fill-opacity=".3"/>`,
+      wingheart: `<path d="M12 19C9 16 5 13 6 9c1-4 5-4 6-1 1-3 5-3 6 1 1 4-3 7-6 10Z" fill="${a}" fill-opacity=".28"/><path d="M6 10C1 5 0 9 3 13l3 1M18 10c5-5 6-1 3 3l-3 1" stroke="${b}"/>`,
+      hourglass: `<path d="M5 3h14M5 21h14M7 3c0 5 1 6 5 9-4 3-5 4-5 9m10-18c0 5-1 6-5 9 4 3 5 4 5 9"/><path d="m9 6 3 4 3-4m-6 13 3-4 3 4" fill="${b}" fill-opacity=".35" stroke="${c}"/>`,
+      card: `<rect x="5" y="2" width="14" height="20" rx="2" fill="${a}" fill-opacity=".12"/><path d="m12 6 1.4 3.5 3.7.3-2.9 2.4.9 3.6-3.1-2-3.1 2 .9-3.6-2.9-2.4 3.7-.3Z" fill="${c}" fill-opacity=".28" stroke="${c}"/>`,
+      rose: `<path d="M12 21V13M12 17c-4-5-8-2-6 0 2 2 4 2 6 1m0-3c3-4 8-4 7-1-1 2-4 3-7 3" stroke="${b}"/><path d="M12 13C3 13 4 4 10 5c2-5 10-1 8 3 4 5-3 8-6 5ZM8 7c-2 5 6 6 7 2-5 3-6-2-3-2" fill="${a}" fill-opacity=".24"/>`,
+      cloud: `<path d="M6 17a4 4 0 0 1 0-8c0-6 9-7 11-1a4.5 4.5 0 0 1 1 9Z" fill="${a}" fill-opacity=".18"/><path d="m8 20 1 2m5-2-1 2M19 3v3m-1.5-1.5h3" stroke="${c}"/>`,
+      bunting: `<path d="M2 5q10 9 20 0M3 6l2 8 5-5m1 0 1 10 4-11m1 0 3 6 1-8" fill="${a}" fill-opacity=".23"/><path d="m10 21 2-2 2 2" stroke="${b}"/>`,
+      bow: `<path d="M11 10C3 0-2 7 3 13l8-3m2 0C21 0 26 7 21 13l-8-3M10 12 6 21l6-3 6 3-4-9" fill="${a}" fill-opacity=".26"/><rect x="10" y="8" width="4" height="5" rx="1.5" fill="${b}"/>`,
+      infinity: `<path d="M12 12C0-4-3 24 9 14l6-4c12-10 9 18-3 2Z" stroke-width="1.5"/><path d="M4 18q8 5 16 0M5 5q7-3 14 0" stroke="${b}" stroke-opacity=".55"/><circle cx="20" cy="4" r="1" fill="${c}" stroke="none"/>`,
+      orbit: `<ellipse cx="12" cy="12" rx="11" ry="4" transform="rotate(-28 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(42 12 12)" stroke="${b}" stroke-opacity=".62"/><circle cx="12" cy="12" r="2.5" fill="${a}" fill-opacity=".40"/><circle cx="3" cy="15" r="1.4" fill="${c}"/>`,
+      crystal: `<path d="m12 1 7 11-7 11-7-11Z" fill="${a}" fill-opacity=".2"/><path d="M5 12h14M12 1v22m-9-5-2 2m20-15 2-2" stroke="${b}"/>`,
+      coin: `<ellipse cx="12" cy="11" rx="6.5" ry="9" fill="${a}" fill-opacity=".23"/><path d="M12 5v12m-3-9h6m-6 5h6" stroke="${c}"/><path d="m2 18 2 2m16-16 2-2" stroke="${b}"/>`,
+      droplet: `<path d="M12 2c-2 5-9 10-7 15 2 7 12 7 14 0 2-5-5-10-7-15Z" fill="${a}" fill-opacity=".25"/><path d="M8 14q-1 4 3 5" stroke="${c}"/><circle cx="21" cy="5" r="1.2" fill="${b}" stroke="none"/>`,
+      clover: `<path d="M12 12C1 9 5 0 12 8c7-8 11 1 3 4 8 7-1 11-3 3-6 8-13 1-3-3Z" fill="${a}" fill-opacity=".26"/><path d="M12 14c-1 4 0 6 4 8" stroke="${b}"/>`,
+      bolt: `<path d="m14 1-10 13h7l-1 9L21 9h-7Z" fill="${a}" fill-opacity=".38"/><path d="m2 6 3 2m15 10 2 2" stroke="${b}"/>`
+    };
+    return `<g fill="none" stroke="${a}" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round">${shapes[name] || shapes.crescent}</g>`;
+  }
+
+  function userPackSide(theme, light = false, right = false, divider = false) {
+    const mix = color => light ? userPackMix(color, '#23334b', .51) : color;
+    const a = mix(theme.accent), b = mix(theme.secondary), c = mix(theme.highlight);
+    const y = divider ? 24 : 44, height = divider ? 48 : 88;
+    const variant = theme.motif;
+    if (variant === 'schoolhat') {
+      const primary = variant === 'schoolhat' ? b : c;
+      const line = `<defs><linearGradient id="school" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="160" y2="0"><stop stop-color="${primary}" stop-opacity="0"/><stop offset=".24" stop-color="${primary}" stop-opacity=".58"/><stop offset="1" stop-color="${primary}" stop-opacity=".88"/></linearGradient></defs><path d="${divider ? 'M0 24H160' : 'M0 14Q84 43 160 14'}" fill="none" stroke="url(#school)" stroke-width=".95" vector-effect="non-scaling-stroke"/>${divider ? '' : `<path d="M0 10Q82 29 160 11" fill="none" stroke="${a}" stroke-opacity=".20" stroke-width=".65" vector-effect="non-scaling-stroke"/>`}`;
+      return userPackSvgUrl(right ? `<g transform="translate(160 0) scale(-1 1)">${line}</g>` : line, '0 0 160 48', true);
+    }
+    const calm = ['crescent','feather','filigree','blade','hourglass','infinity','orbit','crystal'].includes(variant);
+    const path = calm ? `M4 ${y}H436` : `M4 ${y}C92 ${y-3} 124 ${y+4} 185 ${y}S319 ${y-3} 436 ${y}`;
+    const curl = calm
+      ? `<path d="M110 ${y}c22-18 54-19 62-6 8 15-21 20-24 8-2-8 10-9 11-4M171 ${y}c34 21 78 19 91 0m-18 1c17-23 56-27 78-6" stroke="${b}" stroke-opacity=".48" vector-effect="non-scaling-stroke"/>`
+      : `<path d="M61 ${y-5}c37 24 98 25 143 1S315 ${y-22} 361 ${y-3}" stroke="${b}" stroke-opacity=".52" vector-effect="non-scaling-stroke"/>`;
+    const spark = (x, yy, r, color, opacity=1) => `<path d="M${x-r} ${yy}Q${x} ${yy-1} ${x} ${yy-r}Q${x+1} ${yy} ${x+r} ${yy}Q${x} ${yy+1} ${x} ${yy+r}Q${x-1} ${yy} ${x-r} ${yy}Z" fill="${color}" opacity="${opacity}" stroke="none"/>`;
+    const symbols = divider
+      ? spark(119,y,3,c,.84)+spark(311,y,3,a,.82)+`<circle cx="303" cy="${y}" r="1" fill="${b}" stroke="none"/><circle cx="319" cy="${y}" r="1" fill="${b}" stroke="none"/>`
+      : `<g transform="translate(332 ${y-12})">${userPackMotif(variant,a,b,c)}</g>`
+        + spark(100,y-12,5,c,.87)+spark(223,y+13,4,a,.84)+spark(290,y-8,2.5,c,.9)
+        + `<path d="M100 ${y-7}v17m123 8v11" stroke="${a}" stroke-opacity=".48"/><circle cx="100" cy="${y+13}" r="1.7" fill="${b}" stroke="none"/><circle cx="223" cy="${y+30}" r="1.6" fill="${c}" stroke="none"/>`;
+    const inside = `<defs><linearGradient id="line" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="440" y2="0"><stop stop-color="${a}" stop-opacity="0"/><stop offset=".18" stop-color="${a}" stop-opacity=".58"/><stop offset=".72" stop-color="${b}" stop-opacity=".92"/><stop offset="1" stop-color="${a}" stop-opacity=".30"/></linearGradient></defs><g fill="none" stroke-width=".85" stroke-linecap="round" stroke-linejoin="round"><path d="${path}" stroke="url(#line)" vector-effect="non-scaling-stroke"/>${divider ? '' : curl}${symbols}</g>`;
+    return userPackSvgUrl(right ? `<g transform="translate(440 0) scale(-1 1)">${inside}</g>` : inside, `0 0 440 ${height}`, true);
+  }
+
+  // Fetch only the selected theme's artwork; cache it on the Crack origin.
+  // Content-addressed URLs keep old script versions and cached artwork valid.
+  const THEME_ART_BASES = Object.freeze([
+    'https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/assets/theme-images/',
+    'https://cdn.jsdelivr.net/gh/Chapchu1/crack-userscripts@main/assets/theme-images/'
+  ]);
+  const THEME_ART_DB = 'sgb-theme-artwork-v1';
+  let themeArtDbPromise = null;
+  let themeArtRequest = 0;
+  let activeThemeArtworkStyle = null;
+  let themeArtStatus = 'ready';
+  let themeArtController = null;
+  let themeArtRetryTimer = null;
+  let themeArtRetryCount = 0;
+  let themeArtOnlineListening = false;
+  const activeThemeArtworkVars = new Set();
+  const themeArtUrlCache = new Map();
+
+  function openThemeArtDb() {
+    if (themeArtDbPromise) return themeArtDbPromise;
+    themeArtDbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(THEME_ART_DB, 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('images')) request.result.createObjectStore('images', { keyPath: 'id' });
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onversionchange = () => { db.close(); themeArtDbPromise = null; };
+        resolve(db);
+      };
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error('Theme artwork cache is busy'));
+    }).catch(error => { themeArtDbPromise = null; throw error; });
+    return themeArtDbPromise;
+  }
+
+  async function readThemeArtRecords(ids) {
+    const db = await openThemeArtDb();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('images', 'readonly');
+      const store = transaction.objectStore('images');
+      const results = new Map();
+      for (const id of ids) {
+        const request = store.get(id);
+        request.onsuccess = () => results.set(id, request.result);
+      }
+      transaction.oncomplete = () => resolve(results);
+      transaction.onerror = transaction.onabort = () => reject(transaction.error || new Error('Theme artwork cache read failed'));
+    });
+  }
+
+  async function writeThemeArtRecords(records) {
+    const db = await openThemeArtDb();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('images', 'readwrite');
+      const store = transaction.objectStore('images');
+      for (const record of records) store.put(record);
+      transaction.oncomplete = resolve;
+      transaction.onerror = transaction.onabort = () => reject(transaction.error || new Error('Theme artwork cache write failed'));
+    });
+  }
+
+  function themeArtworkUrl(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 8192) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(offset, offset + 8192));
+    }
+    return 'url("data:image/webp;base64,' + btoa(binary) + '")';
+  }
+
+  async function validThemeArtwork(record, meta) {
+    if (!record || record.sha256 !== meta.sha256 || !record.data || record.data.byteLength !== meta.bytes) return false;
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', record.data));
+    return [...digest].map(value => value.toString(16).padStart(2, '0')).join('') === meta.sha256;
+  }
+
+  async function downloadThemeArtwork(id, signal) {
+    const meta = USER_THEME_ASSETS[id] || LEGACY_THEME_ASSETS[id];
+    let lastError;
+    for (const base of THEME_ART_BASES) {
+      if (signal.aborted) throw new Error('Theme selection changed');
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal.addEventListener('abort', abort, { once: true });
+      const timeout = setTimeout(abort, 15000);
+      try {
+        const response = await fetch(base + meta.sha256 + '.webp', {
+          signal: controller.signal, mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer'
+        });
+        if (!response.ok) throw new Error('Theme artwork HTTP ' + response.status);
+        const record = { id, sha256: meta.sha256, data: await response.arrayBuffer() };
+        if (!await validThemeArtwork(record, meta)) throw new Error('Theme artwork checksum mismatch');
+        return record;
+      } catch (error) {
+        lastError = error;
+      } finally {
+        clearTimeout(timeout);
+        signal.removeEventListener('abort', abort);
+      }
+    }
+    throw lastError || new Error('Theme artwork unavailable');
+  }
+
+  function retryThemeArtworkOnline() {
+    if (themeArtStatus === 'error') {
+      themeArtRetryCount = 0;
+      syncThemeArtwork(true);
+    }
+  }
+
+  function clearThemeArtwork() {
+    themeArtRequest += 1;
+    if (themeArtController) themeArtController.abort();
+    themeArtController = null;
+    clearTimeout(themeArtRetryTimer);
+    themeArtRetryTimer = null;
+    themeArtRetryCount = 0;
+    if (themeArtOnlineListening) window.removeEventListener('online', retryThemeArtworkOnline);
+    themeArtOnlineListening = false;
+    for (const name of activeThemeArtworkVars) document.documentElement.style.removeProperty(name);
+    activeThemeArtworkVars.clear();
+    themeArtUrlCache.clear();
+    activeThemeArtworkStyle = null;
+    themeArtStatus = 'ready';
+    refreshThemeArtUi();
+  }
+
+  function selectedThemeArtwork(selected) {
+    const required = new Map();
+    const theme = USER_THEME_INDEX.get(selected);
+    if (theme) {
+      required.set('--sgb-pack-art', theme.art);
+      required.set('--sgb-pack-chat-art', theme.chatArt);
+    }
+    return required;
+  }
+
+  async function syncThemeArtwork(force = false) {
+    const selected = normalizeUiStyle(CONFIG.uiStyle);
+    if (!force && selected === activeThemeArtworkStyle) return;
+    if (!themeArtOnlineListening) {
+      window.addEventListener('online', retryThemeArtworkOnline);
+      themeArtOnlineListening = true;
+    }
+    const token = ++themeArtRequest;
+    if (selected !== activeThemeArtworkStyle) themeArtRetryCount = 0;
+    activeThemeArtworkStyle = selected;
+    if (themeArtController) themeArtController.abort();
+    const controller = new AbortController();
+    themeArtController = controller;
+    clearTimeout(themeArtRetryTimer);
+    themeArtRetryTimer = null;
+    for (const name of activeThemeArtworkVars) document.documentElement.style.removeProperty(name);
+    activeThemeArtworkVars.clear();
+    const required = selectedThemeArtwork(selected);
+    const needed = new Set(required.values());
+    for (const id of themeArtUrlCache.keys()) if (!needed.has(id)) themeArtUrlCache.delete(id);
+    const current = () => token === themeArtRequest && selected === normalizeUiStyle(CONFIG.uiStyle) && !controller.signal.aborted;
+    const apply = () => {
+      for (const [name, id] of required) {
+        const url = themeArtUrlCache.get(id);
+        if (url) {
+          document.documentElement.style.setProperty(name, url);
+          activeThemeArtworkVars.add(name);
+        }
+      }
+    };
+    apply();
+    const missing = [...needed].filter(id => !themeArtUrlCache.has(id));
+    themeArtStatus = missing.length ? 'loading' : 'ready';
+    refreshThemeArtUi();
+    if (!missing.length) return;
+    try {
+      // Cached packs from previous versions are reused. Storage restrictions must
+      // not prevent displaying images that can still be downloaded.
+      const records = await readThemeArtRecords(missing).catch(() => new Map());
+      if (!current()) return;
+      const results = await Promise.allSettled(missing.map(async id => {
+        const meta = USER_THEME_ASSETS[id] || LEGACY_THEME_ASSETS[id];
+        let record = records.get(id);
+        if (!await validThemeArtwork(record, meta)) {
+          if (!current()) return;
+          record = await downloadThemeArtwork(id, controller.signal);
+          await writeThemeArtRecords([record]).catch(() => {});
+        }
+        if (!current()) return;
+        themeArtUrlCache.set(id, themeArtworkUrl(record.data));
+        apply();
+      }));
+      if (!current()) return;
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed) throw failed.reason;
+      themeArtStatus = 'ready';
+      themeArtRetryCount = 0;
+    } catch (error) {
+      if (!current()) return;
+      themeArtStatus = 'error';
+      console.warn('[' + SCRIPT_NAME + '] 테마 이미지 불러오기 실패:', error);
+      if (themeArtRetryCount < 2) {
+        themeArtRetryCount += 1;
+        themeArtRetryTimer = setTimeout(() => {
+          if (current()) syncThemeArtwork(true);
+        }, themeArtRetryCount * 4000);
+      }
+    }
+    refreshThemeArtUi();
+  }
+
+  function refreshThemeArtUi() {
+    const modal = document.getElementById(SGB_UI_IDS.modal);
+    const card = modal && modal.querySelector('[data-sgb-theme-art-status]');
+    if (!card) return;
+    card.style.display = themeArtStatus === 'ready' ? 'none' : 'flex';
+    card.querySelector('[role="status"]').textContent = themeArtStatus === 'error'
+      ? '테마 이미지를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.'
+      : '테마 이미지를 불러오는 중…';
+    card.querySelector('button').style.display = themeArtStatus === 'error' ? '' : 'none';
+  }
+
+  function installThemeArtControls(modal) {
+    const list = modal.querySelector('[data-tlist]');
+    if (!list || modal.querySelector('[data-sgb-theme-art-status]')) return;
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.setAttribute('data-sgb-theme-art-status', '');
+    card.style.cssText = 'margin-top:10px;padding:12px;display:none;flex-wrap:wrap;align-items:center;gap:10px';
+    card.innerHTML = '<small role="status" aria-live="polite" style="flex:1 1 190px;min-width:0"></small><button type="button" class="btn">다시 불러오기</button>';
+    const listCard = list.closest('.card') || list;
+    listCard.parentNode.insertBefore(card, listCard);
+    card.querySelector('button').addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      themeArtRetryCount = 0;
+      syncThemeArtwork(true);
+    });
+    refreshThemeArtUi();
+  }
+
+  let userPackCssCache = '';
+  function buildUserThemePackCss() {
+    if (userPackCssCache) return userPackCssCache;
+    const base = `html.${CLS_ACTIVE}[data-sgb-ui-style^="pack29-"]`;
+    const scene = `${base} main .flex-col-reverse > [data-message-group-id][data-sgb-novel-group]:not(:last-child)::before`;
+    const rule = (selector, declarations) => `${selector}{${declarations}}`;
+    const rgb = hex => [1,3,5].map(i => parseInt(hex.slice(i,i+2),16)).join(',');
+    let css = '\n/* 2026-09-29: 24 user themes; small translucent bottom artwork and large centered circles. */\n';
+    css += rule(base, '--sgb-pack-art:none;--sgb-pack-chat-art:none;');
+    css += rule(base, '--sgb-novel-sep-content:"";--sgb-novel-sep-margin:10px clamp(8px,2vw,22px) 16px;--sgb-novel-sep-bg:none;--sgb-novel-sep-shadow:none;--sgb-novel-sep-border-top:0;--sgb-novel-sep-border-bottom:0;--sgb-pack-divider-height:34px;');
+    for (const t of USER_THEME_PACK) {
+      const s = `html.${CLS_ACTIVE}[data-sgb-ui-style="${t.value}"]`;
+      const darkTop = userPackMix(t.accent, '#101725', .85), darkBottom = userPackMix(t.secondary, '#0d1220', .91);
+      const lightTop = userPackMix(t.accent, '#ffffff', .83), lightBottom = userPackMix(t.secondary, '#ffffff', .71);
+      const colors = (light) => {
+        const a = light ? userPackMix(t.accent,'#23334b',.51) : t.accent;
+        const b = light ? userPackMix(t.secondary,'#23334b',.51) : t.secondary;
+        const c = light ? userPackMix(t.highlight,'#23334b',.51) : t.highlight;
+        const graceful = t.motif === 'schoolhat';
+        const ornaments = graceful ? `--sgb-pack-charm:${userPackSvgUrl(userPackMotif('softheart',a,b,c),'0 0 24 24')};--sgb-pack-charm-width:${14}px;--sgb-pack-charm-height:${14}px;--sgb-pack-soft-star:${userPackSvgUrl(userPackMotif('softstar',a,b,c))};--sgb-pack-soft-glint:${userPackSvgUrl(userPackMotif('softglint',a,b,c))};--sgb-pack-divider-charm:${userPackSvgUrl(userPackMotif('softheart',a,b,c))};--sgb-pack-glyph-width:${26}px;` : '';
+        return `--sgb-pack-left:${userPackSide(t,light)};--sgb-pack-right:${userPackSide(t,light,true)};--sgb-pack-divider-left:${userPackSide(t,light,false,true)};--sgb-pack-divider-right:${userPackSide(t,light,true,true)};--sgb-pack-glyph:${userPackSvgUrl(userPackMotif(t.motif,a,b,c),'0 0 24 24')};--sgb-pack-border:rgba(${rgb(a)},${light ? '.30' : '.32'});--sgb-pack-ink:${userPackTextPatch(t,light).textColor};--sgb-pack-surface-top:${rgb(light?lightTop:darkTop)};--sgb-pack-surface-bottom:${rgb(light?lightBottom:darkBottom)};` + ornaments;
+      };
+      const centered = t.align === 'center';
+      // The legacy Sakura circle already contains faint alpha; use it unchanged.
+      css += rule(s, `--sgb-pack-scene-height:${t.sceneHeight}px;--sgb-pack-scene-gap:${(t.sceneHeight*t.sceneRatio/2+12).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneHeight+8}px;--sgb-pack-chat-height:${centered ? '86%' : `min(${t.chatHeight}px,34%)`};--sgb-pack-chat-width:${centered ? 'min(180px,46%)' : 'min(150px,34%)'};--sgb-pack-chat-bottom:${centered ? '50%' : '0px'};--sgb-pack-chat-translate:${centered ? '50%' : '0%'};--sgb-pack-chat-opacity:${t.chatOpacity};--sgb-pack-chat-filter:none;` + colors(false));
+      css += rule(s+'[data-sgb-theme="light"]', colors(true) + `--sgb-pack-chat-opacity:${t.lightChatOpacity};--sgb-pack-chat-filter:${t.chatOpacity === 1 ? 'brightness(.8)' : 'none'};`);
+      css += `@media(max-width:620px){${rule(s,`--sgb-pack-scene-height:${t.sceneMobile}px;--sgb-pack-scene-gap:${(t.sceneMobile*t.sceneRatio/2+10).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneMobile+8}px;--sgb-pack-divider-height:30px;`)}}`;
+    }
+    css += rule(scene, `content:""!important;display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-novel-sep-box-height)!important;min-height:var(--sgb-novel-sep-box-height)!important;border:0!important;border-radius:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-art),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;background-repeat:no-repeat!important;`);
+    const gracefulBase = base.replace('[data-sgb-ui-style^="pack29-"]', '[data-sgb-ui-style="pack29-usagi-school"]');
+    const gracefulScene = scene.replace(base, gracefulBase);
+    // Keep every charm in a fixed-aspect layer; only the graceful lines stretch.
+    css += rule(gracefulScene, 'background-image:var(--sgb-pack-art),var(--sgb-pack-charm),var(--sgb-pack-charm),var(--sgb-pack-soft-star),var(--sgb-pack-soft-star),var(--sgb-pack-soft-glint),var(--sgb-pack-soft-glint),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),var(--sgb-pack-charm-width) var(--sgb-pack-charm-height),var(--sgb-pack-charm-width) var(--sgb-pack-charm-height),9px 9px,9px 9px,4px 4px,4px 4px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(34% - var(--sgb-pack-scene-gap) * .68 + var(--sgb-ornament-shift,0px)) calc(50% + 8px),calc(66% + var(--sgb-pack-scene-gap) * .68 + var(--sgb-ornament-shift,0px)) calc(50% + 8px),calc(16% - var(--sgb-pack-scene-gap) * .32 + var(--sgb-ornament-shift,0px)) calc(50% + 2px),calc(84% + var(--sgb-pack-scene-gap) * .32 + var(--sgb-ornament-shift,0px)) calc(50% + 2px),calc(25% - var(--sgb-pack-scene-gap) * .5 + var(--sgb-ornament-shift,0px)) calc(50% + 3px),calc(75% + var(--sgb-pack-scene-gap) * .5 + var(--sgb-ornament-shift,0px)) calc(50% + 3px),left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
+    css += rule(base+'[data-sgb-markdown-decor="on"] main [data-sgb-message-group] .wrtn-markdown hr', 'display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-pack-divider-height)!important;min-height:var(--sgb-pack-divider-height)!important;margin:.55em 0 .8em!important;border:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-glyph),var(--sgb-pack-divider-left),var(--sgb-pack-divider-right)!important;background-repeat:no-repeat!important;background-size:24px 24px,calc(50% - 21px) 28px,calc(50% - 21px) 28px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
+    css += rule(gracefulBase+'[data-sgb-markdown-decor="on"] main [data-sgb-message-group] .wrtn-markdown hr', 'background-image:var(--sgb-pack-glyph),var(--sgb-pack-divider-charm),var(--sgb-pack-divider-charm),var(--sgb-pack-soft-glint),var(--sgb-pack-soft-glint),var(--sgb-pack-divider-left),var(--sgb-pack-divider-right)!important;background-size:var(--sgb-pack-glyph-width) 26px,8px 8px,8px 8px,5px 5px,5px 5px,calc(50% - 42px) 28px,calc(50% - 42px) 28px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(50% - 29px + var(--sgb-ornament-shift,0px)) center,calc(50% + 29px + var(--sgb-ornament-shift,0px)) center,calc(24% + var(--sgb-ornament-shift,0px)) center,calc(76% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;');
+    css += rule(base+' main [data-sgb-message-group] .wrtn-markdown hr::before,'+base+' main [data-sgb-message-group] .wrtn-markdown hr::after', 'content:none!important;display:none!important;');
+    css += rule(base+' main [data-sgb-input-host]', 'background:transparent!important;background-image:none!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;');
+    css += rule(base+' main [data-sgb-input-host]::before,'+base+' main [data-sgb-input-host]::after,'+base+' main [data-sgb-input-box]::after','content:none!important;display:none!important;');
+    css += rule(base+' main [data-sgb-input-box]', 'position:relative!important;box-sizing:border-box!important;width:var(--sgb-radio-input-width,100%)!important;max-width:none!important;min-width:0!important;flex-shrink:0!important;margin-left:0!important;margin-right:0!important;left:var(--sgb-radio-input-shift,0px)!important;right:auto!important;overflow:visible!important;isolation:isolate!important;border:1px solid var(--sgb-pack-border)!important;border-radius:14px!important;background:linear-gradient(180deg,rgba(var(--sgb-pack-surface-top),var(--sgb-ui-opacity,.96)),rgba(var(--sgb-pack-surface-bottom),var(--sgb-ui-opacity,.96)))!important;box-shadow:0 12px 38px rgba(0,0,0,.16)!important;backdrop-filter:blur(4px)!important;-webkit-backdrop-filter:blur(4px)!important;');
+    // Artwork has its own noninteractive layer, so text and buttons stay fully opaque.
+    css += rule(base+' main [data-sgb-input-box]::before', 'content:""!important;display:block!important;position:absolute!important;box-sizing:border-box!important;inset:auto!important;left:50%!important;bottom:var(--sgb-pack-chat-bottom)!important;width:var(--sgb-pack-chat-width)!important;height:var(--sgb-pack-chat-height)!important;min-width:0!important;min-height:0!important;max-width:100%!important;max-height:100%!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;transform:translate(-50%,var(--sgb-pack-chat-translate))!important;opacity:var(--sgb-pack-chat-opacity)!important;z-index:-1!important;pointer-events:none!important;background:var(--sgb-pack-chat-art) center/contain no-repeat!important;filter:var(--sgb-pack-chat-filter,none)!important;animation:none!important;');
+    css += rule(base+' main [data-sgb-input-box] :is(textarea,[contenteditable="true"])','color:var(--sgb-pack-ink)!important;-webkit-text-fill-color:var(--sgb-pack-ink)!important;caret-color:var(--sgb-pack-ink)!important;text-shadow:0 1px 3px rgba(0,0,0,.65)!important;');
+    css += rule(base+'[data-sgb-theme="light"] main [data-sgb-input-box] :is(textarea,[contenteditable="true"])','text-shadow:0 1px 2px rgba(255,255,255,.8)!important;');
+    css += rule(base+' main [data-sgb-input-box] .is-editor-empty:first-child:before','opacity:.86!important;color:var(--sgb-pack-ink)!important;-webkit-text-fill-color:var(--sgb-pack-ink)!important;');
+    css += rule(base+' main [data-sgb-bubble="chat"],'+base+' main [data-sgb-edit-bubble][data-sgb-bubble="chat"]','border:1px solid var(--sgb-pack-border)!important;border-radius:18px!important;background:linear-gradient(150deg,rgba(var(--sgb-pack-surface-top),var(--sgb-theme-surface-alpha,.86)),rgba(var(--sgb-pack-surface-bottom),var(--sgb-theme-surface-alpha,.86)))!important;box-shadow:0 4px 18px rgba(0,0,0,.08)!important;');
+    css += rule(base+' main [data-sgb-bubble="chat"]::before,'+base+' main [data-sgb-bubble="chat"]::after','content:none!important;');
+    userPackCssCache = css;
+    return css;
+  }
   const SGB_MUTATION_BATCH_MS = 32;
 
   /**
@@ -1321,7 +2660,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     });
     return count;
   }
-  const UI_STYLE_VALUES = new Set(['botanical', 'normal', 'borderless', 'glass', 'pixel', 'sticker', 'candy', 'cozy', 'codepad', 'najeon', 'starjar', 'newsprint', 'jazzbar', 'cloud', 'rubric', 'vitrail', 'solarium', 'trench', 'hoemun', 'hangar', 'dogtag', 'cyber', 'haunt', 'aoi', 'pearlwave', 'dossier', 'blueknot', 'rift', 'photolab', 'scrapbook', 'floppy', 'reliquary', 'retroweb', 'grimoire', 'vesper', 'imessage', 'arcana', 'cinnamusic', 'cinnaboard', 'cinnadream', 'cinnacushion', 'cinnaribbon', 'cinnawizard', 'cinnapuff', 'chiiv', 'chiijudy', 'chiihula', 'chiifairy', 'xiaocard', 'xiaosanta', 'cherrystaff', 'kerodream', 'kiraramono', 'sailormoon', 'cherryxiaolang', 'nyang']);
+  const UI_STYLE_VALUES = new Set(['botanical', 'normal', 'borderless', 'glass', 'pixel', 'sticker', 'candy', 'cozy', 'codepad', 'najeon', 'starjar', 'newsprint', 'jazzbar', 'cloud', 'rubric', 'vitrail', 'solarium', 'trench', 'hoemun', 'hangar', 'dogtag', 'cyber', 'haunt', 'aoi', 'pearlwave', 'dossier', 'blueknot', 'rift', 'photolab', 'scrapbook', 'floppy', 'reliquary', 'retroweb', 'grimoire', 'vesper', 'imessage', 'arcana', 'cinnamusic', 'cinnaboard', 'cinnadream', 'cinnacushion', 'cinnaribbon', 'cinnawizard', 'cinnapuff', 'chiiv', 'chiijudy', 'chiihula', 'chiifairy', 'xiaocard', 'xiaosanta', 'cherrystaff', 'kerodream', 'kiraramono', 'sailormoon', 'cherryxiaolang', 'nyang', ...USER_THEME_PACK.map(theme => theme.value)]);
   // 원작자 테마는 새로 추가된 테마도 모두 기존 테마에 등록합니다. 추가 테마는 커스텀 제작 테마용입니다.
   const BUILTIN_UI_STYLE_VALUES = new Set(['botanical', 'normal', 'borderless', 'glass', 'pixel', 'sticker', 'candy', 'cozy', 'codepad', 'najeon', 'starjar', 'newsprint', 'jazzbar', 'cloud', 'rubric', 'vitrail', 'solarium', 'trench', 'hoemun', 'hangar', 'dogtag', 'cyber', 'haunt', 'aoi', 'dossier', 'rift', 'photolab', 'scrapbook', 'floppy', 'reliquary', 'retroweb', 'grimoire', 'vesper', 'imessage', 'arcana', 'nyang']);
 
@@ -1389,6 +2728,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
       { value: 'sailormoon', label: '세일러문', desc: '달빛 리본 · 루나와 반짝임' },
       { value: 'cherryxiaolang', label: '체리x샤오랑', desc: '분홍빛 마법진 · 민트빛 날개와 하트' },
       { value: 'nyang', label: 'NYANG', desc: '고양이 말풍선' },
+      ...USER_THEME_PACK.map(({ value, label, desc }) => ({ value, label, desc }))
     ];
   }
 
@@ -1405,6 +2745,12 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
   }
 
   function buildUiStylePaletteDefinitions(value) {
+    const userTheme = USER_THEME_INDEX.get(normalizeUiStyle(value));
+    if (userTheme) return [{
+      label: '기준', colors: [userTheme.accent, userTheme.secondary, userTheme.highlight],
+      patch: { themeRecommendedColorsEnabled: true, ...userPackTextPatch(userTheme) },
+      lightPatch: userPackTextPatch(userTheme, true)
+    }];
     const basePatch = { themeRecommendedColorsEnabled: true };
     const baseThemePatches = {
       normal: { textColor:'#fafafa', emColor:'#85837d', strongColor:'#fafafa', italicTextColor:'#84827e', strongBgTextColor:'#fafafa', dialogueBg:'#b29aa6', dialogueTextColor:'#fdfbfc', thoughtBg:'#a89aa6', thoughtTextColor:'#f4eef1', italicBg:'#e8e0e4', strongBg:'#f0e0e8', codeAccent:'#c8a6b6' },
@@ -3457,7 +4803,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     const index = Math.max(0, Math.min(palettes.length - 1, Math.round(Number(CONFIG.uiPaletteIndex) || 0)));
     // 기본(0번) 팔레트는 대체로 전용 라이트 CSS가 담당하지만,
     // ARCANA는 기본 팔레트의 lightPatch를 실제 글자/강조 색상 변수에 적용해야 한다.
-    if (index === 0 && !['arcana', 'botanical', 'nyang'].includes(activeStyle)) return null;
+    if (index === 0 && !['arcana', 'botanical', 'nyang'].includes(activeStyle) && !USER_THEME_INDEX.has(activeStyle)) return null;
     return palettes[index]?.lightPatch || null;
   }
 
@@ -3543,6 +4889,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     const useBaseThemeColorCss = !!CONFIG.themeRecommendedColorsEnabled && activePaletteIndex === 0;
 
     sgbThemeCss.ensure(normalizeUiStyle(CONFIG.uiStyle));
+    syncThemeArtwork();
     setAttributeIfChanged(document.documentElement, 'data-sgb-ui-style', normalizeUiStyle(CONFIG.uiStyle));
     setAttributeIfChanged(document.documentElement, 'data-sgb-botanical-paper', activePaletteIndex === 1 ? 'sage' : 'linen');
     // 4.3.0: NYANG 품종 그림은 선택한 품종만 지연 생성한다.
@@ -4483,6 +5830,7 @@ function createSettingsModal() {
     modal.setAttribute('data-sgb-liquid', '');
     modal.innerHTML = "<section class=\"lg-panel sgb-settings-panel\" role=\"dialog\" aria-modal=\"true\" aria-label=\"배경·테마 설정\" data-sgb-settings-modal=\"\">\n  <header class=\"hd\" data-sgb-settings-drag-handle=\"\" title=\"드래그해서 이동\">\n    <div class=\"hd-tx\"><b>배경·테마 설정</b><span>방 이미지와 채팅 화면 스타일을 설정해요.</span></div>\n    <button type=\"button\" class=\"ibtn\" aria-label=\"닫기\" data-sgb-settings-close=\"\" data-act=\"close\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"></path></svg></button>\n  </header>\n\n  <nav class=\"seg tabs\" role=\"tablist\" data-seg=\"tabs\" data-ready=\"true\">\n    <span class=\"seg-ind\" aria-hidden=\"true\"></span>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"true\" data-sgb-tab=\"theme\" tabindex=\"0\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4c0-4.4-4-8.2-9-8.2z\"></path><circle cx=\"7.5\" cy=\"11\" r=\"1.1\" fill=\"currentColor\"></circle><circle cx=\"10.5\" cy=\"7.2\" r=\"1.1\" fill=\"currentColor\"></circle><circle cx=\"15\" cy=\"7.6\" r=\"1.1\" fill=\"currentColor\"></circle></svg><span>테마</span></button>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"false\" data-sgb-tab=\"bg\" tabindex=\"-1\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><circle cx=\"9\" cy=\"9.5\" r=\"1.8\"></circle><path d=\"M21 15.5l-4.6-4.6a1.5 1.5 0 0 0-2.1 0L6 19.3\"></path></svg><span>배경</span></button>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"false\" data-sgb-tab=\"text\" tabindex=\"-1\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 19L9 5l5 14M5.8 14h6.4\"></path><path d=\"M20 19v-4.2a2.8 2.8 0 0 0-5.3-1.2M20 16.4c-1.6-.5-4.6-.4-4.6 1.4 0 1.9 3.2 1.8 4.6-.2\"></path></svg><span>글자</span></button>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"false\" data-sgb-tab=\"hl\" tabindex=\"-1\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M14.5 4.5l5 5L10 19H5v-5z\"></path><path d=\"M12.5 6.5l5 5M4 21h16\"></path></svg><span>강조</span></button>\n  </nav>\n\n  <div class=\"body\">\n    <!-- ── 테마 ── -->\n    <div class=\"pane on\" data-pane=\"theme\">\n      <div class=\"tools\">\n        <label class=\"search\" data-has=\"false\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.1\" stroke-linecap=\"round\"><circle cx=\"11\" cy=\"11\" r=\"6.5\"></circle><path d=\"M16 16l4 4\"></path></svg><input type=\"search\" placeholder=\"테마 이름·설명 검색\" aria-label=\"테마 검색\" data-q=\"\"><button type=\"button\" class=\"clr\" aria-label=\"검색어 지우기\" data-clr=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"></path></svg></button></label>\n        <div class=\"seg mini\" data-seg=\"filter\" data-ready=\"true\">\n          <span class=\"seg-ind\" aria-hidden=\"true\"></span>\n          <button type=\"button\" class=\"seg-btn\" aria-selected=\"true\" data-f=\"all\" tabindex=\"0\">전체 <em data-cnt-all=\"\">31</em></button>\n          <button type=\"button\" class=\"seg-btn\" aria-selected=\"false\" data-f=\"fav\" tabindex=\"-1\">★ <em data-cnt-fav=\"\">3</em></button>\n        </div>\n      </div>\n      <div class=\"card\" style=\"padding:0;margin-top:10px\"><div class=\"tlist sgb-style-options\" role=\"radiogroup\" aria-label=\"UI 스타일\" data-tlist=\"\"></div></div>\n    </div>\n\n    <!-- ── 배경 ── -->\n    <div class=\"pane\" data-pane=\"bg\">\n      <div class=\"lab\">방 이미지</div>\n      <div class=\"card img-card\">\n        <div class=\"img-hd\">\n          <span class=\"row-tx\"><b>배경 이미지 보기</b><small>꺼도 UI 테마와 글자 설정은 유지돼요.</small></span>\n          <button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-modal-toggle=\"\" data-def=\"true\"></button>\n        </div>\n        <div data-sgb-room-image-card=\"\" data-off=\"false\">\n          <div class=\"thumb\" data-has=\"false\">\n            <span class=\"ph-img\" data-thumb=\"\"></span>\n            <span class=\"meta\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><circle cx=\"9\" cy=\"9.5\" r=\"1.8\"></circle><path d=\"M21 15.5l-4.6-4.6a1.5 1.5 0 0 0-2.1 0L6 19.3\"></path></svg><b data-sgb-room-image-status=\"\">이 방에 선택된 이미지 없음</b></span>\n            <span class=\"empty\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><circle cx=\"9\" cy=\"9.5\" r=\"1.8\"></circle><path d=\"M21 15.5l-4.6-4.6a1.5 1.5 0 0 0-2.1 0L6 19.3\"></path></svg>이 방에 선택된 이미지 없음</span>\n          </div>\n          <div class=\"img-act\">\n            <button type=\"button\" class=\"btn btn-pri\" data-sgb-image-pick=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><path d=\"M12 9v6M9 12h6\"></path></svg>이미지 선택</button>\n            <button type=\"button\" class=\"btn btn-gl danger\" data-sgb-image-remove=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 7h16M9 7V5h6v2M6.5 7l1 12h9l1-12\"></path></svg>제거</button>\n          </div>\n          <input type=\"file\" accept=\"image/*\" data-sgb-image-file=\"\" hidden=\"\">\n        </div>\n      </div>\n\n      <div data-sgb-image-adjust data-open=\"true\"><div><div class=\"lab\">이미지 조절</div>\n      <div class=\"card\">\n        <label class=\"sl\" data-sgb-background-dependent=\"\" data-off=\"false\"><span class=\"sl-hd\"><span>배경 흐림</span><output class=\"val\" data-sgb-setting-output=\"blurPx\">6px</output></span>\n<input class=\"rng\" type=\"range\" min=\"0\" max=\"22\" step=\"1\" value=\"6\" data-sgb-setting-input=\"blurPx\" data-def=\"6\" style=\"--p: 27.27272727272727%;\"></label>\n        <label class=\"sl\" data-sgb-background-dependent=\"\" data-off=\"false\"><span class=\"sl-hd\"><span>이미지 어둡게</span><output class=\"val\" data-sgb-setting-output=\"dim\">34%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0\" max=\"0.78\" step=\"0.01\" value=\"0.34\" data-sgb-setting-input=\"dim\" data-def=\"0.34\" style=\"--p: 43.58974358974359%;\"></label>\n        <label class=\"sl\" data-sgb-background-dependent=\"\" data-off=\"false\"><span class=\"sl-hd\"><span>이미지 확대/축소</span><output class=\"val\" data-sgb-setting-output=\"scale\">100%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.86\" max=\"1.28\" step=\"0.01\" value=\"1.0\" data-sgb-setting-input=\"scale\" data-def=\"1\" style=\"--p: 33.33333333333333%;\"></label>\n      </div>\n\n      </div></div><div class=\"lab\">채팅 UI</div>\n      <div class=\"card\">\n        <label class=\"sl\"><span class=\"sl-hd\"><span>UI 불투명도</span><output class=\"val\" data-sgb-setting-output=\"uiOpacity\">86%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.18\" max=\"1\" step=\"0.01\" value=\"0.86\" data-sgb-setting-input=\"uiOpacity\" data-def=\"0.86\" style=\"--p: 82.92682926829266%;\"></label>\n      </div>\n\n      <div class=\"lab\">소설형 가독성</div>\n      <div class=\"card\" data-sgb-novel-shade-controls=\"\">\n        <div class=\"row\"><span class=\"row-tx\"><b>소설 본문 가독성 배경</b><small>테마 밝기에 맞는 독서 영역을 본문 전체 뒤에 부드럽게 넣어요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"false\" data-sgb-bool-toggle=\"novelShadeEnabled\" data-def=\"false\"></button></div>\n        <div data-shade-body=\"\" data-off=\"true\"><label class=\"sl\"><span class=\"sl-hd\"><span>본문 배경 강도</span><output class=\"val\" data-sgb-setting-output=\"novelShadeOpacity\">45%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.05\" max=\"0.85\" step=\"0.01\" value=\"0.45\" data-sgb-setting-input=\"novelShadeOpacity\" data-def=\"0.45\" style=\"--p: 50.000000000000014%;\" disabled=\"\"></label></div>\n      </div>\n      <div class=\"status\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"></circle><path d=\"M12 11v5M12 7.6v.1\"></path></svg><span data-sgb-novel-shade-status=\"\">검정 음영으로 이미지의 밝은 부분을 눌러 글씨를 또렷하게 보여요.</span></div>\n    </div>\n\n    <!-- ── 글자 ── -->\n    <div class=\"pane\" data-pane=\"text\">\n      <div class=\"lab\" style=\"margin-top:8px\">글자 색상</div>\n      <div class=\"card\" data-color-card=\"\" data-locked=\"true\">\n        <div class=\"row\" data-sgb-theme-color-toggle=\"\"><span class=\"row-tx\"><b>테마 색상 자동 적용<span class=\"lockpill\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><rect x=\"5\" y=\"11\" width=\"14\" height=\"9\" rx=\"2.5\"></rect><path d=\"M8 11V8a4 4 0 0 1 8 0v3\"></path></svg>자동 색상 사용 중</span></b><small>끄면 글자와 강조 색상을 직접 수정할 수 있어요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"themeRecommendedColorsEnabled\" data-def=\"true\"></button></div>\n        <div class=\"row\" style=\"min-height:0;padding:10px 0 4px\"><span class=\"row-tx\"><small style=\"margin:0\">직접 글자색</small></span></div>\n        <div class=\"lockable\" data-sgb-custom-color-controls=\"\" style=\"padding-bottom:6px\">\n          <div class=\"crow\"><span class=\"cl\">본문 글자색</span>\n<label class=\"cpick\" style=\"--c:#fafafa\"><input type=\"color\" value=\"#fafafa\" data-sgb-color-picker=\"textColor\" aria-label=\"본문 글자색\" data-def=\"#fafafa\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fafafa\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"textColor\" aria-label=\"본문 글자색 코드\" data-def=\"#fafafa\" disabled=\"\"></div>\n          <div class=\"crow\"><span class=\"cl\">묘사 글자색</span>\n<label class=\"cpick\" style=\"--c:#85837d\"><input type=\"color\" value=\"#85837d\" data-sgb-color-picker=\"emColor\" aria-label=\"묘사 글자색\" data-def=\"#85837d\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#85837d\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"emColor\" aria-label=\"묘사 글자색 코드\" data-def=\"#85837d\" disabled=\"\"></div>\n          <div class=\"crow\"><span class=\"cl\">강조 글자색</span>\n<label class=\"cpick\" style=\"--c:#fafafa\"><input type=\"color\" value=\"#fafafa\" data-sgb-color-picker=\"strongColor\" aria-label=\"강조 글자색\" data-def=\"#fafafa\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fafafa\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"strongColor\" aria-label=\"강조 글자색 코드\" data-def=\"#fafafa\" disabled=\"\"></div>\n        </div>\n      </div>\n\n      <div class=\"lab\">글자 모양</div>\n      \n<div class=\"card\">\n        <div class=\"grid2\">\n          <label class=\"sl\"><span class=\"sl-hd\"><span>글씨 크기</span><output class=\"val\" data-sgb-setting-output=\"textScale\">100%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.8\" max=\"1.2\" step=\"0.01\" value=\"1.0\" data-sgb-setting-input=\"textScale\" data-def=\"1\" style=\"--p: 50%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>코드블록 크기</span><output class=\"val\" data-sgb-setting-output=\"codeTextScale\">100%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.7\" max=\"1.2\" step=\"0.01\" value=\"1.0\" data-sgb-setting-input=\"codeTextScale\" data-def=\"1\" style=\"--p: 60.00000000000001%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>폰트 두께</span><output class=\"val\" data-sgb-setting-output=\"fontWeight\">400</output></span>\n<input class=\"rng\" type=\"range\" min=\"300\" max=\"900\" step=\"100\" value=\"400\" data-sgb-setting-input=\"fontWeight\" data-def=\"400\" style=\"--p: 16.666666666666664%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>행간</span><output class=\"val\" data-sgb-setting-output=\"lineHeight\">1.65배</output></span>\n<input class=\"rng\" type=\"range\" min=\"1.35\" max=\"2.1\" step=\"0.01\" value=\"1.65\" data-sgb-setting-input=\"lineHeight\" data-def=\"1.65\" style=\"--p: 39.99999999999997%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>자간</span><output class=\"val\" data-sgb-setting-output=\"letterSpacing\">0.00em</output></span>\n<input class=\"rng\" type=\"range\" min=\"-0.03\" max=\"0.08\" step=\"0.01\" value=\"0\" data-sgb-setting-input=\"letterSpacing\" data-def=\"0\" style=\"--p: 27.27272727272727%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>문단 간격</span><output class=\"val\" data-sgb-setting-output=\"paragraphSpacing\">0.70rem</output></span>\n<input class=\"rng\" type=\"range\" min=\"0\" max=\"1.6\" step=\"0.01\" value=\"0.7\" data-sgb-setting-input=\"paragraphSpacing\" data-def=\"0.7\" style=\"--p: 43.74999999999999%;\"></label>\n        </div>\n      </div>\n\n      <div class=\"lab\">웹폰트</div>\n      <div class=\"acc\" data-open=\"false\">\n        <button type=\"button\" class=\"acc-h\" data-acc=\"\" aria-expanded=\"false\"><span class=\"row-tx\"><b>사용자 웹폰트</b><small>@font-face · 폰트 파일 URL · @import</small></span><span class=\"fontval\" data-sgb-font-output=\"\">없음</span><span class=\"chev\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M6 9l6 6 6-6\"></path></svg></span></button>\n        <div class=\"acc-b\"><div class=\"acc-in\"><div class=\"acc-pad\">\n          <label class=\"fld\"><span>웹폰트</span><textarea class=\"ta\" spellcheck=\"false\" rows=\"3\" data-sgb-font-input=\"customFontCssUrl\" placeholder=\"@font-face {...} / .woff2 URL / @import url(...)\"></textarea></label>\n          <label class=\"fld\"><span>폰트 종류</span><select class=\"sel\" data-sgb-font-input=\"customFontFamily\"><option value=\"\">자동 감지</option><option>Mona12</option><option>MonaS12</option><option>MonaS12 Text KR</option></select></label>\n          <p class=\"help\">@font-face·폰트 파일 URL은 자동 적용돼요. @import/CSS URL은 가능한 경우 이름까지 자동 추정하고, Mona 계열은 종류를 직접 고를 수 있어요.</p>\n        </div></div></div>\n      </div>\n\n      <div class=\"lab\">웹폰트 적용 범위</div><div class=\"card\"><div class=\"row\"><span class=\"row-tx\"><b>입력창</b><small data-sgb-input-font-hint=\"\">작성 중인 메시지도 설정한 웹폰트를 사용해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-label=\"입력창 웹폰트\" aria-checked=\"false\" data-sgb-bool-toggle=\"inputFontEnabled\" data-def=\"false\"></button></div><div class=\"row\"><span class=\"row-tx\"><b>사이트 전체</b><small>메뉴·목록·버튼까지 크랙 화면 전체에 적용해요. 설정창·코드·수식은 그대로예요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-label=\"사이트 전체 웹폰트\" aria-checked=\"false\" data-sgb-bool-toggle=\"siteFontEnabled\" data-def=\"false\"></button></div></div>\n<div class=\"lab\">가독성</div>\n      <div class=\"card\">\n        <div class=\"row\"><span class=\"row-tx\"><b>글자 그림자</b><small>본문에 은은한 검정 그림자를 넣어요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"false\" data-sgb-bool-toggle=\"textShadowEnabled\" data-def=\"false\"></button></div>\n      </div>\n    </div>\n\n    <!-- ── 강조 ── -->\n    <div class=\"pane\" data-pane=\"hl\">\n      <div class=\"note\" data-sgb-highlight-color-lock-hint=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><rect x=\"5\" y=\"11\" width=\"14\" height=\"9\" rx=\"2.5\"></rect><path d=\"M8 11V8a4 4 0 0 1 8 0v3\"></path></svg><span>테마 자동 색상 사용 중이에요. 색을 바꾸려면 자동 적용을 꺼 주세요.</span><button type=\"button\" class=\"btn btn-gl\" data-goto=\"text\">글자 탭</button></div>\n      <div class=\"hl\" data-on=\"true\" data-hl=\"dialogueBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"dialogue\" style=\"background: rgba(178, 154, 166, 0.34); color: rgb(253, 251, 252);\">“어서 와.”</span></span><span class=\"row-tx\"><b>대사 배경</b><small>\" \" / “ ” / 「 」 / ❝ ❞ 대사를 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"dialogueBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"dialogueBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#b29aa6\"><input type=\"color\" value=\"#b29aa6\" data-sgb-color-picker=\"dialogueBg\" aria-label=\"배경색\" data-def=\"#b29aa6\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#b29aa6\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"dialogueBg\" aria-label=\"배경색 코드\" data-def=\"#b29aa6\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"dialogueTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#fdfbfc\"><input type=\"color\" value=\"#fdfbfc\" data-sgb-color-picker=\"dialogueTextColor\" aria-label=\"글자색\" data-def=\"#fdfbfc\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fdfbfc\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"dialogueTextColor\" aria-label=\"글자색 코드\" data-def=\"#fdfbfc\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"thoughtBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"thought\" style=\"background: rgba(168, 154, 166, 0.3); color: rgb(244, 238, 241);\">‘글쎄…’</span></span><span class=\"row-tx\"><b>생각 배경</b><small>' ' / ‘ ’ 작은따옴표를 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"thoughtBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"thoughtBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#a89aa6\"><input type=\"color\" value=\"#a89aa6\" data-sgb-color-picker=\"thoughtBg\" aria-label=\"배경색\" data-def=\"#a89aa6\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#a89aa6\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"thoughtBg\" aria-label=\"배경색 코드\" data-def=\"#a89aa6\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"thoughtTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#f4eef1\"><input type=\"color\" value=\"#f4eef1\" data-sgb-color-picker=\"thoughtTextColor\" aria-label=\"글자색\" data-def=\"#f4eef1\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#f4eef1\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"thoughtTextColor\" aria-label=\"글자색 코드\" data-def=\"#f4eef1\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"italicBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"italic\" style=\"background: rgba(232, 224, 228, 0.26); color: rgb(132, 130, 126);\"><i>흔들렸다</i></span></span><span class=\"row-tx\"><b>이탤릭 배경</b><small>*이탤릭*으로 렌더된 부분만 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"italicBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"italicBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#e8e0e4\"><input type=\"color\" value=\"#e8e0e4\" data-sgb-color-picker=\"italicBg\" aria-label=\"배경색\" data-def=\"#e8e0e4\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#e8e0e4\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"italicBg\" aria-label=\"배경색 코드\" data-def=\"#e8e0e4\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"italicTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#84827e\"><input type=\"color\" value=\"#84827e\" data-sgb-color-picker=\"italicTextColor\" aria-label=\"글자색\" data-def=\"#84827e\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#84827e\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"italicTextColor\" aria-label=\"글자색 코드\" data-def=\"#84827e\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"strongBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"strong\" style=\"background: rgba(240, 224, 232, 0.62); color: rgb(250, 250, 250);\"><b>손상 없음</b></span></span><span class=\"row-tx\"><b>굵게 배경</b><small>**굵게**로 렌더된 부분만 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"strongBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"strongBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#f0e0e8\"><input type=\"color\" value=\"#f0e0e8\" data-sgb-color-picker=\"strongBg\" aria-label=\"배경색\" data-def=\"#f0e0e8\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#f0e0e8\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"strongBg\" aria-label=\"배경색 코드\" data-def=\"#f0e0e8\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"strongBgTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#fafafa\"><input type=\"color\" value=\"#fafafa\" data-sgb-color-picker=\"strongBgTextColor\" aria-label=\"글자색\" data-def=\"#fafafa\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fafafa\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"strongBgTextColor\" aria-label=\"글자색 코드\" data-def=\"#fafafa\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"codeBlockBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span class=\"code\" data-demo=\"code\" style=\"background: rgba(200, 166, 182, 0.24);\">zone: 7-B</span></span><span class=\"row-tx\"><b>코드블록 배경</b><small>코드블록 박스 배경을 켜거나 꺼요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"codeBlockBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"codeAccent\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#c8a6b6\"><input type=\"color\" value=\"#c8a6b6\" data-sgb-color-picker=\"codeAccent\" aria-label=\"배경색\" data-def=\"#c8a6b6\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#c8a6b6\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"codeAccent\" aria-label=\"배경색 코드\" data-def=\"#c8a6b6\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"markdownDecorEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span class=\"md\"><i>◆ 제목</i><u>인용문</u></span></span><span class=\"row-tx\"><b>마크다운 꾸미기</b><small>제목·인용문·목록·구분선·링크·표 등 렌더된 마크다운을 테마톤으로 꾸며요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"markdownDecorEnabled\" data-def=\"true\"></button></div></div>\n    </div>\n  </div>\n\n  <div class=\"selbar\" data-sgb-style-selbar=\"\" aria-live=\"polite\">\n    <span class=\"tsw\" data-sel-sw=\"\"></span>\n    <span class=\"sx\"><small>현재 테마</small><b data-sel-name=\"\"></b></span>\n    <span class=\"pals\" data-sel-pals=\"\" role=\"radiogroup\" aria-label=\"팔레트\"></span>\n  </div>\n  <footer class=\"ft\">\n    <button type=\"button\" class=\"btn btn-gl\" data-sgb-settings-reset=\"\" data-sgb-reset-state=\"idle\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 12a8 8 0 1 0 2.4-5.7M4 4v4.4h4.4\"></path></svg><span>전체 초기화</span></button>\n    <button type=\"button\" class=\"btn btn-pri\" data-sgb-settings-close=\"\" data-act=\"close\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"></circle><path d=\"M8 12.3l2.8 2.8L16.3 9.5\"></path></svg>닫기</button>\n  </footer>\n</section>";
     installLiquidSettings(modal, true);
+    installThemeArtControls(modal);
     installSettingsModalDragging(modal);
 
     let settingsResetConfirmTimer = 0;
@@ -5781,11 +7129,11 @@ function createSettingsModal() {
   // can differ on a phone, so move only the background painting to viewport center.
   let ornamentCenterFrame = 0;
   function scheduleReferenceOrnamentCenterSync() {
-    if (ornamentCenterFrame) return;
+    if (ornamentCenterFrame || !RADIO_ALIGNED_UI_STYLES.has(normalizeUiStyle(CONFIG.uiStyle))) return;
     ornamentCenterFrame = requestAnimationFrame(() => {
       ornamentCenterFrame = 0;
       if (!document.documentElement.classList.contains(CLS_ACTIVE)) return;
-      if (!['pearlwave', 'blueknot', 'cinnamusic', 'cinnaboard', 'cinnadream', 'cinnacushion', 'cinnaribbon', 'cinnawizard', 'cinnapuff', 'chiiv', 'chiijudy', 'chiihula', 'chiifairy', 'xiaocard', 'xiaosanta', 'cherrystaff', 'kerodream', 'kiraramono', 'sailormoon', 'cherryxiaolang'].includes(normalizeUiStyle(CONFIG.uiStyle))) return;
+      if (!USER_THEME_INDEX.has(normalizeUiStyle(CONFIG.uiStyle)) && !['pearlwave', 'blueknot', 'cinnamusic', 'cinnaboard', 'cinnadream', 'cinnacushion', 'cinnaribbon', 'cinnawizard', 'cinnapuff', 'chiiv', 'chiijudy', 'chiihula', 'chiifairy', 'xiaocard', 'xiaosanta', 'cherrystaff', 'kerodream', 'kiraramono', 'sailormoon', 'cherryxiaolang'].includes(normalizeUiStyle(CONFIG.uiStyle))) return;
 
       const view = window.visualViewport;
       const screenCenter = view ? view.offsetLeft + view.width / 2 : window.innerWidth / 2;
@@ -6036,7 +7384,7 @@ function createSettingsModal() {
     'pearlwave', 'abyssconch', 'blueknot', 'cinnamusic', 'cinnaboard', 'cinnadream',
     'cinnacushion', 'cinnaribbon', 'cinnawizard', 'cinnapuff', 'chiiv', 'chiijudy',
     'chiihula', 'chiifairy', 'xiaocard', 'xiaosanta', 'cherrystaff', 'kerodream',
-    'kiraramono', 'sailormoon', 'cherryxiaolang']);
+    'kiraramono', 'sailormoon', 'cherryxiaolang', ...USER_THEME_PACK.map(theme => theme.value)]);
   let radioInputFrame = 0;
   let radioInputResizeObserver = null;
   let radioInputMutationObserver = null;
@@ -18528,7 +19876,7 @@ html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-sty
 
 
     // 최적화(4.2.0): 33개 테마 중 지금 테마 규칙만 원래 순서대로 남긴다(sgbThemeCss 참고)
-    style.textContent = sgbThemeCss.load(fullThemeCss + BOTANICAL_LETTER_CSS + NYANG_CSS, normalizeUiStyle(CONFIG.uiStyle), style);
+    style.textContent = sgbThemeCss.load(fullThemeCss + buildUserThemePackCss() + BOTANICAL_LETTER_CSS + NYANG_CSS, normalizeUiStyle(CONFIG.uiStyle), style);
     document.head.appendChild(style);
   }
 
@@ -19051,6 +20399,7 @@ html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-sty
 
 
   function cleanupOldLayer() {
+    clearThemeArtwork();
     cancelPendingThemeWork();
     clearBackgroundNavigationProtection();
     sgbLayoutResizeObserver?.disconnect();
