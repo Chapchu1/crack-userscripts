@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.50
+// @version      0.5.51
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -24,6 +24,14 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.51 · 설정 중복 카테고리 정리
+ * 화면·도움말 / 백업·이동 / 재구축·복구의 세 카테고리로 정리합니다.
+ * 백업·이동과 재구축·복구는 각 기능만 표시합니다.
+ * 기존 정리·복구 바로가기는 재구축·복구로 연결합니다.
+ * Suite 정리 이력·되돌리기·가져온 자료 비교와 상세 편집기를 연결합니다.
+ * 정리·관계 복구·재구축·주입 엔진과 기존 데이터를 유지합니다.
+ */
 
 /* 0.5.50 · 관계 원문 근거 복구 개선
  * AI 표시용 정리와 원문 인용 검사의 차이를 원문 위치로 복구합니다.
@@ -514,7 +522,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.50'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.51'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -48747,7 +48755,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.50-suite';
+  const SCRIPT_VERSION = '0.5.51-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -69522,16 +69530,19 @@ function positionPackMenus(){
   }
   }
 
-function vTools(){const j=V.rebuild,run=V.rebuildRunning,rows=j?.segments||[],done=rows.filter(s=>s.status==='complete').length,status={pending:'대기',running:'판독 중',complete:'완료',failed:'실패'};
- return pageHead('자료 관리')+
+function vTools(page='all'){const j=V.rebuild,run=V.rebuildRunning,rows=j?.segments||[],done=rows.filter(s=>s.status==='complete').length,status={pending:'대기',running:'판독 중',complete:'완료',failed:'실패'};
+ const rebuild=page==='transfer'?'':
  `<section class="m3-panel" data-key="memdiff-settings"><div class="m3-panel-head"><b>정리 전후 비교</b>${btn('정리 기록','memDiff',{cls:'mini',icon:'history'})}</div><p class="m3-muted">현재상태·날짜로그·서사 고리·관계·인지·호칭·자료집 · 방마다 최근 10회 · 추가 API 호출 없음</p></section>`+
+ suiteBody('history')+(state.currentRoom?.suiteImportCandidates?.length?'<section class="m3-panel">'+btn('가져온 내용 비교 '+state.currentRoom.suiteImportCandidates.length+'건','suiteConflicts',{cls:'mini'})+'</section>':'')+
  '<section class="m3-panel '+(j?'m3-focus':'')+'" data-key="rebuild"><div class="m3-row m3-sp"><div class="m3-t"><b class="m3-title-help">과거 대화 전체 재구축 '+help(helpSections([['읽는 범위','확정 RP를 AI 답변 끝 기준 약 20만 자씩 나눕니다. 한 턴이 더 길면 통째로 유지합니다.'],['분석과 적용','대화 읽기는 원문을 준비합니다. 이어서 분석은 외부 AI API를 사용합니다. 성공한 구간을 저장하고 실패한 구간부터 이어갑니다.'],['기존 기억','전체 결과 적용을 누르기 전까지 유지합니다.']]))+'</b><div class="m3-muted">확정 RP를 읽고 현재상태·날짜별 사건·서사 고리·인물·인지·자료·호칭을 다시 구성합니다.</div></div>'+(run?btn('작업 중단','rebuildStop',{cls:'danger mini'}):j&&!['complete','applied'].includes(j.status)?btn('이어서 분석','rebuildRun',{cls:'primary mini',dis:!!V.ai.manual}):btn('대화 읽기','rebuildRead',{cls:'primary mini',dis:!!V.ai.manual}))+'</div><p class="m3-muted">지침을 제외한 원문 약 200,000자 · AI 답변 끝에서 분할 · 한 턴이 더 길면 해당 턴은 통째로 유지</p>'+
  (j?'<div class="m3-hbar m3-topgap"><i style="width:'+ (rows.length?done/rows.length*100:0)+'%"></i></div><p class="m3-muted">'+esc(j.message||'')+' · 판독 완료 '+done+'/'+rows.length+'</p>'+rows.map(s=>'<div class="m3-seg" data-key="segment-'+s.index+'"><span class="m3-n '+(s.status==='complete'?'m3-done':s.status==='running'?'m3-run':'')+'">'+s.index+'</span><span class="m3-t">'+s.messages+'메시지 · '+fmt(s.chars)+'자'+(s.error?'<br><small class="m3-error">'+esc(s.error)+'</small>':'')+'</span><span class="m3-s">'+esc(status[s.status]||s.status)+'</span></div>').join('')+'<div class="m3-row m3-card-actions">'+(j.status==='complete'&&j.ready?btn('전체 결과 적용','rebuildApply',{cls:'primary mini',dis:run}):'')+btn('대화 다시 읽기','rebuildRead',{cls:'quiet mini',dis:run||!!V.ai.manual})+btn('구간 목록 비우기','rebuildClear',{cls:'danger mini',dis:run})+'</div>':'')+'</section>'+
 vExternalRebuild(run||ExternalBundles.busy())+
- '<hr class="m3-secondary-divider"><div data-key="secondary-rebuild"><b>외부 AI로 2차 재구축</b><div class="m3-muted">현재 방 자료를 카드별 고밀도 기록체로 압축합니다. 사건·원문·팩 구분을 보존합니다.</div><div class="m3-row m3-card-actions">'+btn('지침 + TXT 받기','secondaryExport',{cls:'mini',dis:run})+btn('JSON 가져오기','secondaryImport',{cls:'mini',dis:run})+btn('지침','promptGuides',{arg:'externalSecondary',cls:'mini',icon:'doc'})+'</div>'+vSecondaryStatus(run)+'</div></section>'+
+ '<hr class="m3-secondary-divider"><div data-key="secondary-rebuild"><b>외부 AI로 2차 재구축</b><div class="m3-muted">현재 방 자료를 카드별 고밀도 기록체로 압축합니다. 사건·원문·팩 구분을 보존합니다.</div><div class="m3-row m3-card-actions">'+btn('지침 + TXT 받기','secondaryExport',{cls:'mini',dis:run})+btn('JSON 가져오기','secondaryImport',{cls:'mini',dis:run})+btn('지침','promptGuides',{arg:'externalSecondary',cls:'mini',icon:'doc'})+'</div>'+vSecondaryStatus(run)+'</div></section>';
+ const transfer=page==='rebuild'?'':
  '<section class="m3-panel" data-key="room-copy"><b class="m3-title-help">다른 방 자료 복사하기 '+help(helpSections([['독립 사본','원본 방과 연결하지 않고 현재 방 안에 독립 복사합니다. 이후 어느 한쪽이 자동 갱신돼도 다른 방은 바뀌지 않습니다.'],['선택 복사','현재상태·날짜로그·서사 고리·캐릭터/OOC·자료집·인물인지·은폐·호칭말투를 필요한 것만 체크해 복사합니다.'],['안전 범위','주입 중 상태, AI cursor·근거 manifest, 재구축 staging, 자동화 실행상태는 방 사이에 이식하지 않습니다.']]))+'</b><div class="m3-muted">분기·새 방으로 기존 정사 자료를 옮길 때 사용합니다. 내용을 펼쳐 확인하고 섹션·사건·카드를 개별 선택합니다. 자료집은 별도 참고 팩으로 보관합니다.</div><div class="m3-row m3-card-actions">'+btn('다른 방에서 선택 복사','roomCopy',{cls:'mini',icon:'copy',dis:run})+'</div></section>'+
  '<section class="m3-panel" data-key="backup"><div class="m3-row m3-sp"><div class="m3-t"><b class="m3-title-help">백업 · 복원 '+help(helpSections([['파일 백업','이 기기의 Wish 자료를 파일로 저장하고, 복원할 방과 자료를 선택합니다.'],['재구축과의 차이','백업 복원은 저장본을 되돌립니다. 전체 재구축은 과거 대화를 AI로 다시 읽습니다.']]))+'</b><div class="m3-muted">필요한 자료를 로컬 백업 파일로 보관합니다.</div></div></div><div class="m3-row m3-card-actions">'+btn('클라우드 백업','kvOpen',{cls:'mini',icon:'cloud'})+btn('백업 저장','fileBackup',{cls:'mini'})+btn('백업 복원','fileRestore',{cls:'mini'})+btn('로컬 데이터 정리','localRooms',{cls:'mini',icon:'database'})+'</div></section>'+
  '<section class="m3-panel" data-key="room-reset"><b class="m3-title-help">이 방 데이터 초기화</b><p class="m3-muted">현재 방의 기억·인지·설정·작업 이력과 방 전용 자동 자료를 초기화합니다. 크랙 대화는 유지하며 실행 전에 확인합니다.</p><div class="m3-actions m3-topgap">'+btn('이 방 데이터 초기화','reset',{cls:'mini m3-reset-action',icon:'trash'})+'</div></section>';
+ return pageHead(page==='transfer'?'백업·이동':page==='rebuild'?'재구축·복구':'자료 관리')+rebuild+transfer;
 }
 
   /* ───────── 12. 화면: 설정 ───────── */
@@ -69539,7 +69550,7 @@ vExternalRebuild(run||ExternalBundles.busy())+
     const mode=q.semantic?(q.selector?'both':'semantic'):(q.selector?'priority':'local');
     const autoHelp=helpSections([['모든 방 공통','스위치와 주기는 변경 후 자동 저장되어 기존 방과 새 방에 함께 적용됩니다. 진행 중인 정리가 있으면 완료 뒤 저장합니다. 정리한 위치와 기억 내용은 방마다 유지합니다.'],['턴 계산','1턴은 USER 메시지와 AI 답변 한 쌍입니다. 리롤은 같은 턴이며 최신 1턴은 다음 답변 뒤 확정됩니다.'],['함께 처리','두 묶음의 주기가 겹치면 같은 AI 요청으로 처리합니다. 주입 후보 선별은 별도로 설정합니다.']]);
     const recallHelp=helpSections([['자동 호출 ON','전체가 한도 안이어도 최근 대화·키워드·준비된 검색 벡터로 관련 사건과 자료를 고릅니다. 최근 날짜 기억과 고정 자료, 현재상태·인지·진행 규칙은 유지합니다.'],['자동 호출 OFF','기존 방식입니다. 켜진 전체 후보가 한도 안이면 모두 포함하고, 초과할 때 선별합니다.'],['보조 AI','아래 옵션을 켜면 자동 호출 ON에서는 고른 후보를 재검토하고, OFF에서는 5만 자 초과 시 재검토합니다. 별도 API 사용이 발생할 수 있습니다.']]);
-    const advanced=fold('automation-baseline','고급 · 자동 시작점',`<section class="m3-panel"><b>미처리 대화를 건너뛰고 지금부터 정리</b><p class="m3-muted">저장된 기억은 유지하지만 아직 읽지 않은 과거 대화는 자동 정리에서 건너뜁니다. 과거도 반영하려면 설정 → 재구축을 사용하세요.</p>${btn('시작점을 지금으로 맞추기','memoryBase',{cls:'mini',icon:'clock'})}</section>`);
+    const advanced=fold('automation-baseline','고급 · 자동 시작점',`<section class="m3-panel"><b>미처리 대화를 건너뛰고 지금부터 정리</b><p class="m3-muted">저장된 기억은 유지하지만 아직 읽지 않은 과거 대화는 자동 정리에서 건너뜁니다. 과거도 반영하려면 설정 → 재구축·복구를 사용하세요.</p>${btn('시작점을 지금으로 맞추기','memoryBase',{cls:'mini',icon:'clock'})}</section>`);
     return       (page==='automation'?unifiedModePanel()+(WSUITE.host.automation(state.currentRoom)==='suite'?suiteBody('automation'):`<section class="m3-panel" data-key="automation-settings"><div class="m3-panel-head"><b class="m3-title-help"><span class="wish-origin" aria-label="위시 RP 기능">🪽</span>자동 정리 ${help(autoHelp)}</b>${btn('저장 확인','unifiedSave',{cls:'mini'})}</div><p class="m3-muted m3-scope-hint">모든 방 공통 · 변경 후 자동 저장${Object.keys(WUIAutomationSave.changes).length?' · 저장 대기':''}${WUIAutomationSave.error?' · '+esc(WUIAutomationSave.error):''}</p>${tog('자동 정리 사용','unified.enabled',u.enabled,'전체 자동 실행 켜기·일시정지')}${tog('기억 묶음','unified.memoryEnabled',u.memoryEnabled,'현재상태 · 날짜별 사건 · 자료')}${step('기억 정리 주기','unified.memoryEvery',u.memoryEvery,{max:100,unit:'턴마다'})}${tog('인물 묶음','unified.observeEnabled',u.observeEnabled,'인지 · 호칭 · 말투 · 은폐')}${step('인물 정리 주기','unified.observeEvery',u.observeEvery,{max:100,unit:'턴마다'})}</section>`+advanced):page==='search'?`<section class="m3-panel" data-key="selective-settings"><b class="m3-title-help">${WSUITE.originHtml('shared')}상황에 맞는 기억 호출</b>${helpToggle('필요한 기억만 자동 호출','recall.selective',q.selective,'ON: 글자 한도와 관계없이 최근 대화에 관련된 사건·자료를 먼저 고릅니다. 현재상태·선택된 인지·진행 규칙·고정 자료와 최근 날짜 기억은 유지합니다. 말투는 대화에 등장한 인물 기준이며 대상이 불명확하면 기존 규칙을 유지합니다. OFF: 한도 안이면 켜진 전체 후보를 포함하는 기존 방식입니다. 저장된 원문은 삭제하지 않습니다.','shared')}<p class="m3-muted">이 방에 적용 · 변경 즉시 저장 · 기본 선별은 추가 AI 호출 없음</p></section><section class="m3-panel" data-key="recall-settings"><div class="m3-panel-head"><b class="m3-title-help"><span class="wish-origin" data-origin="lore" aria-label="로어 기능">💙</span>선택된 기억 AI 재검토 ${help(recallHelp)}</b>${btn('재검토 설정 저장','recallSave',{cls:'mini'})}</div><div class="m3-setting-row m3-recall-mode"><label for="wish-recall-mode">재검토 방식</label>${selc('recall.mode',mode,[['local','에리·키워드 결과만 사용'],['priority','AI로 후보 순서 재검토'],['both','AI로 관련성·순서 재검토'],['semantic','AI로 관련성만 재검토']],'m3-select',' id="wish-recall-mode" aria-label="선택된 기억 AI 재검토"')}</div><p class="m3-muted">${q.selective?'필요한 기억 자동 호출 ON · 한도와 관계없이 관련 후보를 선택 · 아래 AI 옵션은 선택한 후보에 적용':'필요한 기억 자동 호출 OFF · 한도 안이면 전체 포함 · 50,000자 초과 시 아래 AI 옵션 적용'} · 고정·필수 정보 및 저장 원문 유지</p>${helpToggle('AI로 관련성 재확인','recall.semantic',q.semantic,'필요한 기억 자동 호출 ON이면 관련 후보를 한도와 관계없이 재검토합니다. OFF이면 전체 후보가 50,000자를 초과할 때 평가합니다. 제외한 항목은 유지합니다. 실패하면 로컬 검색 결과를 사용합니다.','lore')}${helpToggle('AI로 우선순위 정하기','recall.selector',q.selector,'자동 호출 ON이면 선택된 후보의 순서를, OFF이면 50,000자 초과 후보의 순서를 평가합니다. 현재 질문·미해결 약속·위험과 연결된 정보를 우선합니다. 실패하면 로컬 순위를 사용합니다.','lore')}</section>`+`<section class="m3-panel" data-key="economy-settings"><div class="m3-panel-head"><b class="m3-title-help"><span class="wish-origin" data-origin="shared" aria-label="위시·로어 공통">🪽 💙</span>API 사용량 절약 ${help('실험 기능 · 현재 방에만 적용합니다. 둘 다 OFF이면 2.5.8 방식입니다. OFF는 이미 갱신된 기억을 되돌리지는 않습니다. 처음 켜기 전 기억·인지·자료 백업을 보관하며, 복원용 파일은 기존 백업/복원 화면에서 가져올 수 있습니다. RP 원문은 이 백업으로 되돌리지 않습니다.')}</b><span class="m3-actions m3-economy-actions">${btn('절약 적용 전 백업 받기','economyBackup',{cls:'mini'})}${btn('절약 설정 저장','economySave',{cls:'mini'})}</span></div>${helpToggle('현재상태 변경분 갱신','apiEconomy.delta',V.apiEconomy?.delta,'변경된 원문 구간만 수정하고 나머지 문구는 보존합니다. 수정·추가·종료에 신규 RP 근거와 요청 토큰을 검증합니다. 애매한 편집은 원본을 유지하고 오류를 표시합니다. 날짜별 사건·자료·인지는 기존 증분 방식을 유지합니다.','wish')}${helpToggle('색인으로 후보 선별','apiEconomy.index',V.apiEconomy?.index,'필요한 기억 자동 호출 ON이면 선택한 후보 재검토에, OFF이면 50,000자 초과 후보 재검토에 사용합니다. AI 재검토를 켠 경우에만 적용합니다. 첫 선별에서 원문과 점수를 읽고 짧은 발췌 색인을 함께 준비하므로 첫 호출은 더 커질 수 있습니다. 다음 호출부터 같은 원문의 색인을 사용하며 실제 주입은 원문입니다. 자료 변경·색인 부적합·캐시 소실 때는 원문으로 돌아갑니다. 핵심 단서 누락 가능성은 실전 비교가 필요합니다.','lore')}<p class="m3-muted">${esc(V.apiEconomy?.status||'')}</p></section>`:`<section class="m3-panel" data-key="api-guides"><div class="m3-panel-head"><b><span class="wish-origin" data-origin="shared" aria-label="위시·로어 공통">🪽 💙</span>API 추출 지침</b>${btn('지침','promptGuides',{arg:'apiCommon',cls:'mini',icon:'doc'})}</div><p class="m3-muted">기억·인물·후보 선별 등 지침을 선택해 편집합니다. 모든 방 공통 · 기본값 복원 가능</p></section>`);
   }
   function requestStatusText(status){
@@ -69603,7 +69614,7 @@ vExternalRebuild(run||ExternalBundles.busy())+
     else if(['automation','search'].includes(S.aiPage))body=vAiSettingsContent(S.aiPage);
     else if(S.aiPage==='refiner')body=`<section class="m3-panel" data-key="unified-response-review"><div class="m3-row m3-sp"><b>응답 교정</b>${tag(refiner.busy?'검수 중':refiner.enabled?'자동 검수 켜짐':'자동 검수 꺼짐',refiner.enabled?'ok':'')}</div><p>최근 답변을 기억·인지·관계·호칭과 대조하고, 근거가 확인된 수정안을 검토합니다.</p>${refiner.status?`<p class="m3-muted">${esc(refiner.status)}</p>`:''}<div class="m3-card-actions">${btn('검사 항목·자동 적용 설정','suiteRefiner',{cls:'mini',icon:'set'})}</div></section>`+fold('lore-advanced-refiner','고급 · 로어 세부 설정',`<p class="m3-muted">자료 추출·검색과 기존 로어 설정을 확인합니다. 공통 API 연결은 연결·상태에서 관리하세요.</p>${btn('로어 상세 설정 열기','suiteLore',{cls:'mini'})}`);
     else if(S.aiPage==='manual')body=suiteBody('summary')+fold('manual-special-tools','목적별 수동 도구',`<div class="m3-card-actions">${btn('통합·항목별 업데이트','managerUpdate',{cls:'mini',icon:'edit'})}${btn('자료 압축','managerCompression',{cls:'mini'})}${btn('장기기억 정리','managerLongTerm',{cls:'mini'})}${btn('AI 어시스턴트','managerAi',{cls:'mini'})}</div>`);
-    else body=`<section class="m3-panel"><b>사용량과 작업 기록</b><p class="m3-muted">API 사용량, 실패 원인과 보류된 변경을 확인합니다.</p><div class="m3-card-actions">${btn('사용량·비용','usageLedger',{cls:'mini',icon:'wallet'})}${btn('실패·주의 기록','errorLogs',{cls:'mini',icon:'doc'})}${btn('보류된 변경','unifiedRoute',{arg:'cognition:review',cls:'mini'})}</div></section>`+vAiSettingsContent('rules')+`<section class="m3-panel"><b>저장된 자료 변경 기록</b><p class="m3-muted">최근 적용 내역과 직전 변경 복구는 설정에서 확인합니다.</p>${btn('변경 기록·복구','unifiedRoute',{arg:'settings:history',cls:'mini',icon:'history'})}</section>`;
+    else body=`<section class="m3-panel"><b>사용량과 작업 기록</b><p class="m3-muted">API 사용량, 실패 원인과 보류된 변경을 확인합니다.</p><div class="m3-card-actions">${btn('사용량·비용','usageLedger',{cls:'mini',icon:'wallet'})}${btn('실패·주의 기록','errorLogs',{cls:'mini',icon:'doc'})}${btn('보류된 변경','unifiedRoute',{arg:'cognition:review',cls:'mini'})}</div></section>`+vAiSettingsContent('rules')+`<section class="m3-panel"><b>저장된 자료 변경 기록</b><p class="m3-muted">최근 적용 내역과 직전 변경 복구는 설정에서 확인합니다.</p>${btn('변경 기록·복구','unifiedRoute',{arg:'settings:rebuild',cls:'mini',icon:'history'})}</section>`;
     return pageHead('AI·자동화')+unifiedTabs(pages,S.aiPage,'aiSub')+`<div class="m3-sub" data-key="ai-${S.aiPage}">${body}</div>`;
   }
   function errorHelpButton(error,label='원인·해결'){
@@ -69619,10 +69630,12 @@ vExternalRebuild(run||ExternalBundles.busy())+
   function savedTag(group){const x=WUIAutoSave.status(group);return x.phase==='saved'?'<span class="wp-saved" data-key="saved-'+group+'">'+ic('check')+'저장됨</span>':x.phase==='error'?'<span class="m3-actions"><span class="wp-save-error" title="'+esc(x.error)+'">저장 안 됨</span>'+btn('재시도','autosaveRetry',{arg:group,cls:'mini'})+'</span>':'<span class="wp-idle" data-key="saved-'+group+'">'+(x.phase==='saving'||x.phase==='pending'?'저장 중…':'바꾸면 바로 저장')+'</span>';}
 
 function vSettings(){
-    const pages=[['general','화면·도움말'],['transfer','백업·이동'],['rebuild','재구축'],['history','정리·복구']];
+    const pages=[['general','화면·도움말'],['transfer','백업·이동'],['rebuild','재구축·복구']];
+    if(S.settingsPage==='history')S.settingsPage='rebuild';
+    if(S.settingsPage==='backup')S.settingsPage='transfer';
     if(!pages.some(([k])=>k===S.settingsPage))S.settingsPage='general';
     let body=S.settingsPage==='general'?`<section class="m3-panel"><b>화면 표시</b>${tog('입력창 상태 버튼 표시','display.monitor',WishDisplay.visible(),'OFF·남은 턴 숫자 버튼')}<p class="m3-muted">모바일 합본의 위시 RP 버튼을 사용하면 숨겨도 됩니다. 변경 즉시 모든 방에 적용됩니다.</p></section>${themeSettingsHtml()}<section class="m3-panel"><b>설정을 찾고 있나요?</b><div class="m3-card-actions">${btn('API 연결','unifiedRoute',{arg:'ai:connection',cls:'mini',icon:'key'})}${btn('자동 정리','unifiedRoute',{arg:'ai:automation',cls:'mini'})}${btn('응답 교정','unifiedRoute',{arg:'ai:refiner',cls:'mini'})}${btn('진행 규칙·프리셋','unifiedRoute',{arg:'memory:extra',cls:'mini',icon:'book'})}${btn('실패·주의 기록','errorLogs',{cls:'mini',icon:'doc'})}${btn('저장 공간 관리','storageManage',{cls:'mini',icon:'database'})}</div></section>`:vTools(S.settingsPage);
-    if(S.settingsPage==='history')body+=fold('legacy-all-tools','고급 · 기존 상세 편집기 (위시 RP 매니저)',`<p class="m3-muted">통합본에 포함된 위시 RP 매니저의 상세 화면입니다. 기존 인물·물품의 세부 편집, 수동 업데이트·자료 압축 등 전문 도구를 엽니다. 일반 기억·자료·인물 편집은 각각의 메뉴에서 가능합니다.</p>${btn('위시 RP 매니저 상세 편집기 열기','suiteLegacy',{cls:'mini',icon:'edit'})}`);
+    if(S.settingsPage==='rebuild')body+=fold('legacy-all-tools','고급 · 기존 상세 편집기 (위시 RP 매니저)',`<p class="m3-muted">통합본에 포함된 위시 RP 매니저의 상세 화면입니다. 기존 인물·물품의 세부 편집, 수동 업데이트·자료 압축 등 전문 도구를 엽니다. 일반 기억·자료·인물 편집은 각각의 메뉴에서 가능합니다.</p>${btn('위시 RP 매니저 상세 편집기 열기','suiteLegacy',{cls:'mini',icon:'edit'})}`);
     return pageHead('설정')+unifiedTabs(pages,S.settingsPage,'settingsSub')+`<div class="m3-sub" data-key="settings-${S.settingsPage}">${body}</div>`;
   }
 
@@ -69650,7 +69663,9 @@ function vSettings(){
   function canonicalRoute(tab='check',sub=''){
     if(tab==='suite'){tab='cognition';sub='cards';}
     if(tab==='lore')return sub==='refiner'?['ai','refiner']:['memory',sub==='cards'?'loreCards':'lorePacks'];
-    if(tab==='tools')return ['settings',sub||S.toolsPage||'rebuild'];
+    if(tab==='tools'){tab='settings';sub=sub||S.toolsPage||'rebuild';}
+    if(tab==='settings'&&sub==='history')sub='rebuild';
+    if(tab==='settings'&&sub==='backup')sub='transfer';
     if(tab==='memory'&&sub==='char')return ['cognition','char'];
     if(tab==='memory'&&sub==='summary')return ['ai','manual'];
     if(tab==='settings'&&['automation','search','rules'].includes(sub))return ['ai',sub==='rules'?'records':sub];
