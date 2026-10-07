@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.45
+// @version      0.5.46
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -24,6 +24,14 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.46 · Suite 화면 전환·버튼 연결 복구
+ * 자료집·진행 규칙을 포함해 누락된 Suite 전용 내장 동작 12개를 복구합니다.
+ * 주/보조 탭·설정 바로가기는 Suite 경로를 공유하며 화면 전환 전 편집 내용을 확인합니다.
+ * AI 도우미 예시·검색, 오류 필터, 전달 상세, 기억 선택과 지침 초기화 연결을 복구합니다.
+ * 프리셋 추가/삭제의 저장 중 변경 방지와 항목 수·인덱스 검사를 유지합니다.
+ * 0.5.45의 입력창 상태 버튼 OFF 적용 수정도 포함합니다.
+ */
 
 /* 0.5.45 · 입력창 상태 버튼 OFF 적용 수정
  * 버튼 생성/재배치 전에 저장된 표시 설정을 확인합니다.
@@ -460,7 +468,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.45'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.46'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -48601,7 +48609,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.45-suite';
+  const SCRIPT_VERSION = '0.5.46-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -70478,50 +70486,84 @@ function setKey(key, v, lazy) {
 
   /* ───────── 19. 내장 동작 (화면 전용) ───────── */
   const BUILTIN = {
-    kvOpen:()=>WishKoofr.open(),kvSettings:()=>WishKoofr.settings(),kvRefresh:()=>WishKoofr.refresh(),kvBackup:()=>WishKoofr.backup(),kvRestore:id=>WishKoofr.restore(id),kvTest:id=>WishKoofr.test(id),kvSave:id=>WishKoofr.save(id),kvDisconnect:()=>WishKoofr.disconnect(),kvSelect:id=>WishKoofr.select(id),kvPick:a=>WishKoofr.pick(a),kvRemove:id=>WishKoofr.remove(id),kvRoomPick:a=>WishKoofr.roomPick(a),kvRoomAccept:id=>WishKoofr.roomAccept(id),
-    personDossier:arg=>openSheet('personDossier',{draft:{person:arg||personOptions()[0]?.[0]||'',category:'all',limit:40}}),
-    recordsMore:id=>{const d=findDlg(id);if(d)d.draft.limit=(Number(d.draft.limit)||40)+40;},
-    usageLedger:localUsageOpen,logCalendar:localCalendarOpen,relationMap:localGraphOpen,memDiff:localDiffOpen,memDiffSeen:()=>{MemoryDiff.dismiss(state.currentRoom);},injWhy:a=>{S.injWhy=a;},capUnit:()=>{S.capKb=!S.capKb;try{localStorage.setItem('wish-m3-cap-unit',S.capKb?'kb':'chars');}catch(_){}},thView:a=>{S.thView=a==='closed'?'closed':'open';},
-    secondaryExpand:arg=>{const [id,key]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){d.draft.open||={};d.draft.open[key]=!d.draft.open[key];}},
-    secondaryMore:id=>{const d=findDlg(id);if(d&&!d.busy)d.draft.limit=(Number(d.draft.limit)||30)+30;},
-    secondaryPick:arg=>{const [id,mode]=arg.split('|');SecondaryRebuild.selectReviewRows(findDlg(id),mode);},
-    secondaryGroupPick:arg=>{const [id,key,scope]=arg.split('|');SecondaryRebuild.toggleReviewGroup(findDlg(id),key,scope==='variant');},
-    secondaryClear:id=>{const d=findDlg(id);if(d&&!d.busy)ask('압축본을 모두 해제할까요?','등록된 압축 표현만 해제합니다. 저장 원문과 사건은 삭제하지 않습니다.','압축본 해제',()=>SecondaryRebuild.change(id,'clear'));},
-
-    nav: a => { if (S.tab !== a) { S.tab = a; S.scrollTop = true; AD.onNav && AD.onNav(a, a === 'memory' ? S.mem : a === 'cognition' ? S.cog : undefined); } },
-    memSub: a => { S.mem = a; S.scrollTop=true; AD.onNav && AD.onNav('memory', a); }, cogSub: a => { S.cog = a; S.scrollTop=true; AD.onNav && AD.onNav('cognition', a); },
-    closePanel: () => {discardPanelDrafts();close();}, closeDlg: id => closeSheet(id), quickClose: () => closeQuick(), quickFull: () => open('check'),
-    flip: (key, el) => setKey(key, el.getAttribute('aria-pressed') !== 'true'),
-    step: (arg, el) => { const [k, dir, mn, mx, inc] = arg.split('|'), input = el.parentElement.querySelector('input'); const v = Math.min(Number(mx), Math.max(Number(mn), (Number(input && input.value) || 0) + Number(dir) * Number(inc))); if (input) input.value = v; setKey(k, v); },
-    search: () => { S.search = ''; openSheet('search'); }, preview: () => openSheet('preview'),
-
-    cfOk: id => { const d = findDlg(id); closeSheet(id, true); return d && d.fn ? d.fn() : undefined; },
-    copyText: id => { const d = findDlg(id), t = d ? (d.text ?? (d.draft && d.draft.result) ?? '') : ''; (AD.copy ? Promise.resolve(AD.copy(t)) : navigator.clipboard.writeText(t)).then(ok => ok === false ? toast('복사하지 못했습니다.', 'error') : toast('복사했습니다.')).catch(() => toast('복사하지 못했습니다.', 'error')); },
-    bkPick: arg => { const [id, m] = arg.split('|'), d = findDlg(id); if (!d) return; [...(d.rooms || []), ...(d.libs || [])].forEach(x => { d.draft.pick[x.id] = m === 'all' ? true : m === 'cur' ? !!x.current : false; }); },
-    roomCopyExpand:arg=>{const [id,key]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){d.draft.open||={};d.draft.open[key]=!d.draft.open[key];}},
-    roomCopyCategory:arg=>{const [id,key]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){Object.assign(d.draft,{category:key,query:'',group:'',limit:40});}},
-    roomCopyStage:arg=>{const [id,stage]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){d.draft.stage=stage;d.error='';}},
-    roomCopyMore:id=>{const d=findDlg(id);if(d&&!d.busy)d.draft.limit=(Number(d.draft.limit)||40)+40;},
-    roomCopyPick:arg=>{const [id,mode]=arg.split('|'),d=findDlg(id);if(!d?.inventory||d.busy)return;if(mode==='none'){d.draft.pick={};return;}const rows=mode==='clearCategory'?d.inventory.rows.filter(r=>r.category===d.draft.category):roomCopyVisibleRows(d,d.draft).filter(r=>!(r.category==='relationships'&&!r.relationshipActorIds));for(const r of rows)d.draft.pick[r.key]=mode!=='clearCategory';d.preview=null;},
-    loreSplitPick:arg=>{const [id,mode]=arg.split('|'),d=findDlg(id);if(!d||d.busy)return;if(mode==='none'){d.draft.pick={};return;}const q=String(d.draft.query||'').toLowerCase().trim();d.pack.entries.forEach((e,i)=>{if(!q||(e.name+'\n'+loreTextAtLevel(e,'full')).toLowerCase().includes(q))d.draft.pick['e'+i]=true;});},
-    lrFlip: arg => { const [id, bid, k] = arg.split('|'), d = findDlg(id); if (!d) return; const r = d.draft.lr[bid] || (d.draft.lr[bid] = { man: false, pin: false, ex: false }); r[k] = !r[k]; if (r[k] && k === 'pin') r.ex = false; if (r[k] && k === 'ex') r.pin = false; },
-    lrClear: id => { const d = findDlg(id); if (d) Object.values(d.draft.lr).forEach(r => r.man = false); },
-    dnAll: id => { const d = findDlg(id); if (d) Object.values(d.draft.dn).forEach(r => r.sel = true); },
-    dnNone: id => { const d = findDlg(id); if (d) Object.values(d.draft.dn).forEach(r => r.sel = false); },
-    dnYear: id => { const d = findDlg(id); if (!d) return; const y = String(d.draft.year || '').trim(); if (!y) { toast('연도를 입력해 주세요.', 'error'); return; } let n = 0; Object.values(d.draft.dn).forEach(r => { if (r.sel && r.m) { r.y = y; n++; } }); toast(n ? `${n}개에 ${y}년을 넣었습니다 · 적용을 눌러야 저장` : '선택한 날짜 블록이 없습니다.', n ? 'ok' : 'warn'); },
-    psAdd: id => { const d = findDlg(id); if (d) d.draft.list.push({ id: uid('ps'), title: '', enabled: true, ret: '0', content: '' }); },
-    psDel: arg => { const [id, i] = arg.split('|'), d = findDlg(id); if (d) d.draft.list.splice(Number(i), 1); },
-    conAdd: id => { const a = V.cog.actors; openSheet('eCon', { parent: id, draft: { h: (a[0] || {}).id, t: (a[1] || {}).id, scope: '', pub: '' } }); },
-    conEdit: arg => { const [id, i] = arg.split('|'), d = findDlg(id); if (d) openSheet('eCon', { parent: id, idx: Number(i), draft: { ...d.draft.con[Number(i)] } }); },
-    conDel: arg => { const [id, i] = arg.split('|'), d = findDlg(id); if (d) d.draft.con.splice(Number(i), 1); },
-    eSave: async id => {
+kvOpen:()=>WishKoofr.open(),
+kvSettings:()=>WishKoofr.settings(),
+kvRefresh:()=>WishKoofr.refresh(),
+kvBackup:()=>WishKoofr.backup(),
+kvRestore:id=>WishKoofr.restore(id),
+kvTest:id=>WishKoofr.test(id),
+kvSave:id=>WishKoofr.save(id),
+kvDisconnect:()=>WishKoofr.disconnect(),
+kvSelect:id=>WishKoofr.select(id),
+kvPick:a=>WishKoofr.pick(a),
+kvRemove:id=>WishKoofr.remove(id),
+kvRoomPick:a=>WishKoofr.roomPick(a),
+kvRoomAccept:id=>WishKoofr.roomAccept(id),
+personDossier:arg=>openSheet('personDossier',{draft:{person:arg||personOptions()[0]?.[0]||'',category:'all',limit:40}}),
+recordsMore:id=>{const d=findDlg(id);if(d)d.draft.limit=(Number(d.draft.limit)||40)+40;},
+usageLedger:localUsageOpen,
+logCalendar:localCalendarOpen,
+relationMap:localGraphOpen,
+memDiff:localDiffOpen,
+memDiffSeen:()=>{MemoryDiff.dismiss(state.currentRoom);},
+injWhy:a=>{S.injWhy=a;},
+capUnit:()=>{S.capKb=!S.capKb;try{localStorage.setItem('wish-m3-cap-unit',S.capKb?'kb':'chars');}catch(_){}},
+thView:a=>{S.thView=a==='closed'?'closed':'open';},
+secondaryExpand:arg=>{const [id,key]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){d.draft.open||={};d.draft.open[key]=!d.draft.open[key];}},
+secondaryMore:id=>{const d=findDlg(id);if(d&&!d.busy)d.draft.limit=(Number(d.draft.limit)||30)+30;},
+secondaryPick:arg=>{const [id,mode]=arg.split('|');SecondaryRebuild.selectReviewRows(findDlg(id),mode);},
+secondaryGroupPick:arg=>{const [id,key,scope]=arg.split('|');SecondaryRebuild.toggleReviewGroup(findDlg(id),key,scope==='variant');},
+secondaryClear:id=>{const d=findDlg(id);if(d&&!d.busy)ask('압축본을 모두 해제할까요?','등록된 압축 표현만 해제합니다. 저장 원문과 사건은 삭제하지 않습니다.','압축본 해제',()=>SecondaryRebuild.change(id,'clear'));},
+nav:a=>unifiedNavigate(a),
+memSub:a=>unifiedNavigate('memory',a),
+cogSub:a=>unifiedNavigate('cognition',a),
+closePanel: () => {discardPanelDrafts();close();},
+closeDlg: id => closeSheet(id),
+quickClose: () => closeQuick(),
+quickFull: () => open('check'),
+flip: (key, el) => setKey(key, el.getAttribute('aria-pressed') !== 'true'),
+step: (arg, el) => { const [k, dir, mn, mx, inc] = arg.split('|'), input = el.parentElement.querySelector('input'); const v = Math.min(Number(mx), Math.max(Number(mn), (Number(input && input.value) || 0) + Number(dir) * Number(inc))); if (input) input.value = v; setKey(k, v); },
+search: () => { S.search = ''; openSheet('search'); },
+preview: () => openSheet('preview'),
+cfOk: id => { const d = findDlg(id); closeSheet(id, true); return d && d.fn ? d.fn() : undefined; },
+copyText: id => { const d = findDlg(id), t = d ? (d.text ?? (d.draft && d.draft.result) ?? '') : ''; (AD.copy ? Promise.resolve(AD.copy(t)) : navigator.clipboard.writeText(t)).then(ok => ok === false ? toast('복사하지 못했습니다.', 'error') : toast('복사했습니다.')).catch(() => toast('복사하지 못했습니다.', 'error')); },
+bkPick: arg => { const [id, m] = arg.split('|'), d = findDlg(id); if (!d) return; [...(d.rooms || []), ...(d.libs || [])].forEach(x => { d.draft.pick[x.id] = m === 'all' ? true : m === 'cur' ? !!x.current : false; }); },
+roomCopyExpand:arg=>{const [id,key]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){d.draft.open||={};d.draft.open[key]=!d.draft.open[key];}},
+roomCopyCategory:arg=>{const [id,key]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){Object.assign(d.draft,{category:key,query:'',group:'',limit:40});}},
+roomCopyStage:arg=>{const [id,stage]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){d.draft.stage=stage;d.error='';}},
+roomCopyMore:id=>{const d=findDlg(id);if(d&&!d.busy)d.draft.limit=(Number(d.draft.limit)||40)+40;},
+roomCopyPick:arg=>{const [id,mode]=arg.split('|'),d=findDlg(id);if(!d?.inventory||d.busy)return;if(mode==='none'){d.draft.pick={};return;}const rows=mode==='clearCategory'?d.inventory.rows.filter(r=>r.category===d.draft.category):roomCopyVisibleRows(d,d.draft).filter(r=>!(r.category==='relationships'&&!r.relationshipActorIds));for(const r of rows)d.draft.pick[r.key]=mode!=='clearCategory';d.preview=null;},
+loreSplitPick:arg=>{const [id,mode]=arg.split('|'),d=findDlg(id);if(!d||d.busy)return;if(mode==='none'){d.draft.pick={};return;}const q=String(d.draft.query||'').toLowerCase().trim();d.pack.entries.forEach((e,i)=>{if(!q||(e.name+'\n'+loreTextAtLevel(e,'full')).toLowerCase().includes(q))d.draft.pick['e'+i]=true;});},
+lrFlip: arg => { const [id, bid, k] = arg.split('|'), d = findDlg(id); if (!d) return; const r = d.draft.lr[bid] || (d.draft.lr[bid] = { man: false, pin: false, ex: false }); r[k] = !r[k]; if (r[k] && k === 'pin') r.ex = false; if (r[k] && k === 'ex') r.pin = false; },
+lrClear: id => { const d = findDlg(id); if (d) Object.values(d.draft.lr).forEach(r => r.man = false); },
+dnAll: id => { const d = findDlg(id); if (d) Object.values(d.draft.dn).forEach(r => r.sel = true); },
+dnNone: id => { const d = findDlg(id); if (d) Object.values(d.draft.dn).forEach(r => r.sel = false); },
+dnYear: id => { const d = findDlg(id); if (!d) return; const y = String(d.draft.year || '').trim(); if (!y) { toast('연도를 입력해 주세요.', 'error'); return; } let n = 0; Object.values(d.draft.dn).forEach(r => { if (r.sel && r.m) { r.y = y; n++; } }); toast(n ? `${n}개에 ${y}년을 넣었습니다 · 적용을 눌러야 저장` : '선택한 날짜 블록이 없습니다.', n ? 'ok' : 'warn'); },
+psAdd: id => { const d = findDlg(id); if (d && !d.busy && d.draft.list.length < 50) d.draft.list.push({ id: makeDefaultExtraPresetId(), title: '', enabled: true, ret: '0', content: '' }); },
+psDel: arg => { const [id, i] = arg.split('|'), d = findDlg(id); if (d && !d.busy && /^\d+$/.test(i) && Number(i) < d.draft.list.length) d.draft.list.splice(Number(i), 1); },
+conAdd: id => { const a = V.cog.actors; openSheet('eCon', { parent: id, draft: { h: (a[0] || {}).id, t: (a[1] || {}).id, scope: '', pub: '' } }); },
+conEdit: arg => { const [id, i] = arg.split('|'), d = findDlg(id); if (d) openSheet('eCon', { parent: id, idx: Number(i), draft: { ...d.draft.con[Number(i)] } }); },
+conDel: arg => { const [id, i] = arg.split('|'), d = findDlg(id); if (d) d.draft.con.splice(Number(i), 1); },
+eSave: async id => {
       const d = findDlg(id); if (!d) return; if(d.busy)return;
       if (d.type === 'eCon') { const x = d.draft; if (!String(x.scope || '').trim()) { toast('숨기는 범위를 적어 주세요.', 'error'); return; } if (x.h === x.t) { toast('같은 인물끼리는 숨길 수 없습니다.', 'error'); return; } const p = findDlg(d.parent); if (p) { p.draft.con = p.draft.con || []; if (d.idx !== undefined) Object.assign(p.draft.con[d.idx], x); else p.draft.con.push({ id: uid('k'), ...x }); } closeSheet(d); return; }
       if (typeof AD.save !== 'function') { toast('저장 연결이 없습니다: ' + d.type, 'warn'); return; }
       d.busy=true;paint();let r;try{r=await AD.save(d,ui);}finally{d.busy=false;}if(r!==false)closeSheet(d);
     },
-    eDel: id => { const d = findDlg(id); if (!d) return; ask('정말 지울까요?', d.delMsg || '지운 항목은 되돌릴 수 없습니다.', '삭제', async () => { if (typeof AD.remove !== 'function') { toast('삭제 연결이 없습니다: ' + d.type, 'warn'); return; } const r = await AD.remove(d, ui); if (r !== false) closeSheet(d, true); }); }
-  };
+eDel: id => { const d = findDlg(id); if (!d) return; ask('정말 지울까요?', d.delMsg || '지운 항목은 되돌릴 수 없습니다.', '삭제', async () => { if (typeof AD.remove !== 'function') { toast('삭제 연결이 없습니다: ' + d.type, 'warn'); return; } const r = await AD.remove(d, ui); if (r !== false) closeSheet(d, true); }); },
+helperExample:arg=>{const [id,question]=arg.split('|'),d=findDlg(id);if(d?.session&&!d.session.busy)d.draft.question=question;},
+helperSearch:id=>{closeSheet(id,true);return WishMemoryHelper.open(S.search);},
+diagnosticFilter:a=>{S.diagnosticFilter=['all','error','warn'].includes(a)?a:'all';},
+homeDetails:toggleHomeDeliveryDetails,
+memoryGroup:a=>unifiedNavigate('memory',a==='reference'?'lorePacks':a==='rules'?'extra':S.mem),
+aiSub:a=>unifiedNavigate('ai',a),
+unifiedRoute:a=>unifiedNavigate(...a.split(':')),
+loreSub:a=>unifiedNavigate('lore',a),
+toolsSub:a=>unifiedNavigate('tools',a),
+settingsSub:a=>unifiedNavigate('settings',a),
+memPick: () => openSheet('memPick'),
+guideReset: id => { const d = findDlg(id); if (d) { d.draft.text = d.defaultText ?? ''; toast('기본 지침을 불러왔습니다 · 저장해야 반영', 'warn'); } }
+};
   async function run(act, arg, el) {
     try {
       if (BUILTIN[act]) { const r = BUILTIN[act](arg, el); if (r && r.then) { paint(); await r; } }
