@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.44
+// @version      0.5.45
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -24,6 +24,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.45 · 입력창 상태 버튼 OFF 적용 수정
+ * 버튼 생성/재배치 전에 저장된 표시 설정을 확인합니다.
+ * OFF 전환은 응답 생성 중에도 즉시 기존 버튼을 제거합니다.
+ * 새로고침·방 이동·다른 탭의 설정 변경 뒤에도 OFF 상태에서는 버튼을 만들지 않습니다.
+ */
 
 /* 0.5.44 · WRMC 1.5.3 선택 병합 · Suite 안전장치 유지
  * 서사 고리: 약속·예정·목표·수수께끼·위험·복선의 개설/진행/종료, 주입과 편집을 추가합니다.
@@ -454,7 +460,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.44'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.45'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -48595,7 +48601,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.44-suite';
+  const SCRIPT_VERSION = '0.5.45-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -70677,7 +70683,7 @@ function startDrag(e) {
   let lastPath = '';
   function mountMonitor() {
     if (location.pathname !== lastPath) { lastPath = location.pathname; for(const d of [...S.dialogs]){if(d.type==='confirm')closeSheet(d,true);else if(d.editKey&&d.editPath!==location.pathname)closeSheet(d,true,true);} for(const [k,d] of editorDrafts)if(d.editPath!==location.pathname&&!S.dialogs.includes(d)&&!d.busy&&!d.draft?.busy&&JSON.stringify(d.draft)===JSON.stringify(d.baseline?.draft)&&!Object.entries(d.edits||{}).some(([id,text])=>text!==d.initial?.[id]))editorDrafts.delete(k); if (S.quick) closeQuick(); AD.onRoute && AD.onRoute(location.pathname); }
-    if (!(AD.isChatPath ? AD.isChatPath(location.pathname) : CHAT_PATH.test(location.pathname))) { const m = document.getElementById(MON_ID); if (m) m.remove(); if (S.quick) closeQuick(); return; }
+    if (!WishDisplay.visible() || !(AD.isChatPath ? AD.isChatPath(location.pathname) : CHAT_PATH.test(location.pathname))) { const m = document.getElementById(MON_ID); if (m) m.remove(); if (S.quick) closeQuick(); return; }
     // Avoid forced layout, placement and monitor DOM writes while Crack streams.
     if(AD.streaming?.()&&document.getElementById(MON_ID)?.isConnected)return;
     const send = findSend(); if (!send || !send.parentNode) return;
