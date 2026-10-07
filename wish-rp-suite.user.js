@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.49
+// @version      0.5.50
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -24,6 +24,15 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.50 · 관계 원문 근거 복구 개선
+ * AI 표시용 정리와 원문 인용 검사의 차이를 원문 위치로 복구합니다.
+ * 실제 한 메시지의 원문 인용과 USER/ASSISTANT 출처를 보존합니다.
+ * 관계 복구는 허용된 원문 조각을 선택하고 프로그램이 실제 인용을 넣습니다.
+ * 형식 교정과 관계 교정을 각각 제한하여 같은 작업에서 이어서 처리합니다.
+ * 기존 16턴 임시 후보를 재추출 없이 이어서 검증하고 전체 검토 후 저장합니다.
+ * 원문 범위·설정·기존 기억 보호 및 주입 50,000자·10턴/1턴 주기를 유지합니다.
+ */
 
 /* 0.5.49 · 정리 요청·재시도·모바일 화면 갱신 개선
  * 자동 정리와 복구·검토에 실제 JSON 응답 스키마를 전달합니다.
@@ -505,7 +514,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.49'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.50'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -48738,7 +48747,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.49-suite';
+  const SCRIPT_VERSION = '0.5.50-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -52540,22 +52549,182 @@ const WishRelationships = (() => {
         r.pinned=r.pinned===true;r.manual=r.manual===true;r.enabled=r.enabled!==false;return r;
       });
     }
-    // Real callers supply structured messages. Text fallback is only for older callers/tests.
+    // Every row is adapted independently. Explicit source arrays (including [])
+    // never fall back to the text wire or to a wider RP range.
     function messages(rp,sourceRows){
-      if(Array.isArray(sourceRows)&&sourceRows.some(m=>typeof m.role==='string'))return sourceRows.filter(m=>['user','assistant'].includes(m.role)).map(m=>({role:m.role,text:String(m.text||''),messageId:String(m.id||''),turnKey:''}));
-      if(Array.isArray(sourceRows))return sourceRows.flatMap(t=>Array.isArray(t.relationshipSourceMessages)?t.relationshipSourceMessages.map(m=>({role:m.role,text:String(m.text||''),messageId:String(m.id||''),turnKey:String(t.key||'')})):[
-        {role:'user',text:String(t.userText||''),messageId:String(t.userId||''),turnKey:String(t.key||'')},
-        {role:'assistant',text:String(t.assistantText||''),messageId:String(t.assistantId||''),turnKey:String(t.key||'')}
-      ]).filter(m=>m.text);
+      const message=(m,turnKey='')=>m&&['user','assistant'].includes(m.role)&&typeof m.text==='string'?{
+        role:m.role,text:m.text,messageId:String(m.messageId??m.id??''),turnKey:String(m.turnKey??turnKey)
+      }:null;
+      if(Array.isArray(sourceRows))return sourceRows.flatMap(t=>{
+        if(!t||typeof t!=='object')return [];
+        if(typeof t.role==='string'){const m=message(t);return m?[m]:[];}
+        if(Array.isArray(t.relationshipSourceMessages))return t.relationshipSourceMessages.map(m=>message(m,String(t.key??''))).filter(Boolean);
+        // A known aggregate without its constituent messages cannot prove that
+        // an excerpt belongs to one real message, even when its text is exact.
+        const count=Number(t.messageCount);if(count>2||(t.key==='prologue'&&count>1))return [];
+        return [
+          {role:'user',text:String(t.userText??''),messageId:String(t.userId??t.key??''),turnKey:String(t.key??'')},
+          {role:'assistant',text:String(t.assistantText??''),messageId:String(t.assistantId??''),turnKey:String(t.key??'')}
+        ].filter(m=>m.text);
+      });
       const out=[];for(const m of String(rp||'').matchAll(/\[완료 RP \d+\]\[USER\]\n([\s\S]*?)\n\n\[ASSISTANT\]\n([\s\S]*?)(?=\n\n\[완료 RP \d+\]\[USER\]\n|$)/g)){
-        out.push({role:'user',text:m[1],messageId:''},{role:'assistant',text:m[2],messageId:''});
+        out.push({role:'user',text:m[1],messageId:'',turnKey:''},{role:'assistant',text:m[2],messageId:'',turnKey:''});
       }return out;
     }
-    function recoverEvidenceQuote(text,quote){
-      const recovered=autoLoreRecoverExactQuote(text,quote);
-      if(!recovered||text.includes(recovered))return recovered;
-      const pattern=recovered.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\n/g,'(?:\\r\\n|\\r|\\n)');
-      try{return String(text.match(new RegExp(pattern,'u'))?.[0]||'');}catch(_){return '';}
+    // Recovery views retain UTF-16 source offsets. Only an exact original span
+    // can leave this module; normalized text is never stored as source proof.
+    function evidenceView(text){return {text,starts:Array.from({length:text.length},(_,i)=>i),ends:Array.from({length:text.length},(_,i)=>i+1)};}
+    function evidenceSlice(view,start=0,end=view.text.length){return {text:view.text.slice(start,end),starts:view.starts.slice(start,end),ends:view.ends.slice(start,end),newline:view.newline};}
+    function evidenceConcat(views){return {text:views.map(v=>v.text).join(''),starts:views.flatMap(v=>v.starts),ends:views.flatMap(v=>v.ends)};}
+    function evidenceRemove(view,regex,remove=()=>true){
+      const parts=[];let at=0;
+      for(const match of view.text.matchAll(new RegExp(regex.source,regex.flags.includes('g')?regex.flags:regex.flags+'g'))){
+        if(!remove(match,view.text))continue;
+        parts.push(evidenceSlice(view,at,match.index));at=match.index+match[0].length;
+      }
+      if(!at)return view;
+      parts.push(evidenceSlice(view,at));return {...evidenceConcat(parts),newline:view.newline};
+    }
+    function evidenceLines(view){
+      const rows=[];let at=0;
+      for(let i=0;i<view.text.length;i++)if(view.text[i]==='\n'){
+        rows.push({...evidenceSlice(view,at,i),newline:{start:view.starts[i],end:view.ends[i]}});at=i+1;
+      }
+      rows.push({...evidenceSlice(view,at),newline:view.newline});return rows;
+    }
+    function evidenceJoinLines(rows){
+      const parts=[];
+      for(let i=0;i<rows.length;i++){
+        if(i){const n=rows[i-1].newline;if(!n)return null;parts.push({text:'\n',starts:[n.start],ends:[n.end]});}
+        parts.push(rows[i]);
+      }
+      return {...evidenceConcat(parts),newline:rows.at(-1)?.newline};
+    }
+    function evidenceTrim(view){
+      const start=view.text.length-view.text.trimStart().length,end=view.text.trimEnd().length;
+      return evidenceSlice(view,start,Math.max(start,end));
+    }
+    function evidenceCleanView(text,role){
+      const original=evidenceView(text),expected=wishCleanMessage(role,text);
+      if(expected===text)return original;
+      const keepComments=role==='user',parts=[];let fence=null,cur=[];
+      const flush=code=>{if(cur.length)parts.push({code,lines:cur});cur=[];};
+      for(const line of evidenceLines(original)){
+        if(fence){cur.push(line);const c=line.text.trim();if(c.length>=fence.len&&[...c].every(ch=>ch===fence.ch)){flush(true);fence=null;}continue;}
+        const o=line.text.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+        if(o&&!(o[1][0]==='`'&&o[2].includes('`'))){flush(false);fence={ch:o[1][0],len:o[1].length};}
+        cur.push(line);
+      }
+      flush(!!fence);
+      const out=[];
+      for(const part of parts){
+        if(part.code){out.push(...part.lines.map(line=>evidenceRemove(line,/[^\S\n]+$/g)));continue;}
+        let body=part.lines;
+        if(!keepComments){
+          body=body.filter(line=>!/^\s*\[(?:\/\/|comment)\]:\s*#\s*\((?:[^()\\\n]|\\.)*\)\s*$/i.test(line.text));
+          let joined=evidenceJoinLines(body);if(!joined)return null;
+          joined=evidenceRemove(joined,/(\\?)<!--((?:(?!<!--|\n[ \t]*(?:```|~~~))[\s\S])*?)-->/g,(m,str)=>!m[1]&&!(/\n[ \t]*\n/.test(m[2])&&/\S/.test(str.slice(str.lastIndexOf('\n',m.index-1)+1,m.index))));
+          body=evidenceLines(joined);
+        }
+        for(const line of body){
+          const cut=evidenceRemove(line,WISH_RP_IMAGE);
+          if((cut.text!==line.text&&!cut.text.trim())||/^\s*https?:\/\/\S+\.(?:png|jpe?g|gif|webp|bmp|svg|avif)(?:\?\S*)?\s*$/i.test(cut.text))continue;
+          out.push(evidenceRemove(cut,/[^\S\n]+$/g));
+        }
+      }
+      let joined=evidenceJoinLines(out);if(!joined)return null;
+      // The production cleaner may remove complete final lines. Their separator
+      // metadata is irrelevant after joining, while all surviving offsets remain.
+      const runs=[];let at=0;
+      for(const m of joined.text.matchAll(/\n{3,}/g)){runs.push(evidenceSlice(joined,at,m.index+2));at=m.index+m[0].length;}
+      if(at){runs.push(evidenceSlice(joined,at));joined=evidenceConcat(runs);}
+      joined=evidenceTrim(joined);
+      return joined.text===expected?joined:null; // cleaner drift or ambiguous mapping fails closed
+    }
+    function evidenceMarkdownView(view){
+      const out=[];let fence=null;
+      const decorate=part=>{
+        let next=part;
+        // Strikethrough has semantic meaning and is not discarded. Escaped
+        // markers, intraword underscores and fence/inline-code contents stay literal.
+        for(const regex of [/(?<![\\*])\*\*(?!\*)(?=\S)([^*\n]*?[^\s*\n])(?<!\\)\*\*(?!\*)/g,/(?<![\\\p{L}\p{N}_])__(?!_)(?=\S)([^_\n]*?[^\s_\n])(?<!\\)__(?![\p{L}\p{N}_])/gu,/(?<![\\*])\*(?!\*)(?=\S)([^*\n]*?[^\s*\n])(?<!\\)\*(?!\*)/g,/(?<![\\\p{L}\p{N}_])_(?!_)(?=\S)([^_\n]*?[^\s_\n])(?<!\\)_(?![\p{L}\p{N}_])/gu]){
+          const pieces=[];let at=0;
+          for(const m of next.text.matchAll(regex)){
+            const width=m[0].startsWith('**')||m[0].startsWith('__')?2:1;
+            pieces.push(evidenceSlice(next,at,m.index),evidenceSlice(next,m.index+width,m.index+m[0].length-width));at=m.index+m[0].length;
+          }
+          if(at){pieces.push(evidenceSlice(next,at));next=evidenceConcat(pieces);}
+        }
+        return next;
+      };
+      for(const line of evidenceLines(view)){
+        const o=line.text.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+        if(fence){out.push(line);const c=line.text.trim();if(c.length>=fence.len&&[...c].every(ch=>ch===fence.ch))fence=null;continue;}
+        if(o&&!(o[1][0]==='`'&&o[2].includes('`'))){fence={ch:o[1][0],len:o[1].length};out.push(line);continue;}
+        const parts=[];let at=0;
+        for(const m of line.text.matchAll(/(?<![\\`])`(?!`)([^`\n]+)`(?!`)/g)){
+          parts.push(decorate(evidenceSlice(line,at,m.index)),evidenceSlice(line,m.index+1,m.index+m[0].length-1));at=m.index+m[0].length;
+        }
+        parts.push(decorate(evidenceSlice(line,at)));out.push({...evidenceConcat(parts),newline:line.newline});
+      }
+      return evidenceJoinLines(out);
+    }
+    function evidenceCanonicalView(view){
+      if(!view)return null;
+      // ZWJ/ZWNJ affect emoji and some scripts. Remove them only between the
+      // Hangul/Latin letters for which they are nonprinting presentation noise.
+      view=evidenceRemove(view,/[\u200B\uFEFF\u2060]/g);
+      view=evidenceRemove(view,/(?<=[\p{Script=Hangul}\p{Script=Latin}])[\u200C\u200D]+(?=[\p{Script=Hangul}\p{Script=Latin}])/gu);
+      const normalized=[];
+      if(view.text.normalize('NFC')!==view.text&&typeof Intl.Segmenter==='function'){
+        for(const segment of new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(view.text)){
+          const part=evidenceSlice(view,segment.index,segment.index+segment.segment.length),text=part.text.normalize('NFC');
+          normalized.push(text===part.text?part:{text,starts:Array(text.length).fill(part.starts[0]),ends:Array(text.length).fill(part.ends.at(-1))});
+        }
+        view=evidenceConcat(normalized);
+      }else if(view.text.normalize('NFC')!==view.text)return null;
+      const text=[],starts=[],ends=[];
+      for(let i=0;i<view.text.length;i++){
+        const char=view.text[i];let value=char,end=i+1;
+        if(/\s/u.test(char)){while(end<view.text.length&&/\s/u.test(view.text[end]))end++;value=' ';}
+        else if(/["“”„‟❝❞〝〞＂]/u.test(char))value='"';
+        else if(/['‘’‚‛❛❜]/u.test(char))value="'";
+        else if(/[-‐‑‒–—―]/u.test(char))value='-';
+        else if(char==='.'&&view.text.slice(i,i+3)==='...'){value='…';end=i+3;}
+        else if(/[·•⋅]/u.test(char))value='·';
+        text.push(value);starts.push(view.starts[i]);ends.push(view.ends[end-1]);i=end-1;
+      }
+      return evidenceTrim({text:text.join(''),starts,ends});
+    }
+    function recoverEvidenceQuote(text,quote,role,cache){
+      // An outer Markdown wrapper around otherwise literal text is an existing
+      // harmless formatting error. Do not strip source strikethrough or code.
+      for(const marker of ['**','__','~~','`','*','_'])if(quote.startsWith(marker)&&quote.endsWith(marker)&&quote.length>marker.length*2){
+        const inner=quote.slice(marker.length,-marker.length).trim();if(inner.length>=2&&text.includes(inner))return inner;
+      }
+      const needles=[quote],pairs=[['"','"'],["'","'"],['“','”'],['‘','’'],['「','」'],['『','』'],['«','»'],['‹','›']];
+      for(const [open,close] of pairs)if(quote.startsWith(open)&&quote.endsWith(close)&&quote.length>open.length+close.length+1){needles.push(quote.slice(open.length,-close.length).trim());break;}
+      let views=cache?.views;
+      if(!views){
+        const original=evidenceView(text),clean=['user','assistant'].includes(role)?evidenceCleanView(text,role):null;
+        views=[original,...(clean&&clean.text!==text?[clean]:[])].flatMap(view=>{
+          const markdown=evidenceMarkdownView(view);return markdown&&markdown.text!==view.text?[view,markdown]:[view];
+        }).map(evidenceCanonicalView).filter(Boolean);
+        if(cache)cache.views=views;
+      }
+      for(const needle of needles){
+        const rawNeedle=evidenceView(needle),canonical=[rawNeedle,evidenceMarkdownView(rawNeedle)].map(evidenceCanonicalView).filter(Boolean);
+        for(const candidate of canonical){
+          if(candidate.text.length<2)continue;
+          for(const view of views){
+            const at=view.text.indexOf(candidate.text);if(at<0)continue;
+            const start=view.starts[at],end=view.ends[at+candidate.text.length-1];
+            if(!Number.isInteger(start)||!Number.isInteger(end)||end<=start||end-start>45000)continue;
+            const raw=text.slice(start,end);if(raw)return raw;
+          }
+        }
+      }
+      return '';
     }
     function checkedEvidence(input,source,pc=false,label='관계'){
       const fail=(reason,quote='',index=0)=>{
@@ -52567,23 +52736,32 @@ const WishRelationships = (() => {
       };
       const requested=typeof input==='string'?[{role:pc?'user':'',quote:input}]:input;
       if(!Array.isArray(requested)||!requested.length||requested.length>32)fail('관계 근거는 1~32개의 원문 인용이어야 합니다.');
-      const rows=(Array.isArray(source)?source:[]).filter(m=>m&&['user','assistant'].includes(m.role)&&typeof m.text==='string'),result=[];
+      const rows=messages('',Array.isArray(source)?source:[]),result=[],viewCache=new WeakMap();
+      const recover=(message,quote)=>{
+        let cache=viewCache.get(message);if(!cache)viewCache.set(message,cache={});
+        return recoverEvidenceQuote(message.text,quote,message.role,cache);
+      };
       for(let index=0;index<requested.length;index++){
         const e=requested[index],quote=typeof e?.quote==='string'?e.quote.trim():'';
         if(quote.length<2||quote.length>45000||!['','user','assistant'].includes(e?.role))fail('관계 근거의 역할·원문 형식 오류',quote,index+1);
         const eligible=rows.filter(m=>!e.role||m.role===e.role);
         let match=eligible.find(m=>m.text.includes(quote)),exactQuote=quote;
         if(!match){
-          const recovered=[];
+          const recovered=[],identities=new Set();
           for(const message of eligible){
-            const exact=recoverEvidenceQuote(message.text,quote);
-            if(exact){recovered.push({message,quote:exact});if(recovered.length>1)break;}
+            const exact=recover(message,quote);
+            if(exact){
+              const identity=message.messageId?JSON.stringify([message.role,message.messageId,message.turnKey,message.text]):null;
+              if(identity&&identities.has(identity))continue;
+              if(identity)identities.add(identity);
+              recovered.push({message,quote:exact});if(recovered.length>1)break;
+            }
           }
           if(recovered.length>1)fail('표기 복구 후보가 여러 RP 메시지에 있어 출처를 특정할 수 없습니다. 한 메시지를 구분하는 인용이 필요합니다.',quote,index+1);
           if(recovered.length===1){match=recovered[0].message;exactQuote=recovered[0].quote;}
         }
         if(!match){
-          const otherRole=e.role&&rows.find(m=>m.role!==e.role&&(m.text.includes(quote)||recoverEvidenceQuote(m.text,quote)));
+          const otherRole=e.role&&rows.find(m=>m.role!==e.role&&(m.text.includes(quote)||recover(m,quote)));
           const reason=otherRole?`${e.role.toUpperCase()} 본문에는 없고 ${otherRole.role.toUpperCase()} 본문에서만 확인됩니다. 메시지 역할을 바꾸어 대신 적용하지 않았습니다.`:
             !rows.length?'이번 관계 갱신에 허용된 RP 메시지가 없습니다.':
             '허용된 RP 범위의 한 메시지에서 인용을 확인하지 못했습니다. 요약·문장 합성·범위 밖 인용을 확인해 주세요.';
@@ -52599,6 +52777,8 @@ const WishRelationships = (() => {
     function apply(existing,changes,resolve,rp,options={}){
       const rows=normalize(structuredClone(existing||[])),seen=new Set(),source=messages(rp,options.sourceRows),actionIssues=[],trajectoryIssues=[],trajectoryUsed=new Set();
       if(!Array.isArray(changes))throw Error('관계 변경분 배열이 없습니다.');
+      const evidenceSelections=options.evidenceSelections;
+      if(evidenceSelections!==undefined&&!(evidenceSelections instanceof Map))throw Object.assign(Error('관계 근거 확인 실패: 선택한 원문 출처의 형식을 확인할 수 없습니다.'),{code:'WISH_RELATION_EVIDENCE'});
       for(const [index,x] of changes.entries()){
         const from=resolve(x.speaker_ref),to=resolve(x.target_ref);if(!from||!to)throw Error('관계 인물을 찾지 못했습니다.');
         const pair=key(from.name,to.name);if(from.id===to.id||seen.has(pair))throw Error('관계 방향이 중복되거나 자기 자신을 가리킵니다.');seen.add(pair);
@@ -52630,8 +52810,21 @@ const WishRelationships = (() => {
         // the one recovery call. A role mismatch is never repaired by relabeling
         // ASSISTANT text as USER or by accepting/dropping that relationship.
         const exactKeep=!!old&&x.current.trim()===old.current&&!milestone&&action==='keep'&&!actionFailure&&typeof x.evidence==='string'&&x.evidence.trim().length<=45000&&JSON.stringify(bind(old,from,to))===JSON.stringify(old);
+        const selectionKey=JSON.stringify([x.speaker_ref,x.target_ref]),hasSelection=evidenceSelections?.has(selectionKey)===true;
         let proof,evidenceFailure;
-        if(!exactKeep)try{proof=checkedEvidence(x.evidence,source,!!from.isPlayer,`관계 ${from.name} → ${to.name}`);}
+        if(!exactKeep||hasSelection)try{
+          const label=`관계 ${from.name} → ${to.name}`;
+          if(hasSelection){
+            const selected=evidenceSelections.get(selectionKey);
+            // Repair refs select one original message, rather than allowing a
+            // later scalar-quote search to switch to an earlier duplicate.
+            const valid=selected&&['user','assistant'].includes(selected.role)&&['text','messageId','turnKey'].every(field=>typeof selected[field]==='string')&&
+              typeof x.evidence==='string'&&selected.text.includes(x.evidence)&&
+              source.some(message=>['role','text','messageId','turnKey'].every(field=>message[field]===selected[field]));
+            if(!valid)throw Object.assign(Error(`${WLOG.clean(label).replace(/\s+/g,' ').slice(0,260)} 확인 실패: 선택한 출처가 허용 원문과 일치하지 않거나 인용이 그 메시지의 실제 연속 원문이 아닙니다.`),{code:'WISH_RELATION_EVIDENCE'});
+            proof=checkedEvidence([{role:selected.role,quote:x.evidence}],[selected],!!from.isPlayer,label);
+          }else proof=checkedEvidence(x.evidence,source,!!from.isPlayer,label);
+        }
         catch(error){if(error?.code!=='WISH_RELATION_EVIDENCE')throw error;evidenceFailure=error;}
         if(actionFailure||evidenceFailure){
           const failure=actionFailure||evidenceFailure;
@@ -52710,7 +52903,7 @@ const WishRelationships = (() => {
     // Rebuild results are snapshots; no live append/empty-means-keep rules are reused.
     // Missing directions survive by default. A rebuild is not an implicit delete command.
     function rebuild(existing,changes,resolve,sourceRows){
-      const rows=normalize(structuredClone(existing||[])),seen=new Map(),notices=[];
+      const rows=normalize(structuredClone(existing||[])),source=messages('',sourceRows),seen=new Map(),notices=[];
       if(!Array.isArray(changes))throw Error('전체 관계 결과가 누락됐습니다.');
       const same=(a,b)=>JSON.stringify([a.current,a.trajectory,a.unresolved])===JSON.stringify([b.current,b.trajectory,b.unresolved]);
       for(const x of changes){
@@ -52728,7 +52921,7 @@ const WishRelationships = (() => {
         const from=resolve(x.speaker),to=resolve(x.target);
         const old=rows.find(r=>key(r.speaker,r.target)===pair||(r.speakerActorId===from.id&&r.targetActorId===to.id));
         if(old?.manual){notices.push('관계 '+from.name+' → '+to.name+': 수동 보호 관계라 기존 내용을 그대로 두었습니다.');continue;}
-        const proof=checkedEvidence(x.evidence,null,!!from.isPlayer,`관계 ${from.name} → ${to.name}`);
+        const proof=checkedEvidence(x.evidence,source,!!from.isPlayer,`관계 ${from.name} → ${to.name}`);
         const value=bind({...old,current:x.current,trajectory:x.trajectory,unresolved:x.unresolved,manual:false,enabled:old?.enabled!==false,lastEvidence:proof,evidenceHistory:[{at:Date.now(),mode:'full',evidence:proof}],updatedAt:Date.now()},from,to);
         if(old)Object.assign(old,value);else rows.push(value);
       }return {rows:normalize(rows),covered:[...seen.keys()],notices};
@@ -54425,10 +54618,12 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       const planKey=JSON.stringify(draftCanonical(p)),candidateBasis=draftBasis(d.room,d.cog,d.packs);
       let pending=d.pendingBatch,pendingDurable=!!pending,pendingSaveAttempted=false;
       if(pending){
+        if(pending.repairByKind!==undefined&&(!pending.repairByKind||typeof pending.repairByKind!=='object'||Array.isArray(pending.repairByKind)||Object.keys(pending.repairByKind).some(k=>!['shape','relationship'].includes(k))||['shape','relationship'].some(k=>!Number.isInteger(pending.repairByKind[k])||pending.repairByKind[k]<0||pending.repairByKind[k]>1000000)))throw draftChangedError(['저장된 교정 단계 기록']);
         if(pending.repairTransportRetries!==undefined&&(!Number.isInteger(pending.repairTransportRetries)||pending.repairTransportRetries<0||pending.repairTransportRetries>1000000)||pending.repairTransportFailure!==undefined&&typeof pending.repairTransportFailure!=='boolean')throw draftChangedError(['저장된 교정 재시도 기록']);
         let requestMatches=false;
         try{const input=JSON.parse(pending.request?.prompt||'');requestMatches=!!input&&typeof input==='object'&&!Array.isArray(input)&&(!pending.request.stateDelta||typeof pending.request.stateDeltaToken==='string'&&!!pending.request.stateDeltaToken&&input.state_delta_base_token===pending.request.stateDeltaToken);}catch{}
         if(!requestMatches||pending.version!==1||!Number.isInteger(pending.repairAttempts)||pending.repairAttempts<0||pending.planKey!==planKey||pending.candidateBasis!==candidateBasis||!pending.request||typeof pending.request.guide!=='string'||typeof pending.request.prompt!=='string'||!pending.request.schema||!Object.prototype.hasOwnProperty.call(pending,'data'))throw draftChangedError(['저장된 정리 후보 기준']);
+        if(p.observe){checkedRelationshipSourceRows(d.room,p,pending.request);checkedRelationshipEvidenceSelections(d.room,p,pending.request,pending.data);}
         if(pending.relationshipRejections!==undefined||pending.relationshipRejectionCount!==undefined){
           if(!Number.isInteger(pending.relationshipRejectionCount)||pending.relationshipRejectionCount<1)throw draftChangedError(['저장된 관계 철회 개수']);
           checkRelationshipRejectionAudit(pending.relationshipRejections,pending.request.relationshipRange?.rows??p.obs,pending.data?.observe?.relationship_upsert,pending.relationshipRejectionCount);
@@ -54447,16 +54642,19 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       // A transport failure produced no replacement candidate. Allow a bounded
       // retry of that same repair; a rejected AI answer still spends the budget.
       const savedTransportFailure=transientError({code:room.unified.lastErrorCode,message:room.unified.lastError});
-      let repairStarted=false,repairAllowed=force==='retry'||!(Number(pending.repairAttempts)>0)||
-        (Number(pending.repairTransportRetries||0)<2&&(pending.repairTransportFailure===true||savedTransportFailure&&Number(pending.repairAttempts)===1));
+      let repairStarted=false;
+      const oldAttempts=Math.max(0,Number(pending.repairAttempts)||0),oldKind=pending.lastRepairKind;
+      const repairByKind=pending.repairByKind?copy(pending.repairByKind):{shape:oldAttempts&&oldKind!=='relationship'?oldAttempts:0,relationship:oldAttempts&&oldKind!=='shape'?oldAttempts:0};
+      const repairedThisCycle=new Set();
       const beforeRepair=async kind=>{
-        if(!repairAllowed)throw Object.assign(Error('저장된 후보의 자동 교정 1회를 마쳤습니다. 기존 기억과 완료 묶음은 유지했어요. 이어서 정리·검증을 누르면 해당 후보만 다시 교정합니다.'),{code:'WISH_REPAIR_BUDGET',repairKind:kind});
-        assertBasis(cog,frame);repairAllowed=false;repairStarted=true;pending.repairTransportFailure=false;
+        const transportAllowed=(!pending.lastRepairKind||pending.lastRepairKind===kind)&&Number(pending.repairTransportRetries||0)<2&&(pending.repairTransportFailure===true||savedTransportFailure&&Number(pending.repairAttempts)===1);
+        if(!['shape','relationship'].includes(kind)||repairedThisCycle.has(kind)||repairByKind[kind]>0&&force!=='retry'&&!transportAllowed)throw Object.assign(Error('저장된 후보의 해당 단계 자동 교정 1회를 마쳤습니다. 기존 기억과 완료 묶음은 유지했어요. 이어서 정리·검증을 누르면 해당 후보만 다시 교정합니다.'),{code:'WISH_REPAIR_BUDGET',repairKind:kind});
+        assertBasis(cog,frame);repairedThisCycle.add(kind);repairByKind[kind]=Math.min(1000000,repairByKind[kind]+1);pending.repairByKind=copy(repairByKind);repairStarted=true;pending.repairTransportFailure=false;
         pending.repairAttempts=Math.min(1000000,Math.max(0,Number(pending.repairAttempts)||0)+1);pending.lastRepairKind=String(kind||'');
         // Consume before calling the provider so a reload cannot renew a budget.
         await savePending();assertBasis(cog,frame);
       };
-      const onRepairCandidate=async(corrected,audit)=>{
+      const onRepairCandidate=async(corrected,audit,selections)=>{
         // Shape fixes do not erase an earlier relationship decision. Both the
         // filtered candidate and its mandatory audit marker share one IDB write.
         assertBasis(cog,frame);
@@ -54466,6 +54664,10 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
           combined=combined?{version:1,sourceRows:copy(combined.sourceRows),items:[...copy(combined.items),...copy(audit.items)]}:copy(audit);
         }
         if(combined)checkRelationshipRejectionAudit(combined,pending.request.relationshipRange?.rows??p.obs,corrected?.observe?.relationship_upsert);
+        if(selections!==undefined){
+          checkedRelationshipEvidenceSelections(d.room,p,{...pending.request,relationshipEvidenceSelections:selections},corrected);
+          pending.request.relationshipEvidenceSelections=copy(selections);
+        }
         pending.data=copy(corrected);repairStarted=false;pending.repairTransportFailure=false;
         if(combined){pending.relationshipRejections=combined;pending.relationshipRejectionCount=combined.items.length;}
         pendingDurable=false;await savePending();assertBasis(cog,frame);
@@ -55229,6 +55431,7 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
   }
 
 function stage(room,cog,packs,p,req,data,options={}) {
+    if(p.observe)checkedRelationshipSourceRows(room,p,req);
     data=normalizeStateEcho(data,req);
     let out,failures=[];
     const unexpected=error=>error instanceof TypeError||error instanceof ReferenceError||error instanceof RangeError||error instanceof SyntaxError;
@@ -55416,6 +55619,7 @@ function stage(room,cog,packs,p,req,data,options={}) {
   }
 
   async function stageWithResponseRepair(room,cog,packs,p,req,data,options={}){
+    if(p.observe){checkedRelationshipSourceRows(room,p,req);checkedRelationshipEvidenceSelections(room,p,req,data);}
     const original=normalizeStateEcho(data,req);
     let originalError;
     try{validateShape(original,req.schema);}catch(error){if(error?.code!=='WISH_RESPONSE_SHAPE')throw error;originalError=error;}
@@ -55451,14 +55655,63 @@ function stage(room,cog,packs,p,req,data,options={}) {
     // explicit retry fixing the same already-corrected shape again.
     await options.onRepairCandidate?.(copy(corrected));
     unifiedStage='교정된 응답 전체 형식·근거 재검증 중';renderModalIfIdle();
-    // Share a single recovery budget with relationship repair. There is no
-    // recursive call, second shape attempt, or relationship retry on this path.
-    const staged=stage(room,cog,packs,p,req,corrected,options);
-    staged.room.unified.status=staged.room.unified.status.replace('1회 호출','2회 호출 · 형식 교정 1회');
+    // Shape and relationship repair each have one persisted phase budget. A
+    // corrected shape may expose a source error; repair that direction now,
+    // rather than requiring another click. Neither phase calls itself again.
+    const staged=await stageWithRelationshipRepair(room,cog,packs,p,req,corrected,options);
+    staged.room.unified.status=staged.room.unified.status.includes('관계 교정 1회')?staged.room.unified.status.replace('2회 호출 · 관계 교정 1회','3회 호출 · 형식·관계 교정 각 1회'):staged.room.unified.status.replace('1회 호출','2회 호출 · 형식 교정 1회');
     staged.notices||=[];staged.notices.push('AI 정리 응답 형식 1회 교정 · 정상 내용 보존 확인');
     return staged;
   }
 
+  function checkedRelationshipSourceRows(room,p,req){
+    const all=p.obs||[],expected=WishRelationships.updateRange(room,all),saved=req.relationshipRange;
+    if(saved===undefined||saved===null)return expected.rows;
+    const fail=()=>{throw draftChangedError(['관계 근거 원문 범위']);};
+    if(!Array.isArray(saved.rows)||!Array.isArray(saved.indices)||saved.rows.length!==saved.indices.length)fail();
+    const allowed=new Set(expected.rows.map(row=>JSON.stringify(draftCanonical(row))));
+    let previous=0;
+    for(let i=0;i<saved.rows.length;i++){
+      const index=saved.indices[i],row=saved.rows[i];
+      if(!Number.isInteger(index)||index<=previous||index>all.length||JSON.stringify(draftCanonical(row))!==JSON.stringify(draftCanonical(all[index-1]))||!allowed.has(JSON.stringify(draftCanonical(row))))fail();
+      previous=index;
+    }
+    if(saved.guarded!==undefined&&saved.guarded!==expected.guarded||saved.complete===true&&!expected.complete)fail();
+    return saved.rows;
+  }
+  function checkedRelationshipEvidenceSelections(room,p,req,data){
+    const entries=req.relationshipEvidenceSelections,selected=new Map();
+    if(entries===undefined)return selected;
+    const rows=data?.observe?.relationship_upsert,source=WishRelationships.messages('',checkedRelationshipSourceRows(room,p,req));
+    const fields=['speaker_ref','target_ref','role','quote','messageId','turnKey','sourceIndex'];
+    const fail=()=>{throw draftChangedError(['관계 근거 메시지 출처']);};
+    if(!Array.isArray(entries)||!Array.isArray(rows)||entries.length>rows.length)fail();
+    for(const entry of entries){
+      if(!entry||typeof entry!=='object'||Array.isArray(entry)||Object.keys(entry).length!==fields.length||fields.some(key=>!Object.hasOwn(entry,key))||fields.filter(key=>key!=='sourceIndex').some(key=>typeof entry[key]!=='string')||!['user','assistant'].includes(entry.role)||!Number.isInteger(entry.sourceIndex)||entry.sourceIndex<0||entry.sourceIndex>=source.length||entry.quote.length<2||entry.quote.length>45000||entry.quote!==entry.quote.trim())fail();
+      const key=JSON.stringify([entry.speaker_ref,entry.target_ref]),row=rows.find(row=>row.speaker_ref===entry.speaker_ref&&row.target_ref===entry.target_ref),message=source[entry.sourceIndex];
+      if(selected.has(key)||!row||row.evidence!==entry.quote||message.role!==entry.role||message.messageId!==entry.messageId||message.turnKey!==entry.turnKey||!message.text.includes(entry.quote))fail();
+      selected.set(key,message);
+    }
+    return selected;
+  }
+  function relationshipEvidenceCatalog(source){
+    const byRef=new Map(),messages=source.map((message,index)=>{
+      const source_id='message-'+(index+1),text=message.text,fragments=[];
+      for(let start=0;start<text.length;){
+        let end=Math.min(text.length,start+1200);
+        if(end<text.length){
+          const line=text.lastIndexOf('\n',end-1);
+          if(line>=start+400)end=line+1;
+          else {const space=text.lastIndexOf(' ',end-1);if(space>=start+600)end=space+1;}
+          const code=text.charCodeAt(end-1);if(code>=0xD800&&code<=0xDBFF)end--;
+        }
+        const ref=source_id+':quote-'+(fragments.length+1),quote=text.slice(start,end);
+        fragments.push({ref,text:quote});if(quote.trim().length>=2)byRef.set(ref,{message,quote,sourceIndex:index});start=end;
+      }
+      return {source_id,role:message.role,messageId:message.messageId,turnKey:message.turnKey,fragments};
+    });
+    return {messages,byRef};
+  }
   // Repair one rejected relationship bundle without repeating the large memory
   // extraction. All replacements remain uncommitted candidates until stage and
   // the caller's source/configuration guards (and draft final review) pass.
@@ -55481,16 +55734,18 @@ function stage(room,cog,packs,p,req,data,options={}) {
     try{
       // An explicitly empty allowed range must stay empty. Never fall back to
       // all observation RP after a relationship-only rebuild.
-      const sourceRows=req.relationshipRange?.rows??p.obs;
+      const sourceRows=checkedRelationshipSourceRows(room,p,req);
       const source=WishRelationships.messages('',sourceRows);
       if(!source.length)throw fail('관계 응답을 교정할 허용 원문이 없습니다.');
+      const catalog=relationshipEvidenceCatalog(source);
+      if(!catalog.byRef.size)throw fail('관계 응답을 교정할 유효한 원문 조각이 없습니다.');
       // Only the saved draft path has an independent full-source review before
       // publication. Live partial updates and imports cannot withdraw a row.
       const allowNoChange=options.allowRelationshipNoChange===true&&!options.allowPartial&&typeof options.onRepairCandidate==='function';
       const str={type:'string'},schema={type:'object',additionalProperties:false,required:['status','fixes'],properties:{
         status:{type:'string',enum:['fixed','blocked']},blocked_reason:{type:'string'},
-        fixes:{type:'array',items:{type:'object',additionalProperties:false,required:['index','current','milestone','unresolved_action','unresolved','evidence'],properties:{
-          index:{type:'number'},current:str,milestone:str,unresolved_action:{type:'string',enum:['keep','replace','clear']},unresolved:str,evidence:str
+        fixes:{type:'array',items:{type:'object',additionalProperties:false,required:['index','current','milestone','unresolved_action','unresolved','evidence_ref'],properties:{
+          index:{type:'number'},current:str,milestone:str,unresolved_action:{type:'string',enum:['keep','replace','clear']},unresolved:str,evidence_ref:{type:'string',enum:[...catalog.byRef.keys()]}
         }}}
       }};
       if(allowNoChange)schema.properties.no_changes={type:'array',items:{type:'object',additionalProperties:false,required:['index','reason'],properties:{index:{type:'number'},reason:str}}};
@@ -55511,13 +55766,15 @@ function stage(room,cog,packs,p,req,data,options={}) {
 - previous의 current/trajectory/unresolved를 보존 기준으로 삼는다. 기존 기록에 이미 확인된 이후 변화가 있으면 과거 묶음만 보고 되돌리지 않는다. 뒤 대화·빠진 근거를 추측하지 않는다. 약속과 취소·부분 해결과 전체 해결·개인의 감정과 타인의 인지를 구분한다.
 - keep는 기존 쟁점 유지이며 unresolved="". replace는 현재 남은 쟁점의 최신 전체 내용을 1~400자로 쓴다. clear는 기존 쟁점 전부가 실제 해결·정정된 경우만 쓰며 unresolved="", milestone에 무엇이 해결됐는지 반드시 남긴다. 빈 replace를 자동 clear로 해석하지 않는다. 서로 다른 내용을 유지라고 하거나 쟁점을 생략해서 검증을 회피하지 않는다.
 - current는 확인된 최신 관계의 전체값(1~700자), milestone은 새 전환(0~250자)이다. 처리 방식과 설명이 서로 일치하게 해당 방향만 교정한다. 기존의 유효 조건·남은 갈등·과거 전환을 임의로 지우지 않는다. 새 전환이 없으면 milestone=""이다.
-- evidence는 original_messages 안의 한 메시지에서 연속 원문 그대로 복사한다. speakerPC=true인 방향은 USER 원문만 근거로 쓴다. 기존 요약·rejected·앞 문맥을 새 근거로 사용하지 않는다. 의역·여러 메시지 합성·없는 User 내면/선택을 금지한다.
+- original_messages는 실제 허용 원문을 메시지별 fragments로 나눈 표다. 한 메시지의 fragments.text를 순서대로 이어 읽으면 그 메시지의 전체 원문이다. 메시지와 조각 순서는 실제 원문 순서이며 일부 원문을 버리거나 요약한 것이 아니다.
+- 이번 복구 출력에서는 evidence 문장을 다시 작성하지 않는다. 교정한 관계의 직접 근거가 되는 조각 하나를 고르고 그 fragments.ref를 evidence_ref에 글자 그대로 쓴다. 프로그램이 해당 조각의 실제 원문을 인용으로 넣는다. 지목한 조각이 교정한 내용과 주체를 직접 뒷받침해야 하며 무관한 원문을 붙여 검증을 회피하지 않는다.
+- speakerPC=true인 방향은 role="user"인 메시지의 조각만 고른다. 기존 요약·rejected·다른 역할·범위 밖 메시지·앞 문맥을 새 근거로 쓰지 않는다. 필요한 직접 근거가 없으면 허용된 no_changes 조건을 확인하고, 확정할 수 없으면 blocked다. 인용을 추측·합성하거나 없는 User 내면/선택을 만들지 않는다.
 - 인물 방향·index를 바꾸거나 요청하지 않은 관계를 추가·제거하지 않는다. 정상 관계와 기억·사건·인지·호칭은 이번 교정 대상이 아니다.
 - 모든 대상에 대해 안전하게 판단할 수 있으면 status="fixed", 아래 no_supported_change가 명시적으로 허용된 경우 외에는 fixes에 targets의 index를 각각 정확히 한 번 출력한다. 하나라도 불확실하거나 필요한 원문이 없으면 status="blocked", fixes=[]다. 무조건 통과하거나 오류를 숨기기 위한 keep/clear/빈 결과를 만들지 않는다.
 `+noChangeGuide+`
 - status="blocked"일 때 blocked_reason에 왜 변경 교정과 미확인 제안 철회 모두 확정할 수 없는지 원문에 근거한 구체적인 한국어 이유를 400자 이내로 쓴다. 원문 밖 사실이나 원인을 지어내지 않는다.
 JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
-      const prompt=JSON.stringify({targets:issues.map(issue=>({index:issue.index,speaker:issue.speaker,target:issue.target,speakerPC:issue.speakerPC,no_supported_change_allowed:allowNoChange&&issue.speakerPC===true&&issue.evidenceFailed===true,reason:issue.reason,previous:issue.previous,rejected:rows[issue.index]})),original_messages:source});
+      const prompt=JSON.stringify({targets:issues.map(issue=>({index:issue.index,speaker:issue.speaker,target:issue.target,speakerPC:issue.speakerPC,no_supported_change_allowed:allowNoChange&&issue.speakerPC===true&&issue.evidenceFailed===true,reason:issue.reason,previous:issue.previous,rejected:rows[issue.index]})),original_messages:catalog.messages});
       const system=guide+'\n[응답 스키마]\n'+JSON.stringify(schema);
       WishMemorySafety.wire(system,prompt);
       unifiedStage='관계 근거·내용 자동 복구 · '+issues.length+'건 · 1/1';renderModalIfIdle();
@@ -55531,15 +55788,22 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
       const noChanges=repair.no_changes||[];
       if(repair.fixes.length+noChanges.length!==targets.size)throw fail('관계 교정 결과의 대상 수가 요청과 다릅니다.');
       const next=copy(data),seen=new Set(),withdrawn=new Set(),rejections=[];
+      const selections=copy(req.relationshipEvidenceSelections||[]),reselected=new Set();
       for(const fix of repair.fixes){
         if(!Number.isInteger(fix.index)||!targets.has(fix.index)||seen.has(fix.index))throw fail('관계 교정 결과의 대상이 누락·중복되거나 바뀌었습니다.');
         seen.add(fix.index);
         const issue=issues.find(x=>x.index===fix.index);
         // Even a proposed no-op must have source proof here: the original
         // candidate was contradictory, unlike a harmless exact keep echo.
-        WishRelationships.checkedEvidence(fix.evidence,source,issue.speakerPC,`관계 ${issue.speaker} → ${issue.target} 교정`);
+        const selected=catalog.byRef.get(fix.evidence_ref);
+        if(!selected||issue.speakerPC&&selected.message.role!=='user')throw fail('관계 교정 결과의 근거 조각이 허용 원문·메시지 역할과 다릅니다.');
+        const evidence=selected.quote.trim();
+        WishRelationships.checkedEvidence([{role:selected.message.role,quote:evidence}],[selected.message],issue.speakerPC,`관계 ${issue.speaker} → ${issue.target} 교정`);
         const row=next.observe.relationship_upsert[fix.index];
-        for(const key of ['current','milestone','unresolved_action','unresolved','evidence'])row[key]=fix[key];
+        for(const key of ['current','milestone','unresolved_action','unresolved'])row[key]=fix[key];
+        row.evidence=evidence;
+        const pair=JSON.stringify([row.speaker_ref,row.target_ref]);reselected.add(pair);
+        selections.push({speaker_ref:row.speaker_ref,target_ref:row.target_ref,role:selected.message.role,quote:evidence,messageId:selected.message.messageId,turnKey:selected.message.turnKey,sourceIndex:selected.sourceIndex});
       }
       for(const decision of noChanges){
         const issue=issues.find(x=>x.index===decision.index);
@@ -55547,6 +55811,7 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
         const reason=typeof decision.reason==='string'?decision.reason.trim():'';
         if(!reason||reason.length>1000)throw fail('PC 변경 제안 철회 이유가 비었거나 허용 길이를 넘었습니다.');
         seen.add(decision.index);withdrawn.add(decision.index);
+        reselected.add(JSON.stringify([issue.speaker_ref,issue.target_ref]));
         rejections.push({index:issue.index,speaker_ref:issue.speaker_ref,target_ref:issue.target_ref,speaker:issue.speaker,target:issue.target,speakerPC:true,previous:copy(issue.previous),rejected:copy(rows[issue.index]),reason});
       }
       if(seen.size!==targets.size)throw fail('관계 교정 결과에 검토하지 않은 대상이 남았습니다.');
@@ -55554,9 +55819,13 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
       // remaining rows retain their order; stage still validates every field.
       if(withdrawn.size)next.observe.relationship_upsert=next.observe.relationship_upsert.filter((_,index)=>!withdrawn.has(index));
       const audit=rejections.length?{version:1,sourceRows:copy(sourceRows),items:rejections}:undefined;
+      const previousCount=(req.relationshipEvidenceSelections||[]).length;
+      const nextSelections=selections.filter((entry,index)=>index>=previousCount||!reselected.has(JSON.stringify([entry.speaker_ref,entry.target_ref])));
+      checkedRelationshipEvidenceSelections(room,p,{...req,relationshipEvidenceSelections:nextSelections},next);
       // Persist candidate + rejection audit together before further validation.
       // A subsequent stage error must not lose the independent-review obligation.
-      try{await options.onRepairCandidate?.(copy(next),copy(audit));}catch(error){repairCheckpointRejected=true;throw error;}
+      try{await options.onRepairCandidate?.(copy(next),copy(audit),copy(nextSelections));}catch(error){repairCheckpointRejected=true;throw error;}
+      req.relationshipEvidenceSelections=copy(nextSelections);
       unifiedStage='교정된 관계·기억 전체 근거 재검증 중';renderModalIfIdle();
       // No recursive repair. A second malformed response stops here, and the
       // caller cannot advance a failed observation cursor or publish a draft.
@@ -55939,7 +56208,7 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     if(p.observe) {
       const guarded=WishMemorySafety.filterFactCorrections(req,data.observe);data.observe=guarded.observe;notices.push(...guarded.notices);
       if(req.relationshipRange?.guarded&&!req.relationshipRange.indices.length&&Array.isArray(data.observe?.relationship_upsert)&&data.observe.relationship_upsert.length){const n=data.observe.relationship_upsert.length;data.observe.relationship_upsert=[];notices.push(`관계 전용 재구축 뒤 새로 반영할 RP가 없어, AI가 낸 관계 변경 ${n}건을 적용하지 않았습니다(재구축 이전 턴 재처리 방지).`);}
-      const out=applyObserve(cog,room.speechRelations,data.observe,wishTurnText(p.obs),p.obs.at(-1).assistantId,room.relationships,{sourceRows:req.relationshipRange?.rows||p.obs,allowedPairs:new Set(req.relationshipPairs||[]),notices,held:heldAdds,cogHeld:cogHeldAdds,hold:req.holdContext||{bundle:'unified'},fix:fx,storedSpeech:req.storedSpeech,presenceRows:p.obs});
+      const out=applyObserve(cog,room.speechRelations,data.observe,wishTurnText(p.obs),p.obs.at(-1).assistantId,room.relationships,{sourceRows:checkedRelationshipSourceRows(room,p,req),evidenceSelections:checkedRelationshipEvidenceSelections(room,p,req,data),allowedPairs:new Set(req.relationshipPairs||[]),notices,held:heldAdds,cogHeld:cogHeldAdds,hold:req.holdContext||{bundle:'unified'},fix:fx,storedSpeech:req.storedSpeech,presenceRows:p.obs});
       newCog=out.cog;next.speechRelations=normalizeSpeechRelations(out.speech);next.relationships=out.relationships;if(req.relationshipRange?.complete)next.relationshipBaseline=null;next.relationshipRevision=(Number(room.relationshipRevision)||0)+1;next.unified.observeCursor=p.obs.at(-1).key;
       preservationNotice=[out.preservedSpeech?'빈 응답의 기존 호칭·말투 '+out.preservedSpeech+'방향 유지':'',out.preservedAliases?'미언급 별칭 '+out.preservedAliases+'인물 유지':''].filter(Boolean).join(' · ');
     }
