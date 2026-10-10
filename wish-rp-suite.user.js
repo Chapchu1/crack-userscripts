@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.52
+// @version      0.5.53
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -24,6 +24,15 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.53 · 프리셋 선택·덮어쓰기 경로 복구
+ * 진행 규칙의 프리셋 열기를 실제 저장 목록에 연결합니다.
+ * 이 방 지침 저장에서 기존 프리셋 선택 후 덮어쓸 수 있습니다.
+ * 지침 순서·내용·주입 켜짐 상태를 함께 저장하고 다른 프리셋을 유지합니다.
+ * 프리셋별 임시 편집 내용을 구분하며 새 지침에 오래된 초안을 재사용하지 않습니다.
+ * 새 프리셋 이름이 비어 있으면 저장 버튼 옆에 이유를 표시합니다.
+ * 0.5.52 저장 공간 복구와 50,000자 주입·정리 엔진은 유지합니다.
+ */
 
 /* 0.5.52 · 저장 공간 부족 복구 경로 개선
  * 위시·로어·요약·응답 교정의 확인된 저장 항목을 별도 저장소에 연결합니다.
@@ -532,7 +541,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.52'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.53'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49021,7 +49030,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.52-suite';
+  const SCRIPT_VERSION = '0.5.53-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -62099,7 +62108,7 @@ async function fetchAllRoomMessages(chatId, onProgress = null, control = null) {
   }
   function pruneLocalHistoryBackup(backup,keepRoomIds) {return coreBackupData(backup,keepRoomIds);}
 
-function openDefaultExtraPresetDialog(room){return WUIOpenPromise('presets',{wishRoom:room,draft:{list:structuredClone(loadDefaultExtraPreset().items).map(p=>({...p,ret:String(p.retentionTurns)}))}});}
+function openDefaultExtraPresetDialog(room){return WUIPresetPicker(room);}
   async function createManagerBackup() {return await WLOG.run("백업 파일 구성 중",async task=>{
     await Promise.all([...storageWrites.values()].map(p=>p.catch(()=>{})));const names=[APP.storeName,APP.libraryStoreName,APP.cognitionStoreName,APP.runtimeStoreName,APP.historyStoreName];
     const data=await new Promise((resolve,reject)=>{
@@ -69632,7 +69641,7 @@ function mRelationships() {
     ${V.chars.rows.map(c => card('ch-' + c.id, esc(c.title), c.pin ? '사용자 고정' : c.match ? `“${esc(c.match)}” 감지 · 문맥에 따라 자동 포함` : `${fmt(c.size)}자 · 문맥에 따라 자동 포함`, `${(c.aliases || []).length ? `<div class="m3-aka">별칭 ${c.aliases.map(a => tag(esc(a))).join('')}</div>` : ''}<p>${esc(c.content)}</p>`, btn('편집', 'charEdit', { arg: c.id, cls: 'mini', icon: 'edit' }) + btn('삭제', 'charDel', { arg: c.id, cls: 'danger mini' }), chip('주입', 'char.enabled:' + c.id, c.enabled), COL.char)).join('') || empty('캐릭터 설정이 없습니다.')}`;
   }
   function mExtra() {
-    return `${`<div class="m3-toolbar"><span class="m3-muted m3-grow">OOC·문체·진행 규칙 ${V.extras.rows.length}개</span><div class="m3-actions">${btn('첫 턴 시작 설정 제거','freshRemove',{cls:'quiet mini'})}${btn('기본 프리셋', 'presets', { cls: 'quiet mini', feat: 'presets' })}${btn('추가', 'xNew', { cls: 'mini', icon: 'plus' })}${chip('주입','pol.extra',V.pol.extra)}</div></div>`}
+    return `${`<div class="m3-toolbar"><span class="m3-muted m3-grow">OOC·문체·진행 규칙 ${V.extras.rows.length}개</span><div class="m3-actions">${btn('첫 턴 시작 설정 제거','freshRemove',{cls:'quiet mini'})}${btn('프리셋 열기', 'presets', { cls: 'quiet mini', feat: 'presets' })}${btn('이 방 지침 저장', 'psRoomSave', { cls: 'mini', icon: 'save', feat: 'presets' })}${btn('추가', 'xNew', { cls: 'mini', icon: 'plus' })}${chip('주입','pol.extra',V.pol.extra)}</div></div>`}
     ${V.extras.rows.map(x => card('x-' + x.id, esc(x.title), `${fmt(x.size)}자${''}`, `<p>${esc(x.content)}</p>`, btn('편집', 'xEdit', { arg: x.id, cls: 'mini', icon: 'edit' }) + btn('삭제', 'xDel', { arg: x.id, cls: 'danger mini' }), chip('주입', 'extra.enabled:' + x.id, x.enabled), COL.extra)).join('') || empty('기타·OOC 항목이 없습니다.')}`;
   }
   function vMemory(){
@@ -70729,7 +70738,7 @@ function approvedMap(ui,d){
 const TXT_BATCH = 10;
 const editorDrafts=new Map();
 const isDraftEditor=type=>/^e(Slot|State|Log|Speech|Pack|Entry|Actor|Fact|Relationship|Thread|ThreadClose|Con)$/.test(type)||['promptGuide','presets','loreConvert'].includes(type);
-function editorKey(type,p){return JSON.stringify([location.pathname,type,p.ref??'',p.kind??'',p.pack??'',p.group??'',p.parent??'',p.idx??'',p.wishSpeechParent??'']);}
+function editorKey(type,p){const key=[location.pathname,type,p.ref??'',p.kind??'',p.pack??'',p.group??'',p.parent??'',p.idx??'',p.wishSpeechParent??''];if(type==='presets')key.push(p.groupId||'',!!p.fromRoom,p.fromRoom?p.roomStamp||'':'');return JSON.stringify(key);}
 function discardPanelDrafts(){
     for(const [key,d] of editorDrafts)if(d.editPath===location.pathname&&!d.busy&&!d.draft?.busy){editorDrafts.delete(key);closeSheet(d,true);}
   }
@@ -71019,7 +71028,8 @@ presets(d) {
           list.map((p, i) => `<div class="m3-preset" data-key="ps-${esc(p.id)}"><div class="m3-row"><input type="text" data-bind="${D(d, `list.${i}.title`)}" value="${esc(p.title)}" placeholder="지침 제목" aria-label="지침 ${i + 1} 제목" maxlength="100"${disabled}>${tog('', D(d, `list.${i}.enabled`), p.enabled, '', '이 지침 주입')}${btn('지침 삭제', 'psDel', {arg:d.id + '|' + i, cls:'danger mini', dis:locked})}</div><textarea data-bind="${D(d, `list.${i}.content`)}" aria-label="지침 ${i + 1} 내용"${disabled}>${esc(p.content)}</textarea></div>`).join('') +
           (!list.length ? empty('지침 추가를 눌러 내용을 입력하세요.') : '') +
           '<p class="m3-muted">이 방에 적용하면 기타 지침을 위 목록으로 교체합니다. 지침의 수정·삭제·순서·주입 켜짐 상태도 함께 반영합니다.</p>',
-        foot:(d.groupId ? btn('프리셋 삭제', 'psDeleteGroup', {arg:d.id, cls:'danger mini', dis:locked}) : '') + SP + closeBtn(d, '취소') +
+        foot:(!String(d.draft.name || '').trim() ? '<span class="m3-muted" role="status" style="flex-basis:100%">위의 프리셋 이름을 입력하면 저장할 수 있습니다.</span>' : '') +
+          (d.groupId ? btn('프리셋 삭제', 'psDeleteGroup', {arg:d.id, cls:'danger mini', dis:locked}) : '') + SP + closeBtn(d, '취소') +
           btn('저장하고 이 방에 적용', 'psSaveApply', {arg:d.id, cls:'mini', dis:locked || !String(d.draft.name || '').trim()}) +
           btn(d.groupId ? '덮어쓰기 저장' : '새 프리셋 저장', 'psSave', {arg:d.id, cls:'primary', icon:'check', dis:locked || !String(d.draft.name || '').trim()})});
     },
