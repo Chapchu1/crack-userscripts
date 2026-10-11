@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.53
+// @version      0.5.54
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -24,6 +24,15 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.54 · 선택한 응답 교정 및 저장 확인 수정
+ * 개별 응답 교정에서 전달된 메시지 ID와 원문을 유지합니다.
+ * 선택한 응답의 재검수·재시도가 최신 답변으로 바뀌지 않도록 고정합니다.
+ * 비어 있는 content 필드가 실제 message 본문을 가리던 읽기를 보완합니다.
+ * 개별 응답과 대화 목록에서 같은 교정본을 확인한 뒤 완료 처리합니다.
+ * 저장 확인 실패와 화면 갱신 실패를 구분하며 교정본·처리기록을 연결합니다.
+ * 프리셋 수정·저장 공간 복구·주입 50,000자와 기존 자동 정리를 유지합니다.
+ */
 
 /* 0.5.53 · 프리셋 선택·덮어쓰기 경로 복구
  * 진행 규칙의 프리셋 열기를 실제 저장 목록에 연결합니다.
@@ -541,7 +550,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.53'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.54'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49030,7 +49039,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.53-suite';
+  const SCRIPT_VERSION = '0.5.54-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -60093,7 +60102,7 @@ function roomCopyLiveStamp(room){return JSON.stringify([room?.chatId,room?._rev,
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method,url,
-        headers:{Authorization:`Bearer ${token}`,'Content-Type':utf16?'application/json; charset=utf-16le':'application/json',Accept:'application/json, text/plain, */*',platform:'web','wrtn-locale':'ko-KR'},
+        headers:{Authorization:`Bearer ${token}`,'Content-Type':utf16?'application/json; charset=utf-16le':'application/json',Accept:'application/json, text/plain, */*',platform:'web','wrtn-locale':'ko-KR',...(options.noCache?{'Cache-Control':'no-cache',Pragma:'no-cache'}:{})},
         data:body===undefined?undefined:utf16?utf16leBlob(JSON.stringify(body)):JSON.stringify(body),
         timeout:Math.max(1000,Math.min(120000,Number(options.timeoutMs)||20000)),
         onload:res=>{
@@ -72850,6 +72859,37 @@ Object.assign(WSUITE.host,{
 
 // Core response-refiner adapter. All writes use the existing carrier lease and
 // verified PATCH transport; no second auth store, DB writer or injection engine.
+async function verifyRefinerMessage(chatId,messageId,nextText,previousText,assertCurrent) {
+  const deadline=Date.now()+12000,expected=normalizeLineBreaks(nextText),previous=normalizeLineBreaks(previousText);
+  let detail='서버 응답을 다시 읽지 못했습니다.';
+  for(let attempt=0;attempt<3;attempt++){
+    assertCurrent();
+    if(attempt)await sleep(350*attempt);
+    const left=deadline-Date.now();if(left<1000)break;
+    try{
+      const opts={timeoutMs:Math.min(3500,left),noCache:true};
+      const [single,listing]=await Promise.all([
+        apiRequest('GET',`https://crack-api.wrtn.ai/crack-gen/v3/chats/${chatId}/messages/${messageId}`,undefined,opts),
+        apiRequest('GET',`https://crack-api.wrtn.ai/crack-gen/v3/chats/${chatId}/messages?limit=50`,undefined,opts)
+      ]);
+      assertCurrent();
+      const rows=listing?.data?.messages??listing?.messages;
+      if(!Array.isArray(rows))throw Error('대화 목록 형식을 확인하지 못했습니다.');
+      const matches=rows.filter(row=>['_id','id','messageId'].some(key=>row?.[key]!=null&&String(row[key])===String(messageId)));
+      if(matches.length!==1)throw Error(matches.length?'대화 목록의 응답 ID가 중복됩니다.':'대화 목록에서 선택한 응답을 확인하지 못했습니다.');
+      const observed=[carrierBodyObservation(single?.data??single,chatId,messageId,'detail'),carrierBodyObservation(matches[0],chatId,messageId,'list')];
+      if(observed.some(row=>row.state!=='readable'))throw Error('저장된 AI 응답 본문을 확인하지 못했습니다.');
+      if(observed.every(row=>normalizeLineBreaks(row.rawText)===expected))return {verified:true,message:observed[1].message};
+      if(observed.some(row=>![expected,previous].includes(normalizeLineBreaks(row.rawText))))throw Object.assign(Error('저장 확인 중 다른 수정 내용이 발견됐습니다. 해당 응답을 다시 확인해 주세요.'),{code:'WISH_REFINER_STALE'});
+      detail='서버의 개별 응답과 대화 목록에 같은 교정본이 반영됐는지 확인하지 못했습니다.';
+    }catch(error){
+      if(isCrackAuthError(error)||error?.code==='WISH_REFINER_STALE')throw error;
+      detail=String(error.message||error);
+    }
+  }
+  assertCurrent();
+  throw Object.assign(Error('교정 저장 확인 실패: '+detail+' 새로고침만으로 저장을 다시 시도하지는 않습니다. 응답교정 처리기록에 보관한 교정본을 확인해 주세요.'),{code:'RESPONSE_READBACK_UNVERIFIED'});
+}
 Object.assign(WSUITE.host, {
   refinerTimeline:() => String(state.currentRoom?.activeLogTimeline || '기본 시간선'),
   refinerScope() {
@@ -72930,6 +72970,7 @@ Object.assign(WSUITE.host, {
       };
       await beforeWrite();
       await patchMessage(chatId,target.id,nextRaw,expectedRaw,{beforeWrite});
+      await verifyRefinerMessage(chatId,target.id,nextRaw,expectedRaw,()=>{assertScope();if(state.currentRoom!==room)throw stale();});
       let pendingSaveError='';
       if(parts?.found&&String(room.pending?.messageId)===String(target.id)){
         const p=room.pending;p.originalText=String(newText);p.originalChars=String(newText).length;p.carrierChars=nextRaw.length;p.serverChars=nextRaw.length;p.verified=true;p.verifiedAt=Date.now();
@@ -74376,7 +74417,7 @@ A correction requires a supported contradiction, a materially relevant persisten
     const text=document.createElement('pre');text.textContent=WSUITE.host?.refinerCleanError?.(formatErrorDetails(error))||formatErrorDetails(error);
     details.append(summary,text);box.querySelector('.rr-confirm-body').append(details);
   }
-  function showRefinerRefreshPrompt(detail = '') {
+  function showRefinerRefreshPrompt(detail = '', verified = false) {
     clearRefinerConfirmation();hideReviewNotice();window.__WISH_RP_MANAGER_AI_BRIDGE__?.hideRefinerPopups();
     document.querySelector('#wish-rpcore-refiner-refresh')?.remove();
     ensureThemeStyles();
@@ -74388,8 +74429,11 @@ A correction requires a supported contradiction, a materially relevant persisten
     box.className = 'rr-confirm-box rr-failure-box';
     box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');box.setAttribute('aria-labelledby','rr-refresh-title');
     box.innerHTML = '<header class="rr-confirm-head"><div class="rr-confirm-heading"><small>WISH · RESPONSE REFRESH</small><h3 id="rr-refresh-title">응답 반영을 확인해 주세요</h3><p>응답이 반영되지 않았다면 새로고침해 주세요.</p></div><button data-close data-rpcm-close="icon" aria-label="닫기">×</button></header><div class="rr-confirm-body"><p data-reason></p></div><footer class="rr-confirm-foot"><div class="rr-confirm-actions"><button data-close-secondary>닫기</button><button data-refresh class="rr-primary">새로고침</button></div></footer>';
-    box.querySelector('[data-reason]').textContent = '교정 요청은 보냈지만 반영 여부를 확인하지 못했어요. 새로고침한 뒤 응답을 확인해 주세요.';
-    if(detail)setRefinerErrorSummary(box,detail,'교정 요청은 보냈지만 반영 여부를 확인하지 못했어요. 새로고침한 뒤 응답을 확인해 주세요.');
+    const explanation=verified?'교정본은 서버에 저장됐습니다. 새로고침하면 저장된 응답을 다시 불러옵니다.':'교정본의 서버 저장을 확인하지 못했습니다. 새로고침만으로 다시 저장되지는 않습니다. 처리기록에서 보관한 교정본을 확인할 수 있습니다.';
+    box.querySelector('.rr-confirm-heading p').textContent=verified?'저장된 교정본을 다시 불러오세요.':'저장 확인이 끝나지 않았습니다.';
+    box.querySelector('[data-reason]').textContent=explanation;
+    if(detail)setRefinerErrorSummary(box,detail,explanation);
+    const archiveId=String(activeReviewTarget?.id||''),archive=document.createElement('button');archive.textContent='교정본·처리기록';archive.onclick=()=>{overlay.remove();openFromNotice(archiveId);};box.querySelector('.rr-confirm-actions').prepend(archive);
     const close = () => overlay.remove();
     box.querySelector('[data-close]').onclick = close;
     box.querySelector('[data-close-secondary]').onclick = close;
@@ -74404,7 +74448,7 @@ A correction requires a supported contradiction, a materially relevant persisten
     setTimeout(() => {
       if(!scopeIsCurrent(scope))return;
       try { window.location.reload(); }
-      catch (error) { showRefinerRefreshPrompt('자동 새로고침을 실행하지 못했습니다. 아래 버튼으로 새로고침해 주세요.'); }
+      catch (error) { showRefinerRefreshPrompt('자동 새로고침을 실행하지 못했습니다. 아래 버튼으로 새로고침해 주세요.',true); }
     }, Math.max(150, Number(delay) || 650));
   }
 
@@ -74822,7 +74866,9 @@ A correction requires a supported contradiction, a materially relevant persisten
   function isPendingResponse(msg){return /^(streaming|generating|pending|in_progress|inprogress)$/i.test(String(msg?.raw?.status||msg?.raw?.state||msg?.status||msg?.state||''));}
 
   function normalizeMessage(raw) {
-    const parts = reviewResponseParts(raw?.content ?? raw?.message ?? raw?.text ?? '');
+    const bodies=[raw?.content,raw?.message,raw?.text];
+    const body=bodies.find(value=>typeof value==='string'&&value.trim())??bodies.find(value=>typeof value==='string')??'';
+    const parts = reviewResponseParts(body);
     const rawRole = raw?.role ?? raw?.speaker ?? raw?.type ?? raw?.senderType ?? raw?.authorRole ?? raw?.chatRole ?? raw?.raw?.role ?? raw?.raw?.speaker ?? raw?.raw?.type ?? '';
     const sourceRole = String(rawRole || '').trim().toLowerCase().replace(/[\s_-]+/g,'');
     let role = sourceRole;
@@ -76133,7 +76179,7 @@ A correction requires a supported contradiction, a materially relevant persisten
       const referenceStarted=Date.now();
       const latest=targetOverride?await findLastAssistant():target;
       const historical=!!latest&&String(latest.id)!==String(target.id);
-      target.refinerHistorical=historical;
+      target.refinerHistorical=historical||!!targetOverride;
       const recent = await fetchRecentMessages(historical?50:truncationOnly()?Math.min(8,Math.max(4,2*Math.min(2,settings.contextTurns)+2)):Math.max(12,2*settings.contextTurns+8));
       let snapshot;
       try {
@@ -76176,7 +76222,7 @@ A correction requires a supported contradiction, a materially relevant persisten
       assertScope(requestScope);
       // 최신 응답을 검수하는 동안 Crack 네이티브 수정창에서 사용자가 직접 편집했으면
       // 수정 전 원문 기준 제안은 폐기합니다. 과거 응답 수동 검수는 기존 source fingerprint 검증만 사용합니다.
-      if(!historical){
+      if(!historical&&!targetOverride){
         const latestGuard=await reconcileLatestTargetBeforeCorrection(target,force);
         if(latestGuard.discard){
           if(latestGuard.reason==='user-edited'&&latestGuard.target){
@@ -76303,7 +76349,7 @@ A correction requires a supported contradiction, a materially relevant persisten
 
   function showReviewFailure(target,error) {
     if(error?.code==='RESPONSE_READBACK_UNVERIFIED'){
-      showReviewNotice('응답 반영 확인 필요','응답이 반영되지 않았다면 새로고침해 주세요.','error',7000);
+      showReviewNotice('교정 저장 확인 필요','서버의 교정본을 확인하지 못했습니다. 처리기록에 교정본을 보관했으며 새로고침만으로 다시 저장되지는 않습니다.','error',7000);
       showRefinerRefreshPrompt(String(error.message||error));
       return;
     }
@@ -76319,7 +76365,7 @@ A correction requires a supported contradiction, a materially relevant persisten
     const close=()=>{overlay.remove();if(confirmOverlay===overlay){confirmOverlay=null;cancelConfirmation=null;}};
     cancelConfirmation=close;
     box.querySelector('[data-close]').onclick=close;
-    box.querySelector('[data-retry]').onclick=()=>{close();setTimeout(()=>runRefiner({force:true,targetOverride:target,maxOutputTokens:error.code==='REVIEW_OUTPUT_LIMIT'?32768:0,reviewMode:error.code==='AI_REQUEST_TIMEOUT'?'normal':''}),0);};
+    box.querySelector('[data-retry]').onclick=()=>{close();setTimeout(()=>runRequestedRefiner('',true,target.id,{maxOutputTokens:error.code==='REVIEW_OUTPUT_LIMIT'?32768:0,reviewMode:error.code==='AI_REQUEST_TIMEOUT'?'normal':''}),0);};
     box.querySelector('[data-continue]').onclick=async()=>{
       try{const fresh=await assertReviewSource(target,getChatId());markProcessed(fresh);addProcessHistory('원본 유지','사용자가 선택한 응답의 교정 없이 계속을 선택했습니다.',{target:fresh});close();setStatus('원본 유지');showReviewNotice('원본으로 계속합니다','사용자가 교정을 적용하지 않고 계속하기를 선택했습니다.','info');}catch(e){toast(e.message,'error');}
     };
@@ -76363,13 +76409,14 @@ A correction requires a supported contradiction, a materially relevant persisten
       const box=document.createElement('section');
       box.className='rr-confirm-box';box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');box.setAttribute('aria-labelledby','rr-confirm-title');
       box.innerHTML=`<header class="rr-confirm-head"><div class="rr-confirm-heading"><small>WISH · RESPONSE REVIEW</small><h3 id="rr-confirm-title">응답 교정 제안</h3><p>논리적 오류 단위로 선택하고, 전체 응답에서 실제 변경 위치를 확인하세요.</p></div><button type="button" data-close data-rpcm-close="icon" aria-label="닫기">×</button></header>
-        <div class="rr-confirm-body"><div class="rr-review-summary"><span data-verdict class="rr-verdict-pill"></span><p data-reason></p></div><p data-stale hidden>검수 중 원문이 바뀌었습니다. 최신 응답을 다시 검수해 주세요.</p>
+        <div class="rr-confirm-body"><p data-review-target></p><div class="rr-review-summary"><span data-verdict class="rr-verdict-pill"></span><p data-reason></p></div><p data-stale hidden>검수 중 원문이 바뀌었습니다. 선택한 응답을 다시 검수해 주세요.</p>
         <div class="rr-selection-bar"><span data-total-count></span><button data-act="all">전체 선택</button></div><div data-changes></div>
         <details class="rr-full-preview" open><summary>선택 적용 후 전체 응답 미리보기</summary><div data-change-preview tabindex="0" aria-label="선택 교정 전체 응답 미리보기"></div><p class="rr-preview-hint">반전된 부분이 선택한 교정으로 바뀌는 글자입니다. 〔삭제〕는 제거될 부분입니다. 항목을 켜고 꺼도 현재 읽던 위치를 최대한 유지합니다.</p></details>
         <div data-manual-editor-wrap hidden><strong>직접 수정 · 최종 적용 텍스트</strong><textarea data-manual-editor aria-label="직접 수정 최종 교정 응답" spellcheck="false"></textarea><small>직접 수정 중에는 교정 항목 선택이 잠깁니다. 위 강조 미리보기는 AI 제안 기준으로 유지되고, 이 편집본이 실제 서버 적용 대상입니다.</small></div>
         <label class="rr-exception"><input type="checkbox" data-exception> 원본 유지 시 이 검수 유형을 예외로 저장</label>
         <input data-policy hidden aria-label="교정 예외 적용 범위" placeholder="허용할 표현과 적용할 장면을 직접 입력하세요"></div>
         <footer class="rr-confirm-foot"><div class="rr-foot-note"><span data-selection-count></span><span>같은 오류에 묶인 변경은 함께 적용됩니다.</span></div><div class="rr-confirm-actions"><button data-act="keep">원본 유지</button><button data-act="memory">기억 검토</button><button data-act="review" hidden>최신 응답 다시 검수</button><button data-act="copy">교정본 복사</button><button data-act="manual">직접 수정</button><button data-act="apply" class="rr-primary">선택한 수정 적용</button></div></footer>`;
+      box.querySelector('[data-review-target]').textContent='교정할 응답 · '+String(target.content).replace(/\s+/g,' ').slice(0,100);
       box.querySelector('[data-reason]').textContent=reason;
       box.querySelector('[data-verdict]').textContent=(REVIEW_VERDICT_LABELS[parsed?.verdict]||'교정 제안')+(parsed?.verdict==='CONTINUITY_DRIFT'?' · 연속성 수정은 직접 확인 후 선택하세요.':'');
       const reviewChatId=getChatId();
@@ -76428,7 +76475,8 @@ A correction requires a supported contradiction, a materially relevant persisten
       const markStale=()=>{if(!overlay.isConnected||confirmOverlay!==overlay||!scopeIsCurrent(target.suiteScope))return;stopSourceWatch();stale=true;setReviewGate(target,'stale');box.querySelector('[data-stale]').hidden=false;box.querySelector('[data-act="review"]').hidden=false;apply.disabled=true;setStatus('최신 응답 재검수 필요','error');};
       cancelConfirmation=()=>close(false);
       allBtn.onclick=()=>{if(busy||editMode)return;const selectAll=selectedGroups().length!==groups.length;checks.forEach(check=>check.checked=selectAll);renderSelection();};
-      box.querySelector('[data-act="review"]').onclick=()=>{if(busy)return;close(false);setTimeout(()=>runRefiner({force:true}),0);};
+      box.querySelector('[data-act="review"]').textContent='이 응답 다시 검수';
+      box.querySelector('[data-act="review"]').onclick=()=>{if(busy)return;close(false);setTimeout(()=>runRequestedRefiner('',true,target.id),0);};
       const keep=async memory=>{
         if(busy)return;
         try{
@@ -77029,7 +77077,38 @@ A correction requires a supported contradiction, a materially relevant persisten
     return true;
   }
   function displayPreferences(){return {showButton:settings.showButton!==false,showBadge:settings.showBadge!==false};}
-  window.__WISH_RP_MANAGER_REFINER__ = { connectionInfo:()=>({model:currentModelId(),thinkingLevel:selectedThinkingLevel(),enabled:settings.enabled}), openSettings, openFromNotice, canUseTurn:canUseReviewTurn, reviewLatest: () => runRefiner({ force:true }), setDisplayPreference, displayPreferences };
+  let requestedReviewBusy=false;
+  async function resolveRequestedReviewTarget(assistantText,requestedMsgId,scope) {
+    assertScope(scope);
+    const id=String(requestedMsgId||''),hasText=typeof assistantText==='string'&&!!assistantText.trim();
+    const selectedText=hasText?WSUITE.host.refinerCleanText(reviewResponseParts(assistantText).text):'';
+    let target;
+    if(id){
+      const raw=await WSUITE.host.refinerMessage(scope.chatId,id);assertScope(scope);
+      if(raw)target=normalizeMessage(raw);
+      if(!target||String(target.id)!==id)throw Error('선택한 응답을 찾지 못했습니다. 해당 응답에서 교정을 다시 눌러 주세요.');
+    }else if(hasText){
+      const matches=(await fetchRecentMessages(50)).filter(row=>row.role==='assistant'&&normalizeCrackLinebreaks(row.content)===normalizeCrackLinebreaks(selectedText));
+      assertScope(scope);
+      if(matches.length!==1)throw Error(matches.length?'같은 내용의 응답이 여러 개입니다. 응답교정 설정의 과거 AI 응답 검수에서 대상을 선택해 주세요.':'선택한 문장에 해당하는 응답을 찾지 못했습니다. 응답교정 설정에서 대상을 선택해 주세요.');
+      target=matches[0];
+    }else return null;
+    if(target.role!=='assistant'||isPendingResponse(target)||target.contextMalformed||!target.content.trim())throw Error('선택한 AI 응답이 아직 완료되지 않았거나 본문을 확인할 수 없습니다.');
+    if(hasText&&normalizeCrackLinebreaks(target.content)!==normalizeCrackLinebreaks(selectedText))throw Error('선택한 응답의 원문이 바뀌었습니다. 화면을 갱신한 뒤 해당 응답에서 교정을 다시 눌러 주세요.');
+    target.suiteScope=scope;return target;
+  }
+  async function runRequestedRefiner(assistantText='',force=true,requestedMsgId='',options={}) {
+    if(!force&&!settings.enabled)return;
+    if(workerBusy||requestedReviewBusy||confirmOverlay){if(force)toast('진행 중인 교정이나 열린 교정 제안을 먼저 마쳐 주세요.');return;}
+    const scope=captureScope();requestedReviewBusy=true;
+    try{
+      const target=await resolveRequestedReviewTarget(assistantText,requestedMsgId,scope);assertScope(scope);
+      return await runRefiner({...options,force:!!force,targetOverride:target});
+    }catch(error){
+      if(scopeIsCurrent(scope)){addProcessHistory('오류',formatErrorHistory(error));setStatus('선택한 응답 확인 필요','error');showReviewNotice('선택한 응답을 검토하지 못했어요',String(error.message||error),'error');}
+    }finally{requestedReviewBusy=false;}
+  }
+  window.__WISH_RP_MANAGER_REFINER__ = { connectionInfo:()=>({model:currentModelId(),thinkingLevel:selectedThinkingLevel(),enabled:settings.enabled}), openSettings, openFromNotice, canUseTurn:canUseReviewTurn, reviewLatest: () => runRequestedRefiner(), reviewMessage:(text,id)=>runRequestedRefiner(text,true,id), setDisplayPreference, displayPreferences };
 
   try {
     GM_registerMenuCommand('🪽 응답교정 설정 열기', openSettings);
@@ -77051,7 +77130,7 @@ A correction requires a supported contradiction, a materially relevant persisten
 
   WSUITE.coreRefiner={version:'1.3.9-manager-0.17.14',open:openSettings,run:runRefiner,getState:()=>({enabled:settings.enabled,busy:workerBusy,status:currentStatus}),clearProcessed:()=>{saveProcessedSet(new Set());return primeBaseline();}};
   const legacy=suiteWindow.__LoreRefiner;
-  if(legacy){legacy.refineQueue?.splice(0);legacy.refineMessage=()=>runRefiner({force:true});legacy.enqueueRefine=()=>scheduleAutoCheck();legacy.processQueue=()=>{};legacy.clearProcessed=WSUITE.coreRefiner.clearProcessed;legacy.setNeedsWarmup=()=>primeBaseline();legacy.getRefinerState=()=>({state:workerBusy?'working':'idle',detail:currentStatus,busy:workerBusy,queue:0});legacy.__suiteCoreRefinerVersion='1.3.9-manager-0.17.14';}
+  if(legacy){legacy.refineQueue?.splice(0);legacy.refineMessage=(text,force,_enqueueCallback,id)=>runRequestedRefiner(text,force,id);legacy.manualRefine=(text,id)=>runRequestedRefiner(text,true,id);legacy.enqueueRefine=()=>scheduleAutoCheck();legacy.processQueue=()=>{};legacy.clearProcessed=WSUITE.coreRefiner.clearProcessed;legacy.setNeedsWarmup=()=>primeBaseline();legacy.getRefinerState=()=>({state:workerBusy?'working':'idle',detail:currentStatus,busy:workerBusy,queue:0});legacy.__suiteCoreRefinerVersion='1.3.9-manager-0.17.14';}
   window.addEventListener('wish:ai-settings-updated',()=>{restoreConnectionState();if(!workerBusy)void primeBaseline();});
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });
