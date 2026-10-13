@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.57
+// @version      0.5.58
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.58 · 채팅 입력창 위 Wish 주입 버튼 겹침 수정
+ * 답변 아래 Wish 주입 버튼의 별도 z-index를 해제해 입력창 뒤의 정상 순서를 따릅니다.
+ * 버튼 위치·주입 내용 확인·실제 주입과 1.7.0/1.7.1 병합 기능을 유지합니다.
+ * 스크롤 감시나 반복 계산은 추가하지 않습니다.
+ */
 
 /* 0.5.57 · WRMC 1.7.1 변경분 통합 · Suite 기능 보존
  * 파일 선택창을 닫을 때까지 입력 요소를 유지해 iOS Safari 가져오기를 보완합니다.
@@ -575,7 +581,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.57'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.58'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49064,7 +49070,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.57-suite';
+  const SCRIPT_VERSION = '0.5.58-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -49481,7 +49487,7 @@ const GUIDE_DEFAULTS = Object.freeze({get apiCommon(){return U3.defaultGuides.co
     const style = document.createElement('style');
     style.id = 'wish-rp-message-injection-style';
     style.textContent = `
-      .wish-rp-message-injection-look{position:relative;z-index:2;flex:0 0 auto;width:auto;min-width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:0 6px;font:11px/1.3 system-ui;white-space:nowrap;border:0;border-radius:999px;background:transparent;color:inherit;box-shadow:none;cursor:pointer;opacity:.56;pointer-events:auto!important;transition:opacity .14s ease,transform .14s ease,background-color .14s ease}
+      .wish-rp-message-injection-look{position:relative;z-index:auto;flex:0 0 auto;width:auto;min-width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:0 6px;font:11px/1.3 system-ui;white-space:nowrap;border:0;border-radius:999px;background:transparent;color:inherit;box-shadow:none;cursor:pointer;opacity:.56;pointer-events:auto!important;transition:opacity .14s ease,transform .14s ease,background-color .14s ease}
       .wish-rp-message-injection-look svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
       .wish-rp-message-injection-look:hover,.wish-rp-message-injection-look:focus-visible{opacity:1;background:rgba(127,127,127,.12);outline:none;transform:scale(1.06)}
       .wish-rp-message-injection-look:active{transform:scale(.92)}
