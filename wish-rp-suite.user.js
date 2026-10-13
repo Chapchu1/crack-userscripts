@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.56
+// @version      0.5.57
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,15 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.57 · WRMC 1.7.1 변경분 통합 · Suite 기능 보존
+ * 파일 선택창을 닫을 때까지 입력 요소를 유지해 iOS Safari 가져오기를 보완합니다.
+ * 재구축·외부 AI 결과는 JSON 내용의 TXT 파일도 받을 수 있습니다.
+ * 확인된 빈 AI 답변은 전송을 막지 않고 기록하며, 기존 원문 검증·이전 답변 탐색을 유지합니다.
+ * 큰 방의 관계·자료·날짜 기억 선택 순서와 과거 회상·중복 발언 처리를 개선합니다.
+ * 명대사에는 당시 발언 표시를 붙이고, 실제 주입된 관계 표현을 미리보기에 반영합니다.
+ * 빠른 패널을 모바일 런처 위에 배치하고, 주입 옆 편집·자동 정리·기존 설정을 유지합니다.
+ */
 
 /* 0.5.56 · 진행 규칙 카드 바로 편집
  * 각 지침 카드의 주입 버튼 옆에 편집 버튼을 추가합니다.
@@ -566,7 +575,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.56'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.57'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49036,7 +49045,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
 })();
 
 
-// ===================== CORE 1.6.1 · SUITE PRESERVATION INTEGRATION =====================
+// ===================== CORE 1.7.1 · SUITE PRESERVATION INTEGRATION =====================
 (function () {
   'use strict';
   const localStorage = WSUITE.storage.local;
@@ -49055,7 +49064,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.56-suite';
+  const SCRIPT_VERSION = '0.5.57-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -51064,6 +51073,21 @@ function parseImportedJsonText(value, label = '가져오기 파일', { strict = 
     if (!file) throw new Error(`${label}을 선택하지 않았습니다.`);
     if (Number(file.size || 0) > maxBytes) throw new Error(`${label}이 ${Math.round(maxBytes / 1024 / 1024)}MB를 넘습니다.`);
     return parseImportedJsonText(await file.text(), label, { strict });
+  }
+
+  // Opens the picker of a hidden file input kept in the page until it is used: iOS Safari may drop a detached input,
+  // and its change event with it, while the picker is open. Removed after change or cancel; a new pick drops a leftover.
+  let filePickInput = null;
+  function pickFile(input, onChange) {
+    if (filePickInput && filePickInput !== input) filePickInput.remove();
+    filePickInput = input;
+    input.tabIndex = -1;
+    input.style.cssText = 'position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0';
+    const done = () => { input.onchange = input.oncancel = null; input.value = ''; input.remove(); if (filePickInput === input) filePickInput = null; };
+    input.onchange = async () => { input.onchange = null; try { await onChange(); } finally { done(); } };
+    input.oncancel = done;
+    document.body.append(input);
+    input.click();
   }
 
   function importedJsonFormatHint(data) {
@@ -53264,14 +53288,32 @@ const WishRelationships = (() => {
     function displayBody(r,transform=(field,text)=>text){return '현재: '+transform('current',r.current)+(r.trajectory?'\n핵심 전환: '+transform('trajectory',r.trajectory):'')+(r.unresolved?'\n남은 쟁점: '+transform('unresolved',r.unresolved):'');}
     function body(r,transform){return displayBody(r,transform);}
 
-    function items(room,query=''){
+    // One row as an injection item (the 확인 tab also lists the rows the names or the limit left out).
+    function pendingItem(r){
+      return {
+        slotId:'relationship:'+r.id,sourceSlotId:'__relationships',sourceKey:'relationship:'+r.id,group:'relationship',
+        title:r.speaker+' → '+r.target+' · 관계·감정선',content:body(r),totalTurns:0,usedTurns:0,autoType:'relationship',recallScore:70,recallKeywordScore:70,recallReason:r.pinned?'사용자 고정 후보':'현재 맥락의 인물 관계'
+      };
+    }
+    // opts.keep: ids of rows that stay without their names (the quick panel's 이번 세션 포함); the row's own switch still applies.
+    function items(room,query='',opts={}){
       if(room.relationshipConfig?.enabled===false)return [];
       const context=speechNameKey(String(query||'')+'\n'+String(room.recentRpContextText||'').slice(-6000));
       const hit=(name,aliases)=>[name,...(aliases||[])].some(n=>{const k=speechNameKey(n);return k&&context.includes(k);});
-      return normalize(room.relationships).filter(r=>r.enabled!==false&&(r.pinned||(!r.speakerPC&&hit(r.speaker,r.speakerAliases))||(!r.targetPC&&hit(r.target,r.targetAliases)))).map(r=>({
-        slotId:'relationship:'+r.id,sourceSlotId:'__relationships',sourceKey:'relationship:'+r.id,group:'relationship',
-        title:r.speaker+' → '+r.target+' · 관계·감정선',content:body(r),totalTurns:0,usedTurns:0,autoType:'relationship',recallScore:70,recallKeywordScore:70,recallReason:r.pinned?'사용자 고정 후보':'현재 맥락의 인물 관계'
-      }));
+      const rows=normalize(room.relationships),picked=rows.filter(r=>r.enabled!==false&&(r.pinned||opts.keep?.has(String(r.id))||(!r.speakerPC&&hit(r.speaker,r.speakerAliases))||(!r.targetPC&&hit(r.target,r.targetAliases))));
+      // opts.stage (a string, not saved): the text the rows are read on. Rows on it, pinned rows and rows kept for this session go in
+      // whole; the others carry relationshipLine (the 현재 line) for the context block to render. content and recallScore stay.
+      if(typeof opts.stage!=='string')return picked.map(r=>pendingItem(r));
+      let forms=null;
+      try{const live=rows.filter(r=>r.enabled!==false).map(r=>opts.keep?.has(String(r.id))?{...r,pinned:true}:r);forms=RecallSeat.relationshipForms(live,picked.map(r=>({id:r.id,len:body(r).length})),opts.stage).forms;}catch(error){console.debug('[Wish] recall seat skipped',error);forms=null;}
+      return picked.map(r=>{const item=pendingItem(r);return forms?.get(r.id)==='line'?{...item,relationshipLine:RecallSeat.relationshipLineText(r)}:item;});
+    }
+    // The rows the pick takes now: names in the text names are read from (nameDetectionText), pinned rows, and rows the quick
+    // panel included for this injection session (pending.quickIncludes). The 확인 tab reads the same list.
+    function current(room,opts={}){
+      const keep=new Set();
+      for(const [key,choice] of Object.entries(room.pending?.quickIncludes||{}))if(choice?.version===2&&choice.action==='include'&&key.startsWith('slot:relationship:'))keep.add(key.slice('slot:relationship:'.length));
+      return items(room,room.autoRecallContextText,{...opts,keep});
     }
     function contextRows(room,query){
       // Injection OFF is not a request to forget/stop maintaining the relationship.
@@ -53287,7 +53329,7 @@ const WishRelationships = (() => {
       return {rows:chosen,indices:rows.flatMap((t,i)=>covered.has(String(t.assistantId))?[]:[i+1]),guarded:true,complete:rows.some(t=>String(t.assistantId)===String(base.anchorId))||chosen.length>0};
     }
     function continuityText(value){return typeof value==='string'?value:typeof value?.observe==='string'?value.observe:'';}
-    function replacePending(room){if(!room.pending)return;room.pending.items=(room.pending.items||[]).filter(i=>i.group!=='relationship');room.pending.items.push(...items(room,room.autoRecallContextText));}
+    function replacePending(room,opts={}){if(!room.pending)return;room.pending.items=(room.pending.items||[]).filter(i=>i.group!=='relationship');room.pending.items.push(...current(room,opts));}
     async function mutate(room,change){
       const epoch=localRestoreEpoch;
       await withRoomExclusiveKeys([apiChatIdOf(room),'ai:'+apiChatIdOf(room)],async()=>{
@@ -53357,7 +53399,7 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
 
 function evidenceCutoff(r,evidence){const sig=list=>JSON.stringify((list||[]).map(e=>[e?.role||'',e?.quote||''])),want=sig(evidence);return String([...(r?.evidenceHistory||[])].reverse().find(e=>Array.isArray(e?.evidence)&&sig(e.evidence)===want)?.cutoff||'');}
 
-return {schema,fullSchema,commonGuide,guide,fullGuide,key,semantic,normalize,apply,rebuild,body,displayBody,messages,checkedEvidence,bind,items,contextRows,updateRange,continuityText,replacePending,mutate,open,save,diff,checkTrajectoryRecovery,shownEvidence,evidenceCutoff,heldRow,heldResolved,settleHeld,mergeHeld,normalizeHeld,openHeld};
+return {schema,fullSchema,commonGuide,guide,fullGuide,key,semantic,normalize,apply,rebuild,body,displayBody,messages,checkedEvidence,bind,pendingItem,items,current,contextRows,updateRange,continuityText,replacePending,mutate,open,save,diff,checkTrajectoryRecovery,shownEvidence,evidenceCutoff,heldRow,heldResolved,settleHeld,mergeHeld,normalizeHeld,openHeld};
   })();
 
 
@@ -58018,8 +58060,8 @@ function restoreRejectedQuotes(previousPacks,staged){
   }),{mode:'file',outcome:'not-applied'});}
   function importFile(r,only=false){
     if(!r||busy()||generationPending(apiChatIdOf(r))){WUI.openSheet('relationshipPreflight',{message:'생성·자동 정리·복원이 끝난 뒤 JSON 가져오기를 다시 눌러 주세요.'});return false;}
-    const epoch=localRestoreEpoch,input=document.createElement('input');input.type='file';input.accept='.json,application/json';
-    input.onchange=async()=>{try{if(!input.files[0])return;if(state.currentRoom!==r||epoch!==localRestoreEpoch)throw Error('파일 선택 중 방·복원 상태가 바뀌었습니다.');const data=await readImportedJsonFile(input.files[0],{label:only?'관계 전용 재구축 JSON':'외부 전체 재구축 JSON',maxBytes:25*1024*1024});await importData(r,data,only);}catch(e){notify(e.message,'error',8000,{error:e,operation:'외부 재구축 JSON 가져오기',mode:'file',outcome:'not-applied'});}finally{input.value='';}};input.click();return true;
+    const epoch=localRestoreEpoch,input=document.createElement('input');input.type='file';input.accept='.json,.txt,application/json,text/plain';
+    pickFile(input,async()=>{try{if(!input.files[0])return;if(state.currentRoom!==r||epoch!==localRestoreEpoch)throw Error('파일 선택 중 방·복원 상태가 바뀌었습니다.');const data=await readImportedJsonFile(input.files[0],{label:only?'관계 전용 재구축 JSON':'외부 전체 재구축 JSON',maxBytes:25*1024*1024});await importData(r,data,only);}catch(e){notify(e.message,'error',8000,{error:e,operation:'외부 재구축 JSON 가져오기',mode:'file',outcome:'not-applied'});}finally{input.value='';}});return true;
   }
   return {get,load,read,run,apply,clear,exportText,importData,importFile,externalGuideDefault,relationshipOnlyGuideDefault,externalGuide,externalStage,relationshipOnlyGuide,onlyRelationshipStage,alignRelationActors,retainRelationshipScope,reviewEditFields,editedReviewJob,applyRelationshipReview,exportRelationshipBackup,externalSchema,segments,units,text,seed,joinStage,commit,schema:SCHEMA,relationshipSchema:RELATION_SCHEMA,busy:()=>!!task,stop:()=>{if(control)control.cancelled=true;AiAbort.abort('작업을 중단했어요. 다시 누르면 성공한 구간 다음부터 이어서 분석해요.');},guide:WISH_EXTERNAL_REBUILD_GUIDE,envelope,refuseNulled,nulledNotices,personContract,schema3:SCHEMA3};
 })();
@@ -60364,7 +60406,7 @@ function emptyCarrierBodyError(message,messageId,listed=null) {
     const detail=stripped.found&&!stripped.text.trim()?'Wish 숨김 주입 부분을 제외한 AI 본문이 없습니다.':!raw.trim()?'서버 응답에서 AI 답변 텍스트를 읽지 못했습니다.':'AI 본문을 사용할 수 없습니다.';
     const lookup=listed===true?'단건 조회와 최근 대화 조회에서 같은 메시지를 확인했습니다.':listed===false?'최근 대화에서도 같은 ID의 정상 AI 본문을 찾지 못했습니다.':'';
     const e=Error('이전 AI 답변 확인 실패: '+detail+' '+lookup+' 입력창 내용이나 기억 재구축 문제가 아닙니다. 새로고침 후에도 반복되면 해당 AI 답변의 본문을 확인해 주세요. 메시지 ID: '+String(messageId));
-    e.code='WISH_CARRIER_BODY_EMPTY';return e;
+    e.code='WISH_CARRIER_BODY_EMPTY';e.listed=listed;return e;
   }
 
 async function fetchMessage(chatId, messageId) {
@@ -60915,13 +60957,13 @@ async function fetchMessage(chatId, messageId) {
       const room=state.currentRoom,epoch=localRestoreEpoch;
       try{if(!room)throw Error('채팅방을 먼저 열어 주세요.');assertTarget(room,epoch,true);}
       catch(error){WUI.openSheet('secondaryPreflight',{message:text(error.message||error)});return false;}
-      const input=document.createElement('input');input.type='file';input.accept='.json,application/json';
-      input.onchange=async()=>{try{
+      const input=document.createElement('input');input.type='file';input.accept='.json,.txt,application/json,text/plain';
+      pickFile(input,async()=>{try{
         const f=input.files?.[0];if(!f)return;assertTarget(room,epoch,true);
         await WLOG.show('자료 준비 중…',async()=>{const data=await readImportedJsonFile(f,{label:'외부 AI 2차 재구축 JSON',maxBytes:40*1024*1024});
         assertTarget(room,epoch,true);await prepareImport(room,data);});
-      }catch(e){notify(text(e.message||e),'error',8000,{error:e});}finally{input.value='';}};
-      input.click();return true;
+      }catch(e){notify(text(e.message||e),'error',8000,{error:e});}finally{input.value='';}});
+      return true;
     }
     async function prepareImport(room,data){
       const epoch=localRestoreEpoch;assertTarget(room,epoch,true);
@@ -61040,7 +61082,7 @@ async function fetchMessage(chatId, messageId) {
           if(p&&e&&next.trim()===loreTextAtLevel(e,level))next=lore(p,e,level);
         }else if(i.group==='relationship'){
           const actual=(room.relationships||[]).find(r=>'relationship:'+r.id===i.slotId);
-          if(actual&&next===WishRelationships.body(actual))next=WishRelationships.body(actual,(field,source)=>lookup(key('relationship',actual.id),()=>stampValue(relationshipValue(actual)),field,source));
+          if(actual&&next===WishRelationships.body(actual)){const field=(name,source)=>lookup(key('relationship',actual.id),()=>stampValue(relationshipValue(actual)),name,source);next=WishRelationships.body(actual,field);if(i.relationshipLine===RecallSeat.relationshipLineText(actual)){const line='현재: '+String(field('current',actual.current)).trim();if(line!==i.relationshipLine)return {...i,content:next,relationshipLine:line};}}
         }else if(i.slotId==='__speech'){
           if(next===speechRelationsText(room))next=speechRelationsText(room,{noteTransform:speechNote});
         }else if(i.sourceSlotId==='logSummary'||i.group==='log-auto'||i.slotId==='logSummary'){
@@ -61304,8 +61346,11 @@ function carrierUtf16Refused() {
 const carrierUtf16={on:!['stay','userscripts','adguard'].includes(carrierUtf16Env.name.toLowerCase())&&!(age=>age>=0&&age<7*864e5)(Date.now()-(carrierUtf16Refused()?.at??NaN)),reason:'',answered:false,refused4xx:false};
 
 function carrierBody(text,encoding='') {
-    const json=JSON.stringify({message:String(text??'')}),utf8=coreUtf8ByteLength(json);
-    return (encoding?encoding==='utf-16le':carrierUtf16.on&&json.length*2<utf8)?{encoding:'utf-16le',bytes:json.length*2}:{encoding:'utf-8',bytes:utf8};
+    const json=JSON.stringify({message:String(text??'')});
+    return carrierBodySize(json.length,coreUtf8ByteLength(json),encoding);
+  }
+  function carrierBodySize(jsonLength,utf8,encoding='') {
+    return (encoding?encoding==='utf-16le':carrierUtf16.on&&jsonLength*2<utf8)?{encoding:'utf-16le',bytes:jsonLength*2}:{encoding:'utf-8',bytes:utf8};
   }
 
 function carrierBodyBytes(text) {
@@ -61372,6 +61417,7 @@ function carrier413Error(error,what='주입 내용') {
 
 async function chooseAllFitItemsWithinBytes(room,items,original,query,options,build,budget=APP.carrierByteBudget) {
     let selection=await chooseAllFitItems(room,items,original,query,options),text=build(selection.items),bytes=carrierBodyBytes(text);
+    if(selection.method==='all-fit'&&(items||[]).some(i=>i?.relationshipLine!=null)){text=build(items.map(RecallSeat.whole));bytes=carrierBodyBytes(text);}
     if(bytes<=budget)return selection;
     const core=(items||[]).filter(i=>allFitRequired(i)&&injectionCadenceKind(i)!=='threads'),fitted=fitRequiredCarrierItems(room,core,xs=>coreCarrierWithinLimits(room,build(xs),Number(selection.limit)||allFitLimit(room),budget)),coreText=build(fitted),coreBytes=carrierBodyBytes(coreText);
     if(coreBytes>budget)throw requiredByteError(coreBytes,budget);
@@ -61478,6 +61524,309 @@ function requiredFitSteps(room,required){
   return {steps,at};
 }
 
+const RecallSeat=(()=>{
+  const stats={seat:0,seatOff:0,cards:0,r2a:0,k4:0,echo:0,k11:0,warm:0};
+  const norm=s=>String(s||'').toLowerCase().replace(/[^0-9a-z가-힣]+/g,'');
+  // The same item without its line; the object itself when it has none.
+  const whole=item=>item&&item.relationshipLine!=null?(({relationshipLine,...rest})=>rest)(item):item;
+  const relationshipLineText=r=>'현재: '+String(r.current||'').trim();
+  const quoteOf=text=>{const m=/“([^”]+)”/.exec(String(text||''))||/"([^"]{6,})"/.exec(String(text||''));return m?m[1]:'';};
+  // 1-1 main pair: the NPC whose rows with the PC hold the most text; its rows always go whole.
+  const bodyLen=r=>String(r.current||'').length+String(r.trajectory||'').length+String(r.unresolved||'').length;
+  function mainPair(rows){
+    const sum=new Map();
+    for(const r of rows){if(!!r.speakerPC===!!r.targetPC)continue;const npc=speechNameKey(r.speakerPC?r.target:r.speaker);sum.set(npc,(sum.get(npc)||0)+bodyLen(r));}
+    let best=null,n=-1;for(const [k,v] of sum)if(v>n||(v===n&&k<best)){best=k;n=v;}
+    return new Set(rows.filter(r=>!!r.speakerPC!==!!r.targetPC&&speechNameKey(r.speakerPC?r.target:r.speaker)===best).map(r=>r.id));
+  }
+  // A name stands in a text when the lowercased text contains it, as today's lore titles are read: two letters or more (termAppears). A
+  // non-empty term its caller has normalized stands in a text when the text contains it, as today's relationship hit and lore triggers
+  // read theirs (termIncluded).
+  const termAppears=(text,term)=>{const t=String(term||'').trim().toLowerCase();return t.length>=2&&String(text||'').toLowerCase().includes(t);};
+  const termIncluded=(text,term)=>!!term&&String(text||'').includes(term);
+  // forms: Map id → 'full' | 'line'. tier 0 pinned, 1 main pair, 2 both people on the stage, 9 other. Pinned and main rows whole;
+  // on-stage rows whole while the whole rows stay within fullCap letters; the rest one line (a row with an empty 현재 stays whole).
+  function relationshipForms(rows,candidates,stageText,match=termIncluded,fullCap=6000){
+    const byId=new Map(rows.map(r=>[r.id,r])),main=mainPair(rows),forms=new Map(),tier=new Map(),st=speechNameKey(stageText);
+    const on=(name,aliases,pc)=>!!pc||[name,...(aliases||[])].some(n=>{const k=speechNameKey(n);return k&&match(st,k);});
+    for(const c of candidates){const r=byId.get(c.id);if(!r)continue;tier.set(c.id,r.pinned?0:main.has(r.id)?1:(on(r.speaker,r.speakerAliases,r.speakerPC)&&on(r.target,r.targetAliases,r.targetPC))?2:9);}
+    const lineOr=id=>String(byId.get(id)?.current||'').trim()?'line':'full';
+    const ordered=candidates.map((c,i)=>({c,i})).filter(x=>(tier.get(x.c.id)??9)<9).sort((a,b)=>tier.get(a.c.id)-tier.get(b.c.id)||a.i-b.i).map(x=>x.c);
+    let used=0;
+    for(const c of ordered){if(tier.get(c.id)>=2&&used+c.len>fullCap){forms.set(c.id,lineOr(c.id));continue;}used+=c.len;forms.set(c.id,'full');}
+    for(const c of candidates)if(!forms.has(c.id))forms.set(c.id,lineOr(c.id));
+    return {forms,tier,mainIds:main};
+  }
+  // K9 recall markers and the recall window: the marked sentence and the one after it; OOC lines, code and narration taken out.
+  const MARK=/(기억나|기억해|기억하|기억 안|생각나|그때|그날|그 시절|예전|옛날|지난번|저번)/,NARR=/\*[^*]*\*/g;
+  function cleanForMarkers(text){
+    let t=String(text||'').replace(/```[\s\S]*?```/g,' ');
+    t=t.split(/\n\s*\n/).map(b=>{const ls=b.split('\n'),i=ls.findIndex(l=>/^\s*[\[(（]\s*ooc/i.test(l));return i<0?b:ls.slice(0,i).join('\n');}).join('\n\n');
+    return t.replace(NARR,' ');
+  }
+  function recallWindow(userText){
+    const ss=cleanForMarkers(userText).split(/(?<=[.!?…~])\s+|\n+/).map(x=>x.trim()).filter(Boolean),keep=new Set();
+    ss.forEach((x,i)=>{if(MARK.test(x)){keep.add(i);if(i+1<ss.length)keep.add(i+1);}});
+    return {marked:keep.size>0,text:[...keep].sort((a,b)=>a-b).map(i=>ss[i]).join(' ')};
+  }
+  const dialogueOf=t=>String(t||'').replace(NARR,' ');
+  // K13 secret index: bigrams rare (df ≤ 4) over the secret texts and the stored memory; near = a gap word or two shared rare bigrams.
+  const GAP=/(모르|몰래|숨기|숨긴|숨겨|감추|감춘|감춰|거짓|듣지 못|보지 못|알지 못|눈치채지 못|비밀)/;
+  function bigrams(s){const out=new Set();for(const w of (String(s||'').toLowerCase().match(/[가-힣a-z0-9]+/g)||[]))for(let i=0;i+1<w.length;i++)out.add(w.slice(i,i+2));return out;}
+  function secretIndex(secretTexts,memTexts){
+    if(!secretTexts)return null;
+    const df=new Map();
+    for(const t of [...secretTexts,...memTexts])for(const g of bigrams(t))df.set(g,(df.get(g)||0)+1);
+    const sg=new Set();for(const t of secretTexts)for(const g of bigrams(t))if((df.get(g)||0)<=4)sg.add(g);
+    return {sg,n:secretTexts.length};
+  }
+  function secretNear(text,idx){if(GAP.test(text))return 'gap-word';let n=0;for(const g of bigrams(text))if(idx.sg.has(g)&&++n>=2)return 'shares-rare';return '';}
+  // Trigger hits on a text with the matcher m(text, word); the fuzzy ~ similarity never seats a card.
+  function triggerWords(triggers,text,m){
+    const q=String(text||'').toLowerCase(),out=[];
+    for(const raw of triggers||[]){
+      const t=String(raw||'').trim();if(!t)continue;
+      if(t.includes('&&')){const parts=t.split('&&').map(x=>x.trim().toLowerCase()).filter(Boolean);if(parts.length&&parts.every(p=>m(q,p)))out.push({word:t.toLowerCase(),parts});}
+      else{const w=(t.startsWith('~')?t.slice(1):t).trim().toLowerCase();if(w&&m(q,w))out.push({word:w,parts:[w]});}
+    }
+    return out;
+  }
+  // The room's dated log blocks and their lowercased texts, cached per room by the log slot's text (built ahead by RecallWarm in idle
+  // time, else once on first need). Shared by the echo drop, the card word counts and the one-place boost.
+  const blocksCache=new WeakMap();
+  function logBlocks(room){
+    const text=String((room?.slots||[]).find(s=>s.id==='logSummary')?.content||''),hit=blocksCache.get(room);
+    if(hit&&hit.text===text)return hit;
+    const blocks=text.trim()?parseDatedLogBlocks(text):[],blockNorm=[];
+    for(const b of blocks)blockNorm[b.index]=norm(b.raw||(String(b.events||'')+'\n'+String(b.body||'')));
+    const out={text,blocks,evTitle:blocks.map(b=>String(b.events||'').toLowerCase()),evText:blocks.map(b=>(String(b.events||'')+'\n'+String(b.body||'')).toLowerCase()),blockNorm,latest15:new Set(blocks.slice(-15).map(b=>b.key)),evCount:new Map()};
+    blocksCache.set(room,out);return out;
+  }
+  const evCountOf=(L,w)=>{let n=L.evCount.get(w);if(n==null){n=0;for(const t of L.evText)if(t.includes(w))n++;L.evCount.set(w,n);}return n;};
+  // The measure's own layout arithmetic (contextLayout · contextEnvelope · createWishContextMeasure), row by row, so the log share can
+  // be read without laying the chosen rows out again at every step.
+  function layoutSim(cleanLen){
+    const envBase=contextEnvelope({envelopeId:'',count:''}).length,guideLen=contextGuideText().length,endLen=1+APP.markerEnd.length,kinds=new Map();
+    let h=2166136261,n=0,sections=0,headers=0;
+    const fnv=(h0,s)=>{let x=h0;for(let i=0;i<s.length;i++){x^=s.charCodeAt(i);x=Math.imul(x,16777619);}return x;};
+    const hdr=(k,nt)=>contextGroupHeader(k,nt).length;
+    const total=(hh,nn,sec,hd,groups)=>cleanLen+2+envBase+('ctx_'+(hh>>>0).toString(36)).length+String(nn).length+guideLen+hd+sec+Math.max(0,groups+nn-1)*2+endLen;
+    const now=()=>n?total(h,n,sections,headers,kinds.size):cleanLen;
+    const peek=row=>{
+      if(!row.active)return {total:now(),kind:null};
+      const h2=fnv(n?fnv(h,'|'):h,row.identity),had=kinds.has(row.kind),nt0=had?kinds.get(row.kind):false,nt1=nt0||!!row.notation;
+      const headers2=headers+(had?hdr(row.kind,nt1)-hdr(row.kind,nt0):hdr(row.kind,nt1)),groups2=kinds.size+(had?0:1);
+      return {total:total(h2,n+1,sections+row.section.length,headers2,groups2),h:h2,n:n+1,sections:sections+row.section.length,headers:headers2,kind:row.kind,nt:nt1};
+    };
+    const commit=p=>{if(!p.kind)return;h=p.h;n=p.n;sections=p.sections;headers=p.headers;kinds.set(p.kind,p.nt);};
+    const parts=()=>({n,groups:kinds.size,idLen:('ctx_'+(h>>>0).toString(36)).length,kinds});
+    return {peek,commit,now,parts};
+  }
+  const rowLenOf=row=>row.active?row.section.length+2:0;
+  // An item as today's pick renders it: a relationship row whole, a key_quote card without the 2-B prefix; else the item itself.
+  const asToday=item=>item&&(item.relationshipLine!=null||item.loreType==='key_quote')?(({relationshipLine,loreType,...rest})=>rest)(item):item;
+  // A text's share of the carrier body (carrierBody: the JSON text of {message}): the escaped text's length and its UTF-8 bytes. Both
+  // add up over the pieces of a rendered text, so a pick's body is read without building it.
+  function jsonSize(text){const e=JSON.stringify(String(text??''));let b=0;for(let i=0;i<e.length;i++){const c=e.charCodeAt(i);if(c<0x80)b++;else if(c<0x800)b+=2;else if(c>=0xD800&&c<=0xDBFF){b+=4;i++;}else b+=3;}return {len:e.length-2,bytes:b-2};}
+  // Today's pick (the pick this core replaces) on this pool: every row as today renders it (asToday), the greedy fit in today's order
+  // under today's limit (allFitLimit), the lowest-ranked items out while the item-order render is over it (recent logs stay), then
+  // today's byte rounds (chooseAllFitItemsWithinBytes: the limit lowered in proportion, the 꼭 넣는 칸 as this pick sends them as the
+  // floor, four rounds) with the body read by jsonSize. lb = the log characters it takes (LB; required logs counted), taken = the
+  // optional ids it takes. Computed once per send (seat.today); throws on a layout mismatch.
+  function todayPick(room,pick){
+    const {measure,required,optional,ids,items}=pick,cleanLen=measure.totalLength([]),budget=pick.byteBudget||APP.safeCarrierPayloadBytes,wrap=JSON.stringify({message:''}).length;
+    const forms=new Map(),formOf=item=>{let f=forms.get(item);if(!f){f=asToday(item);forms.set(item,f);}return f;},rowOf=item=>measure.row(formOf(item));
+    const sizes=new Map(),sizeOf=text=>{let z=sizes.get(text);if(!z){z=jsonSize(text);sizes.set(text,z);}return z;};
+    const base=jsonSize(measure.clean+'\n\n'+contextEnvelope({envelopeId:'',count:''})+contextGuideText()+'\n'+APP.markerEnd);
+    // The pick laid out in item order: its length and its body's bytes.
+    const render=keep=>{
+      const sim=layoutSim(cleanLen),rows=[];
+      for(const item of items)if(keep.has(item)){const row=rowOf(item);sim.commit(sim.peek(row));rows.push(row);}
+      const p=sim.parts(),total=sim.now();
+      if(measure.totalLength(items.filter(i=>keep.has(i)).map(formOf))!==total)throw Error('layout mismatch');
+      if(!p.n){const bare=jsonSize(measure.clean);return {total,bytes:carrierBodySize(wrap+bare.len,wrap+bare.bytes).bytes};}
+      const ascii=p.idLen+String(p.n).length+Math.max(0,p.groups+p.n-1)*4;let len=base.len+ascii,bytes=base.bytes+ascii;
+      for(const row of rows)if(row.active){const z=sizeOf(row.section);len+=z.len;bytes+=z.bytes;}
+      for(const [k,nt] of p.kinds){const z=sizeOf(contextGroupHeader(k,nt));len+=z.len;bytes+=z.bytes;}
+      return {total,bytes:carrierBodySize(wrap+len,wrap+bytes).bytes};
+    };
+    // Suite already fits each candidate against both limits. Use that same prior pick
+    // for the log/card floor instead of upstream's proportional byte retry rounds.
+    const limit=pick.limit||allFitLimit(room),keep=new Set(required);
+    let r=render(keep);
+    for(const id of ids){const item=optional[id];if(!item)continue;keep.add(item);const trial=render(keep);if(trial.total<=limit&&trial.bytes<=budget)r=trial;else keep.delete(item);}
+    r={keep,...r};
+    let lb=0;for(const item of r.keep){const row=rowOf(item);if(row.active&&row.kind==='log')lb+=rowLenOf(row);}
+    return {lb,taken:new Set(ids.filter(id=>r.keep.has(optional[id])))};
+  }
+  // The people of the room (relationship rows, the cognition actors the warm-up read, 호칭 rows) as speechNameKey, 2 letters or more.
+  function personNames(room,live,warm){
+    const out=new Set(),add=v=>{const k=speechNameKey(v);if(k.length>=2)out.add(k);};
+    for(const r of live){for(const n of [r.speaker,...(r.speakerAliases||[])])add(n);for(const n of [r.target,...(r.targetAliases||[])])add(n);}
+    for(const a of warm?.actors||[]){add(a.name);for(const n of a.aliases||[])add(n);}
+    for(const s of room?.speechRelations||[]){add(s.speaker);add(s.target);}
+    return out;
+  }
+  // 2-A (stage 2) word former, as the one-place boost was measured with: the longest final particle off a Hangul word (no fallback to a
+  // shorter one); adverbs that end like a particle and verb forms stay whole.
+  const PARTICLES=[['으로부터','C'],['로부터','V'],['에게서',''],['한테서',''],['에서부터',''],['이라고','C'],['이라는','C'],['이라도','C'],['으로는','C'],['으로도','C'],['으로서','C'],['에서는',''],['에서도',''],['에게는',''],['에게도',''],['한테는',''],['한테도',''],['까지는',''],['까지도',''],['부터는',''],['라고','V'],['라는','V'],['라도','V'],['로는','V'],['로도','V'],['로서','V'],['처럼',''],['보다',''],['까지',''],['부터',''],['마저',''],['조차',''],['에게',''],['한테',''],['에서',''],['으로','C'],['이랑','C'],['께서',''],['에는',''],['에도',''],['은','C'],['는','V'],['을','C'],['를','V'],['이','C'],['가','V'],['과','C'],['와','V'],['로','V'],['랑','V'],['의',''],['도',''],['만',''],['에',''],['께','']].sort((a,b)=>b[0].length-a[0].length);
+  const ADVERBS=new Set(['그대로','이대로','저대로','제대로','마음대로','멋대로','그래도','이래도','저래도','하나도','조금도','아직도','적어도','그나마','이제야','그제야','비로소','언제나','너무나','정말로','진짜로','실제로']);
+  const jong=ch=>{const c=ch.charCodeAt(0)-0xAC00;return c>=0&&c<11172?c%28:-1;};
+  function stripParticle(word){
+    const w=String(word||'');
+    if(!/^[가-힣]+$/.test(w)||ADVERBS.has(w))return null;
+    const hit=PARTICLES.find(([p])=>w.length>p.length&&w.endsWith(p));if(!hit)return null;
+    const [p,cls]=hit,stem=w.slice(0,-p.length);
+    if(stem.length<2)return null;
+    const j=jong(stem[stem.length-1]);if(j<0)return null;
+    if(cls==='C'&&j===0)return null;
+    if(cls==='V'&&j!==0&&!((p[0]==='로'||p==='랑')&&j===8))return null;
+    if(/[고지다며면서게던]$/.test(stem))return null;
+    return {stem,p};
+  }
+  // The window's words: 2 letters or more, their stems too, without stop words, markers and deictic words. Distinct: in an event title
+  // or a card name and in at most max(3, 2% of the events) events (a gate only; the words do not score).
+  const WSTOP=new Set(['그때','그날','그거','이거','저거','그것','이것','저것','거기','여기','저기','그런','이런','저런','그렇게','이렇게','우리','당신','제가','저는','내가','나는','너는','기억','생각','예전','옛날','지난번','저번','정말','진짜','그냥','조금','너무','아직','지금','그럼','근데','그래서','그리고','하지만','그래도','있잖아요','맞다','혹시','같이','다시','오늘','어제','그게','그건']);
+  const DEIX=/(그거|그것|저거|이거|거기|아까|방금|그 사람|그분|그 일|그 얘기)/;
+  function windowWords(text){
+    const out=new Set();
+    for(const raw of (String(text||'').toLowerCase().match(/[가-힣a-z0-9]{2,}/g)||[])){const s=stripParticle(raw),forms=[raw];if(s)forms.push(s.stem);for(const f of forms)if(f.length>=2&&!WSTOP.has(f)&&!MARK.test(f)&&!DEIX.test(f))out.add(f);}
+    return [...out];
+  }
+  function distinctWords(windowText,eventTitles,eventTexts,cardNames){
+    const cap=Math.max(3,Math.floor(0.02*eventTexts.length));
+    return windowWords(windowText).filter(w=>(eventTitles.some(t=>t.includes(w))||cardNames.some(n=>n.includes(w)))&&eventTexts.filter(b=>b.includes(w)).length<=cap);
+  }
+  // One place: the top block scores ≥ 1.25 × the best block farther than 3 blocks away.
+  function onePlace(scored){
+    if(!scored.length)return {on:false};
+    const s=[...scored].sort((a,b)=>b.s-a.s||b.idx-a.idx),top=s[0],other=s.find(x=>Math.abs(x.idx-top.idx)>3);
+    return other&&top.s<1.25*other.s?{on:false}:{on:true,top};
+  }
+  // The boost for a recall window: distinct words present, today's log scorer on the window (the recent and required logs skipped as
+  // the candidates skip them), the top 400 scored blocks, the one-place check; the set = blocks within 3 of the top or ≥ 60% of its
+  // score, with their window scores. Window over 400 letters: off (plan_final 조11). Computed once per send (seat.boost).
+  function windowBoost(room,win,skipItems){
+    if(win.text.length>400)return null;
+    const L=logBlocks(room),names=[];for(const p of activeLorePacks(room))for(const e of p.entries||[])names.push(String(e.name||'').toLowerCase());
+    if(!distinctWords(win.text,L.evTitle,L.evText,names).length)return null;
+    const excluded=new Set((room.autoLogExcludedKeys||[]).map(String)),skip=new Set([...excluded,...skipItems.map(i=>String(i.sourceKey||''))]);
+    let scored=scoreRelatedLogBlocks(L.blocks.filter(b=>!excluded.has(b.key)),win.text,skip,room,null).map(x=>({key:x.block.key,idx:x.block.index,s:x.score})).filter(x=>x.s>0);
+    if(scored.length>400)scored=scored.sort((a,b)=>b.s-a.s||b.idx-a.idx).slice(0,400);
+    const op=onePlace(scored);if(!op.on)return null;
+    const chosen=scored.filter(x=>Math.abs(x.idx-op.top.idx)<=3||x.s>=0.6*op.top.s).sort((a,b)=>b.s-a.s||b.idx-a.idx);
+    return {keys:chosen.map(x=>x.key),w:new Map(chosen.map(x=>[x.key,x.s]))};
+  }
+  // The seat order. pick = {measure, limit, required (as the fit sends them), optional, ids (today's order), items (the pool in item
+  // order), recent (ids), related (Set of ids the AI review marked related, or null)}; seat = {userText, userFrom, userTurn, scene,
+  // warm, allow} (today's pick cached as seat.today, the boost as seat.boost). Returns {ids, branches, used} or throws. ids = S0
+  // recent, S1 rows whole, S1b rows one line, S2 cards, S3 logs, S4 rows over, S5 today's cards left.
+  function seatOrder(room,pick,seat){
+    const {measure,limit,required,optional,ids}=pick;
+    if(seat.today===undefined)seat.today=todayPick(room,pick);
+    const F=Math.max(0,limit-measure.totalLength(required)),share=seat.today,LB=share.lb;
+    const rows=WishRelationships.normalize(room.relationships||[]),live=rows.filter(r=>r.enabled!==false),relById=new Map(rows.map(r=>['relationship:'+r.id,r])),main=mainPair(live);
+    const persons=personNames(room,live,seat.warm),mainKeys=new Set();
+    for(const r of live)if(main.has(r.id))for(const n of [r.speaker,...(r.speakerAliases||[]),r.target,...(r.targetAliases||[])])mainKeys.add(speechNameKey(n));
+    const entries=new Map();for(const p of activeLorePacks(room))for(const e of p.entries||[])entries.set(p.scopeId+'\u0000'+e.id,e);
+    const view=[];
+    for(const id of ids){
+      const item=optional[id];if(!item)continue;
+      const row=measure.row(item),kind=injectionCadenceKind(item),v={id,item,kind,autoType:String(item.autoType||''),compact:item.relationshipLine!=null,rowLen:rowLenOf(row),kw:Number(item.recallKeywordScore??item.recallScore??0),relTier:9,card:null,words:null};
+      if(kind==='relationship'&&!v.compact){const r=relById.get(item.slotId);v.relTier=r?.pinned||(item.quickChoice?.version===2&&item.quickChoice.action==='include')?0:r&&main.has(r.id)?1:String(r?.current||'').trim()?2:9;}
+      if(kind==='lore'){const e=entries.get(String(item.packId)+'\u0000'+String(item.entryId));if(e){const k=speechNameKey(e.name);v.card={name:String(e.name||''),aliases:(Array.isArray(e.entities)?e.entities:[]).map(String),triggers:e.triggers||[],type:String(e.type||''),text:String(item.content||''),quote:e.exactQuote||quoteOf(item.content),person:persons.has(k),personMain:persons.has(k)&&mainKeys.has(k)};}}
+      view.push(v);
+    }
+    const caps={s1:Math.min(6000,0.22*F),s1b:Math.min(5000,0.18*F),s2:Math.min(4000,0.15*F)},seated=new Set(),order=[],branches=['seat'];
+    const put=x=>{seated.add(x.id);order.push(x.id);};
+    const take=(xs,cap)=>{let used=0;const over=[];for(const x of xs){if(used+x.rowLen>cap){over.push(x);continue;}used+=x.rowLen;put(x);}return {used,over};};
+    const recent=view.filter(x=>x.autoType==='recent-log');for(const x of recent)put(x);
+    const rels=view.filter(x=>x.kind==='relationship');
+    const s1=take(rels.filter(x=>!x.compact).map((x,i)=>({x,i})).sort((a,b)=>a.x.relTier-b.x.relTier||a.i-b.i).map(o=>o.x),caps.s1),s1b=take(rels.filter(x=>x.compact),caps.s1b);
+    // S2 cards: only with the secret index (RecallWarm) and the 'cards' branch allowed. Condition 1: 1a the USER names the card, 1b a
+    // window word calls it, 1c the scene names it on a marked turn, 1d (K19) the AI review marked it related and today's pick takes
+    // it; 3 not near a secret; 4 a quote already in a recent log sits out; 5 shared or one-letter aliases do not count; a word that
+    // calls many cards seats none. Names are read as today's lore titles are (termAppears), trigger words as today's lore triggers are
+    // (termIncluded). Without the index (not warm yet, or stale after a memory change until the idle rebuild) or without the branch
+    // (the reroll of such a send), the cards today's pick takes keep their places before the logs: the card set is today's.
+    const cards=view.filter(x=>x.kind==='lore'),secret=seat.warm?.secret||null;let s2={used:0,over:[]};
+    const userOn=!!seat.userTurn&&seat.userFrom!=='fallback',userText=userOn?String(seat.userText||''):'',win=userOn?recallWindow(userText):{marked:false,text:''};
+    if(secret&&seat.allow('cards')){
+      branches.push('cards');
+      const dialogue=dialogueOf(userText),scene=String(seat.scene||''),L=logBlocks(room),N=L.blocks.length,common=w=>evCountOf(L,w)>Math.max(20,0.1*N),recentBodies=recent.map(x=>String(x.item.content||''));
+      const aliasCount=new Map();for(const x of cards)if(x.card)for(const n of [x.card.name,...x.card.aliases]){const k=speechNameKey(n);if(k)aliasCount.set(k,(aliasCount.get(k)||0)+1);}
+      const ok=[],m=termAppears;
+      for(const x of cards){
+        const c=x.card;if(!c)continue;
+        if(c.person){if(c.personMain)continue;if(!(win.marked&&m(win.text,c.name)))continue;}
+        const names=[c.name,...c.aliases.filter(a=>speechNameKey(a).length>=2&&aliasCount.get(speechNameKey(a))===1)];
+        const a1=names.some(n=>m(dialogue,n)),words=!a1&&win.marked?triggerWords(c.triggers,win.text,termIncluded).filter(h=>!h.parts.every(common)):[];
+        const b1=words.length>0,c1=!a1&&!b1&&win.marked&&names.some(n=>m(scene,n)),d1=!!pick.related?.has(x.id)&&share.taken.has(x.id);
+        if(!(a1||b1||c1||d1))continue;
+        if(secretNear(c.name+'\n'+c.text,secret))continue;
+        const q=norm(c.quote);if(c.type==='key_quote'&&q.length>=10&&recentBodies.some(b=>norm(b).includes(q)))continue;
+        x.words=a1||c1||d1?null:words.map(h=>h.word);ok.push(x);
+      }
+      const cnt=new Map();for(const x of ok)for(const w of x.words||[])cnt.set(w,(cnt.get(w)||0)+1);
+      for(let i=ok.length-1;i>=0;i--){const x=ok[i];if(x.words&&!x.words.some(w=>cnt.get(w)===1))ok.splice(i,1);}
+      s2=take(ok.map((x,i)=>({x,i})).sort((a,b)=>b.x.kw-a.x.kw||a.i-b.i).map(o=>o.x),caps.s2);
+      stats.cards+=ok.length-s2.over.length;
+    }
+    else for(const x of cards)if(share.taken.has(x.id))put(x);
+    // S3 logs: today's order inside today's log share less the recent logs and the required logs (pinned·manual), filled by row length.
+    const s0len=recent.reduce((n,x)=>n+x.rowLen,0),reqLogLen=required.reduce((n,i)=>injectionCadenceKind(i)==='log'?n+rowLenOf(measure.row(i)):n,0),roomLeft=Math.max(0,LB-s0len-reqLogLen);
+    const baseLogs=view.filter(x=>x.kind==='log'&&!seated.has(x.id)),fillLogs=list=>{let used=0;const inn=[];for(const x of list){if(used+x.rowLen>roomLeft)continue;used+=x.rowLen;inn.push(x);}return {inn,used};};
+    let s3=fillLogs(baseLogs);
+    // 2-A (stage 2): on a marked USER turn whose recall window points at one place in the saved logs, the blocks of that place get their
+    // window score on top of their rank score inside the S3 room ('add'); K4: while one of today's first ten logs or a latest-fifteen
+    // block drops out, the lowest boosted block goes back to its own place and the fill is redone.
+    if(seat.allow('r2a')&&userOn&&win.marked){
+      if(seat.boost===undefined)seat.boost=windowBoost(room,win,[...required.filter(i=>injectionCadenceKind(i)==='log'),...recent.map(x=>x.item)]);
+      const boost=seat.boost;
+      if(boost){
+        const L=logBlocks(room),baseIn=new Set(s3.inn.map(x=>x.id)),logView=view.filter(x=>x.kind==='log'&&x.autoType!=='recent-log');
+        const protect=[...new Set([...logView.slice(0,10).map(x=>x.id),...logView.filter(x=>L.latest15.has(x.item.sourceKey)).map(x=>x.id)])].filter(id=>baseIn.has(id));
+        let keys=boost.keys.filter(k=>baseLogs.some(x=>x.item.sourceKey===k)),restored=0;
+        for(;;){
+          const set=new Set(keys),list=baseLogs.map((x,i)=>({x,i,s:x.kw+(set.has(x.item.sourceKey)?Number(boost.w.get(x.item.sourceKey)||0):0)})).sort((a,b)=>b.s-a.s||a.i-b.i).map(o=>o.x);
+          const r=fillLogs(list),inn=new Set(r.inn.map(x=>x.id));
+          if(protect.every(id=>inn.has(id))||!keys.length){s3=r;break;}
+          keys=keys.slice(0,-1);restored++;
+        }
+        stats.r2a++;stats.k4+=restored;branches.push('r2a');
+      }
+    }
+    for(const x of s3.inn)put(x);
+    for(const x of [...s1.over,...s1b.over])put(x);
+    // S5 leftover: the cards today's pick takes (todayPick: today's rows, limit and byte rounds) and the seat did not place follow in
+    // today's order, so the fit sends them while space is left under the limit (the byte rounds refit the same way); the logs keep
+    // today's share (LB), so a room with many cards and few logs sends no fewer cards than today.
+    for(const x of cards)if(!seated.has(x.id)&&share.taken.has(x.id))put(x);
+    // Suite cards and timeline extensions retain their existing opportunity to fit;
+    // the upstream planner only knows native log/lore/relationship candidates.
+    for(const x of view)if(!seated.has(x.id)&&String(x.autoType).startsWith('suite'))put(x);
+    stats.seat++;
+    return {ids:order,branches,used:{s0:s0len,s1:s1.used,s1b:s1b.used,s2:s2.used,s3:s3.used,F,LB}};
+  }
+  // ids ⊆ todayIds, no id twice, the recent logs first in their order.
+  function validSeatOrder(ids,todayIds,recent){const set=new Set(todayIds),seen=new Set();for(const id of ids){if(!set.has(id)||seen.has(id))return false;seen.add(id);}return recent.every((id,i)=>ids[i]===id);}
+  // 메아리 빼기: a key_quote card picked next to the earliest saved log block that already carries its quote.
+  function echoDrop(room,selected){
+    const out=new Set(),quotes=selected.filter(i=>injectionCadenceKind(i)==='lore'&&!allFitRequired(i));
+    if(!quotes.length)return out;
+    const inLogs=new Set(selected.filter(i=>injectionCadenceKind(i)==='log'&&i.logIndex!=null).map(i=>Number(i.logIndex)));
+    if(!inLogs.size)return out;
+    const L=logBlocks(room),entries=new Map();for(const p of activeLorePacks(room))for(const e of p.entries||[])entries.set(p.scopeId+'\u0000'+e.id,e);
+    for(const item of quotes){
+      const e=entries.get(String(item.packId)+'\u0000'+String(item.entryId));if(!e||e.type!=='key_quote')continue;
+      const q=norm(e.exactQuote||quoteOf(item.content));if(q.length<10)continue;
+      let first=-1;for(let i=0;i<L.blockNorm.length;i++)if(L.blockNorm[i]&&L.blockNorm[i].includes(q)){first=i;break;}
+      if(first>=0&&inLogs.has(first)){out.add(item);stats.echo++;}
+    }
+    return out;
+  }
+  return {stats,whole,relationshipForms,relationshipLineText,recallWindow,cleanForMarkers,dialogueOf,logBlocks,todayPick,asToday,jsonSize,seatOrder,validSeatOrder,echoDrop,secretIndex,secretNear,bigrams,termAppears,termIncluded,windowWords,distinctWords,onePlace,stripParticle};
+})();
 function requiredFitFloor(room,required){try{const plan=requiredFitPlan(room,required);return plan.at(plan.steps.length);}catch(error){console.debug('[Wish] required fit skipped',error);return required;}}
 
 function fitRequiredCarrierItems(room, required, fits) {
@@ -61509,23 +61858,25 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
   const requestedBytes=Number(options.byteBudget),byteBudget=Number.isFinite(requestedBytes)&&requestedBytes>0?Math.min(APP.safeCarrierPayloadBytes,Math.floor(requestedBytes)):APP.safeCarrierPayloadBytes;
   const measure=createWishContextMeasure(original,room),wire=options.messageText||((xs)=>buildInjectedMessage(original,buildContextBlockFromItems(xs,room))),exactSize=options.totalLength||((xs)=>wire(xs).length);
   let size=options.totalLength||((xs)=>measure.totalLength(xs)),payloadMeasure=options.messageText?xs=>coreCarrierPayloadBytes(wire(xs)):xs=>measure.payloadBytes(xs);
-  const total=exactSize(items),fullPayloadBytes=coreCarrierPayloadBytes(wire(items));if(size(items)!==total)size=exactSize;
-  if(payloadMeasure(items)!==fullPayloadBytes)payloadMeasure=xs=>coreCarrierPayloadBytes(wire(xs));
-  if(total<=limit&&fullPayloadBytes<=byteBudget&&!options.selective)return {items,method:'all-fit',total,fullTotal:total,payloadBytes:fullPayloadBytes,fullPayloadBytes,omitted:0,error:'',limit};
+  const wholeItems=items.some(i=>i?.relationshipLine!=null)?items.map(RecallSeat.whole):items;
+  const total=exactSize(items),whole=exactSize(wholeItems),fullPayloadBytes=coreCarrierPayloadBytes(wire(wholeItems));if(size(items)!==total)size=exactSize;
+  if(payloadMeasure(items)!==coreCarrierPayloadBytes(wire(items)))payloadMeasure=xs=>coreCarrierPayloadBytes(wire(xs));
+  if(whole<=limit&&fullPayloadBytes<=byteBudget&&!options.selective)return {items,method:'all-fit',total,fullTotal:whole,payloadBytes:coreCarrierPayloadBytes(wire(items)),fullPayloadBytes,omitted:0,error:'',limit};
   const requiredTest=i=>allFitRequired(i)||(options.selective&&i.autoType==='recent-log');
   let required=items.filter(requiredTest);const optional=items.filter(i=>!requiredTest(i));
   const fitted=fitRequiredCarrierItems(room,required,xs=>coreCarrierWithinLimits(room,wire(xs),limit,byteBudget));
   if(fitted!==required){const swap=new Map(required.map((item,n)=>[item,fitted[n]]));items=items.map(item=>swap.get(item)||item);required=fitted;}
   assertCoreCarrierWithinLimits(room,wire(required),limit,byteBudget);
   // 수동 서버 복구는 같은 AI 장애를 다시 기다리지 않고 결정적인 로컬 순서로 재구성한다.
-  const cfg=!options.selective&&total<=APP.carrierSafeChars&&fullPayloadBytes<=byteBudget?{semantic:false,selector:false}:recallSelectionSettings(room),settings=loadAiSettings();
+  const cfg=!options.selective&&whole<=APP.carrierSafeChars&&fullPayloadBytes<=byteBudget?{semantic:false,selector:false}:recallSelectionSettings(room),settings=loadAiSettings();
   const local=optional.map((item,id)=>({item,id})).sort((a,b)=>Number(b.item.recallScore||0)-Number(a.item.recallScore||0)||Number(b.item.logIndex||0)-Number(a.item.logIndex||0));
   const direct=item=>Number(item.recallKeywordScore??item.recallScore??0)>0;
   const sourcePayload=local.map(({item,id})=>({id,title:String(item.title||''),kind:injectionCadenceKind(item),text:String(item.content||''),local_match:direct(item)}));
   const indexed=WishEconomy.settings(room).index,payload=indexed?WishEconomy.prepare(room,sourcePayload):sourcePayload;
   // 후보의 관련도 순위는 최종 글자 예산과 무관하므로 50k→45k 재시도에서도 그대로 재사용합니다.
-  const key=JSON.stringify(['selection-low-v1',!!options.selective,WishPromptGuides.selectorStamp(),indexed,cfg,query,original,String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),sourcePayload,items.map(i=>[i.slotId,i.content,i.autoType]),settings.provider,getAiSelectedModel(settings),isAiProviderReady(settings)]);
+  const key=JSON.stringify(['selection-low-v1',!!options.selective,WishPromptGuides.selectorStamp(),indexed,cfg,query,original,options.sceneText??original,String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),sourcePayload,items.map(i=>[i.slotId,i.content,i.autoType]),settings.provider,getAiSelectedModel(settings),isAiProviderReady(settings)]);
   let rank=allFitRankCache.get(key);
+  const recent=local.filter(x=>x.item.autoType==='recent-log').map(x=>x.id),hoist=ids=>recent.length?[...recent,...ids.filter(id=>!recent.includes(id))]:ids;
   if(rank?.method==='local-fallback'&&Date.now()-Number(rank.at||0)>=30000){allFitRankCache.delete(key);rank=null;}
   if(options.preferredKeys){const positions=new Map(optional.map((item,id)=>[pendingItemIdentity(item),id]));rank={ids:options.preferredKeys.filter(k=>positions.has(k)).map(k=>positions.get(k)),method:options.preferredMethod||'local',error:''};}
   if(!rank){
@@ -61541,7 +61892,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
         for(const candidates of batches){
           const remaining=selectionDeadline-Date.now();
           if(remaining<=0)throw Error(`주입 후보 AI 선별이 ${Math.ceil(RECALL_SELECTION_TIMEOUT_MS/1000)}초를 넘어 로컬 선별로 전환합니다.`);
-          const result=await callAiProvider(settings,getGuideText('apiRecall')+(indexed?getGuideText('apiIndex'):''),JSON.stringify({mode:cfg,query:String(query).slice(-8000),scene_context:{previous_answer_tail:stripAutomationNoise(original,true).slice(-6000),current_state_excerpt:String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),scope:'읽기 전용 일부 문맥 · 신규 사실 생성 금지'},candidates}),{taskKind:'select',responseMimeType:'application/json',maxOutputTokens:indexed?Math.min(16384,8192+candidates.filter(x=>x.build_index).length*600):4096,timeoutMs:remaining,operationLabel:cfg.semantic&&cfg.selector?'관련 기억 찾기·우선순위 정하기':cfg.semantic?'표현이 다른 기억 찾기':'기억 우선순위 정하기'});
+          const result=await callAiProvider(settings,getGuideText('apiRecall')+(indexed?getGuideText('apiIndex'):''),JSON.stringify({mode:cfg,query:String(query).slice(-8000),scene_context:{previous_answer:recallSceneText(options.sceneText??original,true),current_state_excerpt:String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),scope:'읽기 전용 일부 문맥 · 신규 사실 생성 금지'},candidates}),{taskKind:'select',responseMimeType:'application/json',maxOutputTokens:indexed?Math.min(16384,8192+candidates.filter(x=>x.build_index).length*600):4096,timeoutMs:remaining,operationLabel:cfg.semantic&&cfg.selector?'관련 기억 찾기·우선순위 정하기':cfg.semantic?'표현이 다른 기억 찾기':'기억 우선순위 정하기'});
           const parsed=WLOG.parseJson(result.text,'주입 후보 선별',result.diagnostic),data=indexed?WishEconomy.decode(parsed):parsed,valid=new Set(candidates.map(x=>x.id)),seen=new Set();
           if(!data||Object.keys(data).some(k=>k!=='scores')||!Array.isArray(data.scores)||data.scores.length!==candidates.length)throw Error('후보 개수가 맞지 않는 AI 결과');
           for(const row of data.scores){if(!row||Object.keys(row).some(k=>!['id','relevance','related',...(indexed?['index_quotes']:[])].includes(k))||!valid.has(row.id)||seen.has(row.id)||!Number.isInteger(row.relevance)||row.relevance<0||row.relevance>100||typeof row.related!=='boolean')throw Error('유효하지 않은 AI 후보 선별');seen.add(row.id);scores.push(row);}
@@ -61550,16 +61901,26 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
         const byId=new Map(scores.map(x=>[x.id,x]));
         const eligible=local.filter(x=>!cfg.semantic||(!options.selective&&direct(x.item))||byId.get(x.id)?.related);
         if(cfg.selector)eligible.sort((a,b)=>byId.get(b.id).relevance-byId.get(a.id).relevance||a.id-b.id);
-        rank={ids:eligible.map(x=>x.id),method:'ai',error:''};
+        rank={ids:eligible.map(x=>x.id),method:'ai',error:'',relatedIds:scores.filter(x=>x.related).map(x=>x.id)};
       }catch(e){WLOG.fail('주입 후보 선별',e,{stage:'실패 후 로컬 후보로 대체'});rank={ids:local.map(x=>x.id),method:'local-fallback',error:String(e.message||e)};}
     }
     if(!options.forceLocal){rank.at=Date.now();allFitRankCache.set(key,rank);}while(allFitRankCache.size>8)allFitRankCache.delete(allFitRankCache.keys().next().value);
   }
+  let seatOff=false,seatBranches=null;
+  if(!options.selective&&recent.length)rank={...rank,ids:hoist(rank.ids)};
+  if(options.seat&&!options.selective&&!options.preferredKeys&&!options.totalLength&&!options.messageText){
+    if(size===exactSize)seatOff=true;
+    else try{
+      const plan=RecallSeat.seatOrder(room,{measure,limit,byteBudget,required,optional,ids:rank.ids,items,recent,related:Array.isArray(rank.relatedIds)?new Set(rank.relatedIds):null},options.seat);
+      if(plan&&RecallSeat.validSeatOrder(plan.ids,rank.ids,recent)){rank={...rank,ids:plan.ids};seatBranches=plan.branches;}else seatOff=true;
+    }catch(error){console.debug('[Wish] recall seat skipped',error);seatOff=true;}
+  }
   const fit=(length,bytes)=>{const chosen=[...required];for(const id of rank.ids){const item=optional[id],trial=item?[...chosen,item]:null;if(trial&&length(trial)<=limit&&bytes(trial)<=byteBudget)chosen.push(item);}const keep=new Set(chosen);return items.filter(item=>keep.has(item));};
   let selected=fit(size,payloadMeasure),selectedTotal=exactSize(selected),selectedPayload=coreCarrierPayloadBytes(wire(selected));
   if(size(selected)!==selectedTotal||payloadMeasure(selected)!==selectedPayload||selectedTotal>limit||selectedPayload>byteBudget){selected=fit(exactSize,xs=>coreCarrierPayloadBytes(wire(xs)));selectedTotal=exactSize(selected);selectedPayload=coreCarrierPayloadBytes(wire(selected));}
-  assertCoreCarrierWithinLimits(room,wire(selected),limit);
-  return {items:selected,method:rank.method,error:rank.error,total:selectedTotal,fullTotal:total,payloadBytes:selectedPayload,fullPayloadBytes,omitted:items.length-selected.length,limit,rankedKeys:rank.ids.map(id=>optional[id]).filter(Boolean).map(pendingItemIdentity)};
+  if(!options.totalLength&&!options.messageText)try{const echoed=RecallSeat.echoDrop(room,selected);if(echoed.size){selected=selected.filter(i=>!echoed.has(i));selectedTotal=exactSize(selected);selectedPayload=coreCarrierPayloadBytes(wire(selected));}}catch(error){console.debug('[Wish] recall seat skipped',error);}
+  assertCoreCarrierWithinLimits(room,wire(selected),limit,byteBudget);
+  return {items:selected,method:rank.method,error:rank.error,total:selectedTotal,fullTotal:whole,payloadBytes:selectedPayload,fullPayloadBytes,omitted:items.length-selected.length,limit,rankedKeys:rank.ids.map(id=>optional[id]).filter(Boolean).map(pendingItemIdentity),...(seatOff?{seatOff:true}:{}),...(seatBranches?{seatBranches}:{})};
 
     } finally {finish();}
   }
@@ -61752,7 +62113,7 @@ function quickRemovedPendingItems(pending) {
   const WISH_CONTEXT_GUIDE = "[RP 연속성 참고]\n아래는 RP의 진행 지시·설정·기억을 모은 관리 자료다. 지시와 참고 내용을 구분해 적용한다. 블록·안내문 자체는 출력하거나 극중 정보로 취급하지 않으며, 기록된 내용은 인물별 경험·인지 범위에서 활용한다.\n사실·시점: 사용자의 직접 지시·정정(OOC)과 RP에서 확정된 최신 변화가 저장 기록보다 우선한다. 저장값이 충돌하면 현재 장면 시점에 유효한 최신 확정값을 우선하고, 선후가 불명확하면 해당 정보의 전용 칸을 기준으로 한다. 발언·주장·생각의 존재와 그 내용의 진위는 별개다. 과거 장면은 당시 인지 범위를 따르며, 옛 값의 재현·언급은 현재값의 변경이 아니다.\n사용: 기록은 필요할 때 참고하며, 실렸다는 이유로 모두 드러내거나 기록된 반응을 매번 재현할 필요는 없고, 아직 결말이 나지 않은 서사 고리도 장면이 그 일로 이어질 때 자연스럽게 반영할 뿐 억지로 꺼내거나 해결하지 않는다. 기록에 없는 과거를 없던 일로 단정하거나 임의로 채우지 않는다. 응답은 저장 기록체가 아닌 해당 RP의 언어·문체·출력 지시를 따른다.\n표기: 기호는 각 기록의 작성 규약을 따르고, 규약이 드러나지 않으면 문맥으로 읽는다. 뜻이 분명하지 않은 기호로 방향·선후·인과를 단정하지 않는다. 인용·약속어·암호·사용자 작성문의 기호는 원래 뜻을 유지한다.\n\n";
   const WISH_CONTEXT_GROUPS = Object.freeze([["extra","진행 규칙 · 기타(OOC)","사용자가 직접 적은 진행·문체·출력 관련 지시와 메모다."],["character","캐릭터 설정","사용자가 직접 적은 인물 설정이다. 이후 RP에서 확정된 변화가 아직 반영되지 않았을 수 있다."],["lore","자료집","세계관·장소·조직·물건·복장·대사 등을 모은 참고 자료다. 카드에 따라 현재값과 과거 정보, 확정 설정과 소문·주장, 실제 발언과 예시가 함께 있을 수 있다. 과거 대사는 회상하거나 되받을 때 쓰는 자료이며 그대로 되풀이하지 않는다."],["misc","기타 참고","다른 분류에 속하지 않는 참고 자료다."],["log","날짜로그","지난 RP 사건의 날짜별 기록이며, 전체가 아닌 선별된 일부일 수 있다."],["relationship","관계·감정선","인물 사이의 관계·감정·태도를 방향별로 기록한 것으로, '현재'는 최근 저장 시점의 값이고 '핵심 전환'은 지난 경위다. A → B는 A가 B를 보는 관계·감정·태도이며, 반대 방향이나 상대의 인지 여부와는 별개다."],["cognition","인지 경계","인물별로 알고 있는 정보·아직 모르는 정보·인지 여부가 확인되지 않은 정보를 정리한 것이다."],["speech","현재 호칭·말투 · 화자 → 상대","최근 저장 시점에 유효한 호칭과 말투다. 예로 적힌 말버릇은 말투를 보여 주는 것이며 매 답장 되풀이하지 않는다."],["threads","서사 고리","약속의 A→B는 A가 B에게 한 약속이다. 제목과 인물 뒤의 내용은 기한과 최근 저장 시점까지의 진행이다. 사용자 캐릭터의 약속·목표는 그 이행을 대신 쓰지 않는다."],["currentState","현재상태","최근 저장 시점까지 이어지고 있는 상황·약속·제약이다. 습관·모티프는 자연스러운 계기에만 쓰고 매 답장 되풀이하지 않는다. 사용자 캐릭터의 습관은 상대가 알아보는 단서로만 쓰고, 그 행동·대사를 대신 쓰지 않는다."]].map(row=>Object.freeze(row)));
   const WISH_CONTEXT_GROUP_MAP = new Map(WISH_CONTEXT_GROUPS.map(row=>[row[0],row]));
-  const WISH_CONTEXT_FIELDS = Object.freeze(['slotId','sourceSlotId','sourceKey','title','group','content','logIndex','autoType','packId','entryId','compressionLevel']);
+  const WISH_CONTEXT_FIELDS = Object.freeze(['slotId','sourceSlotId','sourceKey','title','group','content','logIndex','autoType','packId','entryId','compressionLevel','relationshipLine','loreType']);
   const WISH_RELATIONSHIP_LEGACY_HEAD = "[방향별 관계 기억 · 타인에게 자동 공유되는 지식 아님 · 과거 전환은 현재 감정 아님 · 매 장면 같은 반응을 강제하지 않음 · 이후 직접 RP의 명시적 변화 우선]\n";
 
   function contextGroupOf(item){
@@ -61766,6 +62127,8 @@ function quickRemovedPendingItems(pending) {
   function contextItemSection(item,kind=contextGroupOf(item)){
     let raw=String(item.content||'').trim();
     if(kind==='relationship'&&raw.startsWith(WISH_RELATIONSHIP_LEGACY_HEAD))raw=raw.slice(WISH_RELATIONSHIP_LEGACY_HEAD.length);
+    // 관계 한 줄 (recall core): a row off the stage renders its 현재 line in place of the whole text; content and identity stay the row's.
+    if(kind==='relationship'&&typeof item.relationshipLine==='string'&&item.relationshipLine.trim())raw=item.relationshipLine.trim();
     const content=safeForHtmlComment(raw);
     // Stored section headings "## n." go one level below the group heading "## 현재상태".
     if(kind==='currentState')return content.replace(/^((?:[^\S\n]|[\u200b\ufeff])*)##(?=[^\S\n]*\d+[^\S\n]*[.)．])/gm,'$1###');
@@ -61774,7 +62137,7 @@ function quickRemovedPendingItems(pending) {
     let heading=String(item.title||item.slotId||'메모').trim();
     if(kind==='lore')heading=heading.replace(/^자료집 · /,'');
     else if(kind==='relationship')heading=heading.replace(/ · 관계·감정선$/,'');
-    return '### '+safeForHtmlComment(heading)+'\n'+content;
+    return '### '+safeForHtmlComment(heading)+'\n'+(kind==='lore'&&item.loreType==='key_quote'?'(당시 발언) ':'')+content;
   }
   function contextGuideText(){return WISH_CONTEXT_GUIDE;}
   function contextRow(item,room=null){
@@ -61782,7 +62145,7 @@ function quickRemovedPendingItems(pending) {
     const section=active?contextItemSection(item,kind):'';
     return {active,kind,section,notation:SecondaryRebuild.hasContextNotation(String(item.content||'').trim(),room),
       logIndex:item.logIndex!=null&&Number.isFinite(Number(item.logIndex))?Number(item.logIndex):null,
-      identity:active?JSON.stringify([item.slotId,item.sourceSlotId,item.sourceKey,item.title,item.group,item.logIndex,String(item.content||'').length,simpleHash(item.content||'')]):''};
+      identity:active?JSON.stringify([item.slotId,item.sourceSlotId,item.sourceKey,item.title,item.group,item.logIndex,String(item.content||'').length,simpleHash(item.content||''),...(item.relationshipLine?[item.relationshipLine]:[])]):''};
   }
   function contextLayout(rows,render=false){
     const buckets=new Map(),identities=[];let count=0;
@@ -61856,7 +62219,7 @@ function quickRemovedPendingItems(pending) {
       return measured(14+originalBytes+4+coreJsonStringBytes(contextEnvelope(layout))+guideBytes+bodyBytes+Math.max(0,pieces-1)*4+2+endBytes,14+originalUnits+4+units(contextEnvelope(layout))+guideUnits+bodyUnits+Math.max(0,pieces-1)*4+2+endUnits);
     }
     function matches(items){return contextLength(items)===buildContextBlockFromItems(items,room).length;}
-    return {contextLength,totalLength,payloadBytes,matches};
+    return {contextLength,totalLength,payloadBytes,matches,row,clean};
   }
 
   function resolvedContextBudget(room,value){
@@ -62699,6 +63062,68 @@ const RecallPrefetch=(()=>{
     }
     function drop(answerId){for(const job of [queued,...running])if(job?.answerId===answerId)job.on=false;if(queued&&!queued.on)queued=null;}
     return {schedule,drop};
+  })();
+
+  // 비밀 색인 warm-up (recall core S1-02): the K13 secret bigram index the seat's card conditions read, built in idle time after a poll
+  // or the start leaves the carrier lock, never in the send path (the cognition record is read here, by IndexedDB). Module WeakMap
+  // only; nothing on room or pending. get(room) hands the index to the pick only while the log text, the active packs and the
+  // relationship rows are the ones it was built on, and queues a rebuild when they are not; the cognition part is the one read at
+  // build time (the next poll rebuilds it). A carrier sync after a memory write (syncPendingCarrier) re-warms as a poll does.
+  const RecallWarm=(()=>{
+    const warm=new WeakMap();let queued=null;
+    const idle=run=>{if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:1200});else setTimeout(run,0);};
+    const slotTextOf=room=>String((room.slots||[]).find(s=>s.id==='logSummary')?.content||'');
+    const loreKeyOf=room=>activeLorePacks(room).flatMap(p=>(p.entries||[]).map(e=>String(e.id)+':'+String(e.updatedAt||''))).join(',');
+    // The rows' fields the index reads (not the evidence ledgers), so the key costs little when a send reads it.
+    const relKeyOf=room=>{const s=JSON.stringify((room.relationships||[]).map(r=>[r?.id,r?.enabled,r?.speaker,r?.speakerAliases,r?.target,r?.targetAliases,r?.current,r?.trajectory,r?.unresolved]));return s.length+':'+aiHashTiny(s);};
+    function schedule(room){
+      if(!room?.pending)return;
+      const job={on:true,epoch:localRestoreEpoch,live:()=>job.on&&!!room.pending&&localRestoreEpoch===job.epoch&&state.currentRoom===room},key=String(apiChatIdOf(room));queued=job;
+      const run=()=>{
+        if(queued!==job)return;
+        const busy=carrierOperations.get(key);if(busy){busy.catch(()=>{}).then(()=>idle(run));return;}
+        queued=null;if(!job.live())return;
+        void build(room,job,key).catch(error=>console.debug('[Wish] recall warm skipped',error));
+      };
+      idle(run);
+    }
+    async function build(room,job,key){
+      const finish=WishPerformance.start('recallWarm');
+      try{
+        const bridge=cogBridge(),cog=bridge?.snapshotRaw?await bridge.snapshotRaw(apiChatIdOf(room)).catch(()=>null):null;
+        if(!job.live())return;
+        const slotText=slotTextOf(room),loreKey=loreKeyOf(room),relKey=relKeyOf(room),cogRev=cog?String(cog.rev)+':'+String(cog.editRev):'nocog';
+        const stamp=[slotText.length,loreKey,relKey,cogRev].join('|'),prev=warm.get(room);
+        if(prev&&prev.slotText===slotText&&prev.stamp===stamp)return;
+        const same=()=>job.live()&&slotTextOf(room)===slotText&&loreKeyOf(room)===loreKey&&relKeyOf(room)===relKey;
+        let secretTexts=null;
+        if(cog&&Array.isArray(cog.facts)&&cog.state){
+          const facts=cog.facts.filter(f=>!f.archived),byId=new Map(facts.map(f=>[f.id,f])),conc=(cog.state.concealments||[]).filter(c=>c.active!==false),unaware=new Set();
+          for(const a of Object.values(cog.state.knowledge||{}))for(const [fid,v] of Object.entries(a||{}))if(v!=='aware')unaware.add(fid);
+          secretTexts=[...conc.map(c=>String(c.scope||'')+'\n'+String(byId.get(c.factId)?.label||'')+'\n'+String(byId.get(c.factId)?.content||'')),...[...unaware].map(id=>byId.get(id)).filter(Boolean).map(f=>String(f.label||'')+'\n'+String(f.content||''))];
+        }
+        const actors=(cog?.actors||[]).map(a=>({name:String(a.name||''),aliases:Array.isArray(a.aliases)?a.aliases.map(String):[],isPlayer:!!a.isPlayer}));
+        let secret=null;
+        if(secretTexts){
+          const memTexts=[...RecallSeat.logBlocks(room).blocks.map(b=>String(b.raw||'')),...activeLorePacks(room).flatMap(p=>(p.entries||[]).map(e=>String(e.name||'')+'\n'+loreEntrySourceText(e))),...WishRelationships.normalize(room.relationships||[]).filter(r=>r.enabled!==false).map(r=>[r.current,r.trajectory,r.unresolved].join('\n'))];
+          const df=new Map(),all=[...secretTexts,...memTexts];
+          for(let at=0;at<all.length;at+=50){
+            if(at){await new Promise(idle);if(!same())return;while(carrierOperations.has(key)){await carrierOperations.get(key).catch(()=>{});await new Promise(idle);if(!same())return;}}
+            for(const t of all.slice(at,at+50))for(const g of RecallSeat.bigrams(t))df.set(g,(df.get(g)||0)+1);
+          }
+          const sg=new Set();for(const t of secretTexts)for(const g of RecallSeat.bigrams(t))if((df.get(g)||0)<=4)sg.add(g);
+          secret={sg,n:secretTexts.length};
+        }
+        if(!same())return;
+        warm.set(room,{slotText,loreKey,relKey,stamp,secret,actors});RecallSeat.stats.warm++;
+      }finally{finish();}
+    }
+    function get(room){
+      const w=room?warm.get(room):null;if(!w)return null;
+      if(w.slotText!==slotTextOf(room)||w.loreKey!==loreKeyOf(room)||w.relKey!==relKeyOf(room)){schedule(room);return null;}
+      return {secret:w.secret,actors:w.actors};
+    }
+    return {schedule,get};
   })();
 
 function makeLorePackId() { return `lore:${crypto.randomUUID()}`; }
@@ -64305,7 +64730,7 @@ async function prepareSemanticSearchIndex(room, onProgress = null, options = {})
     return {
       slotId:`auto-lore:${pack.scopeId}:${entry.id}`, sourceSlotId:'__lore', sourceKey:entry.id,
       packId:pack.scopeId, entryId:entry.id, title:`자료집 · ${pack.name} / ${entry.name}`, group:'lore-auto',
-      content:loreTextAtLevel(entry,level), totalTurns:0, usedTurns:0,
+      content:loreTextAtLevel(entry,level), loreType:entry.type, totalTurns:0, usedTurns:0,
       autoType:entry.anchor?'pinned-lore':'related-lore', recallReason:reasons.join(' · ') || '현재 RP와 관련',
       recallScore:scored.score, recallKeywordScore:scored.keywordScore, recallSemanticScore:semantic,
       recallRank:rank, recallCandidateCount:count, compressionLevel:level,
@@ -64383,10 +64808,10 @@ async function prepareSemanticSearchIndex(room, onProgress = null, options = {})
 
 
 
-  async function refreshHybridRecall(room,queryText,{allowAi=false,allowSemanticNetwork=true,carrierSource=null,onProgress=null}={}) {
+  async function refreshHybridRecall(room,queryText,{allowAi=false,allowSemanticNetwork=true,carrierSource=null,onProgress=null,recall=null}={}) {
     const finish=typeof WishPerformance==='undefined'?()=>{}:WishPerformance.start('candidateRefresh');
     try {
-    if(WishSelectiveRecall.enabled(room))return await WishSelectiveRecall.refresh(room,queryText,{allowAi,allowSemanticNetwork,carrierSource,onProgress});
+    if(WishSelectiveRecall.enabled(room)){for(const item of room.pending?.items||[])delete item.relationshipLine;return await WishSelectiveRecall.refresh(room,queryText,{allowAi,allowSemanticNetwork,carrierSource,onProgress});}
     const pending=room?.pending;if(!pending)return {logs:0,lore:0,semanticUsed:false,reviewMethod:'local'};
     pending.recallNeedsRefresh=true;
     const epoch=localRestoreEpoch,replay=ExternalReplay.revision(apiChatIdOf(room)),route=state.routeEpoch,wasCurrent=state.currentRoom===room;
@@ -64394,6 +64819,11 @@ async function prepareSemanticSearchIndex(room, onProgress = null, options = {})
     const query=String(queryText||'').trim()||String(room.autoRecallContextText||'');
     const hasOriginal=!!carrierSource?.messageId&&typeof carrierSource.originalText==='string'&&!!carrierSource.originalText;
     const original=hasOriginal?carrierSource.originalText:String(pending.originalText||'');
+    const scene=hasOriginal&&String(carrierSource.sceneText||'').trim()?carrierSource.sceneText:original;
+    const rankQuery=[recallSceneText(scene),query].filter(Boolean).join('\n\n');
+    const allow=name=>!recall||!Array.isArray(recall.branches)||recall.branches.includes(name);
+    const seat=recall&&allow('seat')?{...recall,scene,allow}:null;
+    if(!seat)for(const item of pending.items||[])delete item.relationshipLine;
     const limit=allFitLimit(room);
     const previous=new Map((pending.items||[]).map(item=>[pendingItemIdentity(item),item]));
     const base=(pending.items||[]).filter(item=>item.autoType==='suite'||item.autoType==='suite-timeline'||!['log','lore'].includes(injectionCadenceKind(item)));
@@ -64405,8 +64835,8 @@ async function prepareSemanticSearchIndex(room, onProgress = null, options = {})
       let logCandidates,loreItems;
       if(ranked){
         const logSlot=(room.slots||[]).find(slot=>slot.id==='logSummary'),blocks=parseDatedLogBlocks(logSlot?.content||'');
-        logCandidates=collectLogRecallCandidates(room,query,semanticLogScores(room,blocks,vector),Number.MAX_SAFE_INTEGER,true);
-        const scored=room.loreConfig?.enabled===false?[]:scoreLoreEntries(room,query,vector,true);
+        logCandidates=collectLogRecallCandidates(room,rankQuery,semanticLogScores(room,blocks,vector),Number.MAX_SAFE_INTEGER,true);
+        const scored=room.loreConfig?.enabled===false?[]:scoreLoreEntries(room,rankQuery,vector,true);
         loreItems=scored.map((row,index)=>makeLorePendingItem(row,'full',index+1,scored.length)).filter(item=>item.content);
       }else{
         logCandidates=collectLogRecallCandidates(room,'',null,Number.MAX_SAFE_INTEGER,true,{rankRelated:false});
@@ -64422,20 +64852,21 @@ async function prepareSemanticSearchIndex(room, onProgress = null, options = {})
     let candidates=gather(false),normalPlan=candidates.normalPlan;
     // Measure the actual wire string, including the original AI response, headings,
     // comment escaping and approved compressed representations. No rough body sum.
-    const fullText=buildInjectedMessage(original,buildContextBlockFromItems(normalPlan,room)),fullTotal=fullText.length,fullPayloadBytes=coreCarrierPayloadBytes(fullText);
+    const fullText=buildInjectedMessage(original,buildContextBlockFromItems(normalPlan.map(RecallSeat.whole),room)),fullTotal=fullText.length,fullPayloadBytes=coreCarrierPayloadBytes(fullText);
     if(hasOriginal)assertRequiredRecallBudget(room,normalPlan,original);
     let selection=fullTotal<=limit&&fullPayloadBytes<=APP.safeCarrierPayloadBytes?{items:normalPlan,method:'all-fit',total:fullTotal,fullTotal,payloadBytes:fullPayloadBytes,fullPayloadBytes,omitted:0,error:'',limit}:null;
+    if(selection)for(const item of base)delete item.relationshipLine;
     if(selection){
       const done=typeof WishPerformance==='undefined'?()=>{}:WishPerformance.start('allFitWithoutRanking');done();
     }else{
       if(typeof onProgress==='function')onProgress({phase:'selecting',total:fullTotal,limit});
       // Only an over-budget inventory needs query vectors, lexical scores or AI ranks.
-      vector=cachedSemanticQueryVector(room,query);
+      vector=cachedSemanticQueryVector(room,rankQuery);
       candidates=gather(true);normalPlan=candidates.normalPlan;
-      if(allowAi&&allowSemanticNetwork&&hasOriginal&&!vector&&recallSelectionSettings(room).semantic&&!coreCarrierWithinLimits(room,buildInjectedMessage(original,buildContextBlockFromItems(normalPlan,room)),APP.carrierSafeChars)){
-        try{await semanticQueryVector(room,query);}catch(error){semanticError=String(error?.message||error);}
+      if(allowAi&&allowSemanticNetwork&&hasOriginal&&!vector&&recallSelectionSettings(room).semantic&&!coreCarrierWithinLimits(room,buildInjectedMessage(original,buildContextBlockFromItems(normalPlan.map(RecallSeat.whole),room)),APP.carrierSafeChars)){
+        try{await semanticQueryVector(room,rankQuery);}catch(error){semanticError=String(error?.message||error);}
         assertCurrent();
-        if(cachedSemanticQueryVector(room,query))return refreshHybridRecall(room,query,{allowAi,allowSemanticNetwork:false,carrierSource,onProgress});
+        if(cachedSemanticQueryVector(room,rankQuery))return refreshHybridRecall(room,query,{allowAi,allowSemanticNetwork:false,carrierSource,onProgress,recall});
       }
     }
     const basis=hybridRecallInputStamp(room);
@@ -64443,7 +64874,12 @@ async function prepareSemanticSearchIndex(room, onProgress = null, options = {})
     const inventory=JSON.stringify(['selection-low-v1',WishPromptGuides.selectorStamp(),recallSelectionSettings(room),SecondaryRebuild.stamp(room),WishEconomy.stamp(room),normalPlan.map(i=>[pendingItemIdentity(i),i.content,i.autoType]).sort((a,b)=>a[0].localeCompare(b[0]))]);
     const previousPlan=pending.recallPlan;
     const retained=!selection&&!allowAi&&previousPlan?.inventoryHash===aiHashTiny(inventory)&&previousPlan.inventoryChars===inventory.length&&previousPlan.method==='ai'&&Array.isArray(previousPlan.rankedKeys);
-    if(!selection)selection=await chooseAllFitItems(room,normalPlan,original,query,{forceLocal:!allowAi||!hasOriginal,...(retained?{preferredKeys:previousPlan.rankedKeys,preferredMethod:'ai'}:{})});
+    if(!selection){
+      if(seat)seat.warm=RecallWarm.get(room);
+      const pick=more=>chooseAllFitItems(room,normalPlan,original,query,{forceLocal:!allowAi||!hasOriginal,sceneText:scene,...(retained?{preferredKeys:previousPlan.rankedKeys,preferredMethod:'ai'}:{}),...more});
+      selection=await pick(seat?{seat}:{});
+      if(selection.seatOff){RecallSeat.stats.seatOff++;for(const item of base)delete item.relationshipLine;selection=await pick({});}
+    }
     assertPlan();
     const review={method:selection.method,error:selection.error,reason:selection.method==='all-fit'?'within-limit':retained?'prepared-result':selection.fullTotal<=APP.carrierSafeChars?'room-limit':selection.method==='ai'?'over-limit':selection.error?'ai-failure':'before-send-or-local'};
     const plan={fullTotal:selection.fullTotal,messageId:carrierSource?.messageId||''};
@@ -64459,7 +64895,7 @@ async function prepareSemanticSearchIndex(room, onProgress = null, options = {})
     room.lastLoreSearch={at:Date.now(),queryHash:aiHashTiny(query),semanticUsed:!!vector,semanticError,matchedLore:lore.length,
       matchedLogs:logs.filter(item=>item.autoType==='related-log').length,reviewMethod:review.method,reviewError:review.error,
       reviewReason:review.reason||'',reviewBaseTotal:hasOriginal?plan.fullTotal:null,reviewLimit:limit,reviewCarrierId:plan.messageId};
-    return {logs:logs.length,lore:lore.length,semanticUsed:!!vector,semanticError,reviewMethod:review.method,reviewError:review.error};
+    return {logs:logs.length,lore:lore.length,semanticUsed:!!vector,semanticError,reviewMethod:review.method,reviewError:review.error,...(Array.isArray(selection.seatBranches)&&selection.seatBranches.length?{recallBranches:selection.seatBranches}:{})};
     } finally {finish();}
   }
 
@@ -64661,8 +65097,8 @@ const ExternalBundles=(()=>{
     }
     function importFile(){
       const r=state.currentRoom;if(!r||busy()||generationPending(apiChatIdOf(r)))throw Error('생성·정리·복원이 끝난 뒤 가져와 주세요.');
-      const restore=epoch(),input=document.createElement('input');input.type='file';input.accept='.json,application/json';
-      input.onchange=async()=>{try{if(!input.files?.[0])return;const data=await readImportedJsonFile(input.files[0],{label:'외부 AI 재구축 JSON',maxBytes:25*1024*1024});if(state.currentRoom!==r||epoch()!==restore)throw Error('파일을 선택하는 동안 방·복원 상태가 바뀌었습니다.');await WLOG.run('외부 AI 결과 확인',()=>importData(r,data),{mode:'file',outcome:'not-applied'});}catch(e){notify(e.message,'error',8000,{error:e,operation:'외부 재구축 JSON 가져오기',mode:'file',outcome:'not-applied'});}finally{input.value='';}};input.click();
+      const restore=epoch(),input=document.createElement('input');input.type='file';input.accept='.json,.txt,application/json,text/plain';
+      pickFile(input,async()=>{try{if(!input.files?.[0])return;const data=await readImportedJsonFile(input.files[0],{label:'외부 AI 재구축 JSON',maxBytes:25*1024*1024});if(state.currentRoom!==r||epoch()!==restore)throw Error('파일을 선택하는 동안 방·복원 상태가 바뀌었습니다.');await WLOG.run('외부 AI 결과 확인',()=>importData(r,data),{mode:'file',outcome:'not-applied'});}catch(e){notify(e.message,'error',8000,{error:e,operation:'외부 재구축 JSON 가져오기',mode:'file',outcome:'not-applied'});}finally{input.value='';}});
     }
     async function verify(d){const r=d.room;if(state.currentRoom!==r||d.epoch!==epoch()||restored()||generationPending(apiChatIdOf(r)))throw Error('방·복원·생성 상태가 바뀌었습니다. 다시 가져와 주세요.');const s=await source(r),snap=await snapshot(r);if(s.hash!==d.j.sourceHash||s.anchorMessageId!==d.j.anchor||basis(r,snap.c,snap.ps)!==d.basis)throw Error('검토 중 원문 또는 저장 자료가 바뀌었습니다. 다시 가져와 주세요.');return {s,...snap};}
     async function apply(id){
@@ -65583,7 +66019,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       }
       return result;
     }).finally(()=>{if(pendingCarrierSyncRequests.get(room)===request)pendingCarrierSyncRequests.delete(room);});
-    pendingCarrierSyncRequests.set(room,request);return request.promise;
+    pendingCarrierSyncRequests.set(room,request);void request.promise.then(()=>RecallWarm.schedule(room),()=>{});return request.promise;
   }
 
   async function syncPendingCarrierUnlocked(room, reason = 'update') {
@@ -66062,7 +66498,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       throw Object.assign(new Error('주입 준비 뒤 대화 원문·분기가 바뀌어 전송을 보류했습니다. 현재 답변을 확인한 뒤 다시 보내 주세요.'),{code:'WISH_CARRIER_CHANGED',diagnostic:{stage:'전송 직전 확정 대화·주입 대상 다시 확인'}});
   }
 
-  async function resolveStableCarrierSource(room, frame, {assertCurrent,headKey=''}={}) {
+  async function resolveStableCarrierSource(room, frame, {assertCurrent,headKey='',allowConfirmedEmpty=false}={}) {
     assertCurrent?.();
     const canonicalId=String(messageIdOf(frame?.carrier)||'');
     if(!canonicalId)return {messageId:'',message:null,readAt:0,fallback:null};
@@ -66070,7 +66506,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const candidates=(frame.stable||[]).filter(row=>messageRoleOf(row)==='assistant'&&recentIds.has(String(messageIdOf(row)||''))).slice(0,3);
     if(!candidates.length||String(messageIdOf(candidates[0])||'')!==canonicalId)
       throw carrierSourceError({state:'unavailable',diagnostics:{stage:'주입 원문 확인 · 최근 확정 답변 범위 밖'}},'주입 원문 확인');
-    const skippedIds=[],deadline=Date.now()+24000;
+    const skippedIds=[],emptyReads=[],deadline=Date.now()+24000;
     for(const candidate of candidates){
       assertCurrent?.();
       const id=String(messageIdOf(candidate)||'');
@@ -66081,9 +66517,12 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       // Missing identities, ambiguous bodies, network failures and live
       // generation are not evidence that an old response may be skipped.
       if(result.state!=='empty')throw carrierSourceError(result,'주입 원문 확인');
-      skippedIds.push(id);
+      skippedIds.push(id);emptyReads.push(result);
     }
-    throw carrierSourceError({state:'empty',diagnostics:{stage:`주입 원문 확인 · 최근 12개 메시지 안에서 확정 AI ${skippedIds.length}개를 확인했으나 본문 없음`}},'주입 원문 확인');
+    const emptyError=carrierSourceError({state:'empty',diagnostics:emptyReads.flatMap(read=>read.diagnostics||[])},'주입 원문 확인 · 확정 AI '+skippedIds.length+'개 본문 없음');
+    const listed=emptyReads.length>0&&emptyReads.every(read=>(read.diagnostics||[]).some(row=>row.source==='list'&&row.idPresent&&row.idMatch&&row.chatMatch&&row.role==='assistant'&&Number.isFinite(row.visibleChars)));
+    if(allowConfirmedEmpty&&listed)return {messageId:'',message:null,readAt:Date.now(),fallback:null,confirmedEmpty:true,emptyError};
+    throw emptyError;
   }
 
   function recentSceneText(frame){return frame.messages.slice(0,APP.autoScanMessageLimit).map(m=>stripAutomationNoise(messageTextOf(m),true)).reverse().join('\n\n').slice(-12000);}
@@ -66133,6 +66572,30 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
       try{frame=stableFrame([...(await observeFullRoomHistory(room,frame.messages.slice(0,50)))].reverse());}
       catch(error){control?.assertActive?.();if(!carrierWriteAttempted&&(reason==='before-send'||reason==='before-reroll')){const reuse=verifiedCarrierReadFallback(room,p,frame,error,readFallbackScope);if(reuse)return reuse;}throw error;}
     control?.assertActive?.();
+    // Core 1.7.1: a confirmed empty carrier must not trap send/reroll. Keep Suite's
+    // same-ID, room, branch and prior-readable-carrier checks; do this before item
+    // counters or cognition choices change, and never after a server write.
+    let earlyCarrierRead=null;
+    if(['before-send','before-reroll','start'].includes(reason)&&!frame.trailingUser&&!isAssistantGenerationPending(frame.latest)&&frame.carrier&&!stripOurContextBlock(messageTextOf(frame.carrier)).text.trim()){
+      const emptyScope={route:state.routeEpoch,restore:localRestoreEpoch,current:state.currentRoom===room};
+      const assertEmptyReadCurrent=()=>{
+        control?.assertActive?.();
+        if(room.pending!==p||emptyScope.restore!==localRestoreEpoch||ExternalReplay.changed(rid,replayEpoch)||(emptyScope.current&&(state.currentRoom!==room||state.routeEpoch!==emptyScope.route))||generationPending(rid))
+          throw carrierSourceError({state:'changed',diagnostics:{stage:'빈 AI 원문 확인 중 방·분기·복원 또는 생성 상태 변경'}},'주입 원문 확인');
+      };
+      earlyCarrierRead=await resolveStableCarrierSource(room,frame,{assertCurrent:assertEmptyReadCurrent,headKey:headSignature,allowConfirmedEmpty:true});
+      assertEmptyReadCurrent();
+      if(earlyCarrierRead.confirmedEmpty){
+        if(carrierWriteAttempted)throw earlyCarrierRead.emptyError;
+        if(reason==='start'){
+          p.awaitingCarrier=true;p.verified=false;p.verifiedAt=0;
+          await saveRoom(room);assertEmptyReadCurrent();
+          notify('이전 AI 본문이 비어 있어 주입 대기 중입니다. 다음 정상 답변 뒤에 다시 확인합니다.','info',5000);
+          return {active:activePendingItems(p).length,waiting:true,confirmedEmpty:true};
+        }
+        return {readFailed:earlyCarrierRead.emptyError,confirmedEmpty:true,sourceFrontier:{latestId:String(messageIdOf(frame.latest)||''),latestUserId:String(frame.latestUserId||''),canonicalId:String(messageIdOf(frame.carrier)||''),selectedId:String(messageIdOf(frame.carrier)||''),headKey:JSON.stringify(sourceManifestOf(frame.messages.slice(0,50)))}};
+      }
+    }
     carrierFrameCache.delete(rid);carrierFrameCache.set(rid,{signature:headSignature,frame});
     while(carrierFrameCache.size>3)carrierFrameCache.delete(carrierFrameCache.keys().next().value);
     p.observedHead=headSignature;
@@ -66158,14 +66621,22 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
     p.cognitionIncludedIds=cognition?.includedIds||[];
     if(cognition?.text)p.items.unshift({slotId:'__cognition',title:'인물별 인지 상태',group:'cognition',content:cognition.text,totalTurns:0,usedTurns:0,autoType:'cognition',turnStartUserId:frame.latestUserId,manualTurnOverride:cognitionOverrides.include.length>0});
     if(cognition?.fit)rememberRequiredFit(room,cognition.text,{kind:'cognition',...cognition.fit});
-    if(reason==='before-send'||reason==='before-reroll'){
+    const sendReason=reason==='before-send'||reason==='before-reroll';
+    const recentText=sendReason?'':recentSceneText(frame);
+    let recallUser='',recallFrom='';
+    if(sendReason){
       const latestUserText=frame.stable.find(message=>messageRoleOf(message)==='user');
-      const liveQuery=String(requestQuery||messageTextOf(latestUserText)||room.autoRecallContextText||'').slice(-12000);
-      if(liveQuery.trim()){
-        room.autoRecallContextText=liveQuery;
-      }
+      const rerollTarget=reason==='before-reroll'?frame.messages.find(message=>messageRoleOf(message)==='user'&&String(messageIdOf(message)||'')===frame.latestUserId):null;
+      const rerollText=rerollTarget?String(messageTextOf(rerollTarget)||''):'';
+      const liveQuery=String(rerollText||requestQuery||messageTextOf(latestUserText)||room.autoRecallContextText||'').slice(-12000);
+      recallFrom=rerollText?'reroll':requestQuery?'request':messageTextOf(latestUserText)?'latestUser':'fallback';
+      recallUser=recallFrom==='fallback'?'':liveQuery;
+      if(liveQuery.trim())room.autoRecallContextText=liveQuery;
     }
-    if(reason!=='before-send'&&reason!=='before-reroll')room.autoRecallContextText=frame.messages.slice(0,APP.autoScanMessageLimit).map(m=>stripAutomationNoise(messageTextOf(m),true)).reverse().join('\n\n').slice(-12000);
+    if(!sendReason)room.autoRecallContextText=recentText;
+    // Only this turn's USER and visible AI form the scene; a reroll excludes the discarded answer.
+    let relationshipOpts={};
+    try{const stageOf=m=>m?stripOurContextBlock(messageTextOf(m)).text:'';relationshipOpts={stage:sendReason?[recallUser,stageOf(reason==='before-send'?frame.latest:frame.carrier)].join('\n'):recentText};}catch(error){relationshipOpts={};}
     const latestId=String(messageIdOf(frame.latest)||'');
     const readRestore=localRestoreEpoch,readRoute=state.routeEpoch,readCurrent=state.currentRoom===room;
     const assertCarrierReadCurrent=()=>{
@@ -66174,7 +66645,8 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
         throw carrierSourceError({state:'changed',diagnostics:{stage:'주입 원문 확인 중 방·분기·복원 또는 주입 상태 변경'}},'주입 원문 확인');
       if(generationPending(rid))throw carrierSourceError({state:'unsettled',diagnostics:{stage:'주입 원문 확인 중 새 생성 시작'}},'주입 원문 확인');
     };
-    const carrierRead=await resolveStableCarrierSource(room,frame,{assertCurrent:assertCarrierReadCurrent,headKey:headSignature});
+    const carrierRead=earlyCarrierRead||await resolveStableCarrierSource(room,frame,{assertCurrent:assertCarrierReadCurrent,headKey:headSignature});
+    assertCarrierReadCurrent();
     const newId=carrierRead.messageId;
     const carrierChanged=p.baselineAssistantId!==latestId;
     // 새 carrier를 먼저 PATCH·검증한 뒤 이전 carrier를 치웁니다. 중간 갱신 오류가 나도
@@ -66188,9 +66660,9 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
     WSUITE.suite?.replaceItems(room,room.autoRecallContextText||'');
     replaceThreadsPendingItem(room);
     ensureDirectReleasePendingItems(room,p);
-    let allFitCarrierRead=null;
+    let allFitCarrierRead=null,recallBranches=null;
     if(reason==='start'||reason==='before-send'||reason==='before-reroll'||carrierChanged||p.recallNeedsRefresh){
-      WishRelationships.replacePending(room);
+      WishRelationships.replacePending(room,relationshipOpts);
       // 전송·리롤·주입 시작 시에만 전체 후보가 50k를 넘으면 AI 선별합니다.
       // 답변 완료 후에는 로컬 준비만 수행해 같은 턴의 선별 API를 중복 호출하지 않습니다.
       const beforeSend=reason==='before-send'||reason==='before-reroll';
@@ -66198,13 +66670,15 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
       if(newId){
         assertCarrierReadCurrent();
         carrierSource={messageId:newId,originalText:carrierRead.originalText};
+        if(reason==='before-send'&&latestId&&latestId!==newId){const sceneText=stripOurContextBlock(messageTextOf(frame.latest)).text;if(sceneText.trim())carrierSource.sceneText=sceneText;}
         checkedRead={message:carrierRead.message,at:carrierRead.readAt};
       }
       // Sending must not wait behind background extraction in the shared AI queue.
       // Existing local selection still honors required items and carrier size limits.
       const backgroundTidy=beforeSend&&await U3.assertDraftReady(room);
       control?.assertActive?.();
-      const refreshed=await refreshHybridRecall(room,room.autoRecallContextText||'',{allowAi:(beforeSend||reason==='start')&&!backgroundTidy,allowSemanticNetwork:false,carrierSource,onProgress:control?.onProgress});
+      const refreshed=await refreshHybridRecall(room,room.autoRecallContextText||'',{allowAi:(beforeSend||reason==='start')&&!backgroundTidy,allowSemanticNetwork:false,carrierSource,onProgress:control?.onProgress,recall:{userText:recallUser,userFrom:recallFrom,userTurn:sendReason,...(reason==='before-reroll'?{branches:Array.isArray(p.recallBranchesSend)?p.recallBranchesSend:[]}:{})}});
+      recallBranches=Array.isArray(refreshed.recallBranches)?refreshed.recallBranches:null;
       if(refreshed.reviewMethod==='all-fit'&&checkedRead)allFitCarrierRead=checkedRead;
     }
     control?.assertActive?.();
@@ -66288,6 +66762,7 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
     const fitIds=active.find(i=>injectionCadenceKind(i)==='cognition'&&i.requiredFit)?.fitIds;
     if(fitIds){const excluded=new Set(fitIds.out);next.cognitionIncludedIds=(next.cognitionIncludedIds||[]).filter(id=>!excluded.has(id));}
     next.verified=true;next.verifiedAt=Date.now();next.serverChars=verification.serverChars;delete next.lastSyncError;delete next.lastSyncErrorCode;delete next.lastSyncErrorAt;room.pending=next;
+    if(reason==='before-send'){if(recallBranches?.length)next.recallBranchesSend=[...recallBranches];else delete next.recallBranchesSend;}
     // 새 carrier가 이미 검증됐으므로 이후 이전 carrier 정리가 실패해도 매턴 주입은 유지됩니다.
     const cleanupCarrier=previousCarrier||next.previousCarrierCleanup,cleanupIds=Array.isArray(next.cleanupCarrierMessageIds)?next.cleanupCarrierMessageIds:[];
     if(cleanupCarrier?.messageId||cleanupIds.length){
@@ -66303,7 +66778,7 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
   }
 
   function armInjection(room) {
-    return withCarrierOperation(room,()=>armInjectionUnlocked(room));
+    const task=withCarrierOperation(room,()=>armInjectionUnlocked(room));void task.then(()=>RecallWarm.schedule(room),()=>{});return task;
   }
 
   async function armInjectionUnlocked(room) {
@@ -66398,6 +66873,7 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
         }
         if (!room.pending) return;
         await checkPendingRoom(room);
+        RecallWarm.schedule(room);
       } catch (e) {
         console.warn('[RP매니저] pending check failed:', room.chatId, e);
         if(room?.pending){recordPendingSyncError(room,e);renderModalIfOpen();}
@@ -67268,8 +67744,8 @@ function v2EvidenceQuote(r){
 
     overlay.querySelector('[data-v2-ai-settings]')?.addEventListener('click',()=>openAiSettingsDialog());
     const loreFile=overlay.querySelector('[data-v2-lore-file]');
-    overlay.querySelector('[data-v2-lore-import]')?.addEventListener('click',()=>loreFile?.click());
-    if(loreFile)loreFile.onchange=async()=>{
+    overlay.querySelector('[data-v2-lore-import]')?.addEventListener('click',()=>loreFile&&pickFile(loreFile,restoreLore));
+    const restoreLore=async()=>{
       const selected=loreFile.files?.[0];if(!selected)return;
       try{
         const data=await readImportedJsonFile(selected,{label:'일반 자료집 JSON',maxBytes:25*1024*1024}),fallback=String(selected.name||'가져온 자료집').replace(/\.json$/i,'').trim()||'가져온 자료집';
@@ -67295,9 +67771,9 @@ function v2EvidenceQuote(r){
       finally{loreFile.value='';}
     };
     const file=overlay.querySelector('[data-v2-file]');
-    const pick=()=>file?.click();
+    const pick=()=>file&&pickFile(file,restore);
     overlay.querySelector('[data-v2-restore]')?.addEventListener('click',pick);
-    if(file)file.onchange=async()=>{const f=file.files?.[0];if(!f)return;try{const data=await readImportedJsonFile(f,{label:'백업 JSON',maxBytes:100*1024*1024});if(data?._wishRpManagerBackup===true){const backup=validateManagerBackup(data),existingRooms=await getAllRooms(),libs=await getAllCharacterLibraries(),choice=await openBackupImportDialog(backup,existingRooms,libs);if(!choice)return;const restored=await restoreManagerBackup(backup,choice);await finishLocalRestoreUi(restored);}else{const hint=importedJsonFormatHint(data);throw new Error(hint?`${hint} 파일입니다. 이 버튼에는 Wish RP Manager Core 백업 JSON을 넣어 주세요.`:'지원하는 백업 JSON이 아닙니다.');}}catch(e){notify(`불러오기 실패: ${e.message}`,'error',6000);}finally{file.value='';renderModalIfOpen();}};
+    const restore=async()=>{const f=file.files?.[0];if(!f)return;try{const data=await readImportedJsonFile(f,{label:'백업 JSON',maxBytes:100*1024*1024});if(data?._wishRpManagerBackup===true){const backup=validateManagerBackup(data),existingRooms=await getAllRooms(),libs=await getAllCharacterLibraries(),choice=await openBackupImportDialog(backup,existingRooms,libs);if(!choice)return;const restored=await restoreManagerBackup(backup,choice);await finishLocalRestoreUi(restored);}else{const hint=importedJsonFormatHint(data);throw new Error(hint?`${hint} 파일입니다. 이 버튼에는 Wish RP Manager Core 백업 JSON을 넣어 주세요.`:'지원하는 백업 JSON이 아닙니다.');}}catch(e){notify(`불러오기 실패: ${e.message}`,'error',6000);}finally{file.value='';renderModalIfOpen();}};
     overlay.querySelector('[data-v2-backup]')?.addEventListener('click',async()=>{const backup=await createManagerBackup();downloadText(JSON.stringify(backup,null,2),`Wish_RP_Manager_백업_${new Date().toISOString().slice(0,10)}.json`);notify('전체 백업 저장 완료','success');});
     overlay.querySelector('[data-v2-reset]')?.addEventListener('click',async()=>{if(room.pending){notify('먼저 주입을 해제해 주세요.','warn');return;}if(!confirm('현재 방의 RP Manager 데이터를 완전히 초기화할까요? 현재상태·날짜로그·인지·작업 이력과 이 방 전용 진행형 자료 카드가 삭제되어 새 방 기본값으로 돌아갑니다.'))return;try{const rid=apiChatIdOf(room);await clearCurrentRoom(room.chatId);await ensureCurrentRoom(rid,true);state.v2Cognition=null;state.v2CognitionRev=-1;state.v2Editor=null;state.v2SettingsOpen={automation:false,injection:false,cognition:false};notify('현재 방과 방별 진행형 자료를 fresh 기본값으로 초기화했습니다.','success',5200);v2ScheduleAsyncRefresh(state.currentRoom);renderModalIfOpen();}catch(error){notify('초기화하지 못했습니다: '+error.message,'error',7000);}});
   }
@@ -68329,7 +68805,7 @@ async reanalyzeLatest(rid){
     const parsed=parseFrame(data),rid=String(parsed?.payload?.chatId||'');
     if(rid&&parsed?.event==='reroll')WishHistory.invalidate(rid);
     if(!parsed||!['send','reroll'].includes(parsed.event)||!rid||rid!==currentChat())return previousSend.call(this,data);
-    const socket=this,currentRoom=state.currentRoom,sendRoute=state.routeEpoch,sendRestore=localRestoreEpoch;let replay=null;
+    const socket=this,currentRoom=state.currentRoom,sendRoute=state.routeEpoch,sendRestore=localRestoreEpoch;let replay=null,sendAttempted=false,recallBefore=null;
     const previous=sendPreparationQueues.get(rid)||Promise.resolve();
     const task=previous.catch(()=>{}).then(async()=>{
       const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),90000);
@@ -68350,12 +68826,13 @@ async reanalyzeLatest(rid){
       WishDisplayDrain.cancel(rid);
       let preparedCarrier=null;
       if(!replay&&currentRoom?.pending){
+        const p=currentRoom.pending;recallBefore={armedAt:Number(p.armedAt||0),session:Number(p.sessionStartedAt||0),branches:Array.isArray(p.recallBranchesSend)?[...p.recallBranchesSend]:null};
         const notice=createSendPreparationNotice(()=>!controller.signal.aborted&&rid===currentChat()&&sendRoute===state.routeEpoch&&sendRestore===localRestoreEpoch&&currentRoom===state.currentRoom);
         let prepared;
         try{prepared=await waitForWishOperation(withCarrierOperation(currentRoom,()=>{assertActive();return reconcileStableCarrier(currentRoom,parsed.event==='send'?'before-send':'before-reroll',null,{assertActive,onProgress:notice.stage});},{signal:controller.signal}),controller.signal);assertActive();}
         finally{notice.stop();}
         if(prepared?.deferred)throw new Error('서버에서 이전 생성 상태를 확인 중입니다. 잠시 뒤 다시 보내 주세요.');
-        if(prepared?.readFailed){recordPendingSyncError(currentRoom,prepared.readFailed);notify('대화 전체 읽기는 다음에 다시 시도합니다. 마지막으로 확인한 기억을 유지하고 메시지를 보냅니다.','warn',5000,{logged:true});}
+        if(prepared?.readFailed){recordPendingSyncError(currentRoom,prepared.readFailed);if(!prepared.confirmedEmpty)notify('대화 전체 읽기는 다음에 다시 시도합니다. 마지막으로 확인한 기억을 유지하고 메시지를 보냅니다.','warn',5000,{logged:true});}
         preparedCarrier=prepared;
       }
       await U3.waitForPublication(currentRoom);assertActive();await U3.assertDraftReady(currentRoom);assertActive();
@@ -68367,12 +68844,21 @@ async reanalyzeLatest(rid){
       const epoch=(sendEpoch.get(rid)||0)+1;sendEpoch.set(rid,epoch);
       const gate={token:crypto.randomUUID(),epoch,socket,kind:parsed.event,at:Date.now(),baseline:generationFrontier(baselineFrame),...(replay?{replayToken:replay.token,replayReady:false,replacementUserId:''}:{})};
       generationGates.set(rid,gate);scheduleRecovery(APP.activePollMs);
-      try{previousSend.call(socket,data);}catch(error){deleteGenerationGateIfCurrent(rid,gate);throw error;}
+      try{previousSend.call(socket,data);sendAttempted=true;}catch(error){deleteGenerationGateIfCurrent(rid,gate);throw error;}
       // Do not add storage latency to the actual WebSocket send.
       if(currentRoom&&unstartedRooms.has(currentRoom))void saveRoom(currentRoom).catch(e=>console.warn('[Wish] 첫 전송 방 저장 실패',e));
       }finally{clearTimeout(deadline);}
     }).catch(error=>{
       if(replay)ExternalReplay.finish(rid,replay.token,'send-failed');
+      // An unsent attempt must not change which recall branches a reroll may replay.
+      const pending=currentRoom?.pending;
+      if(!sendAttempted&&recallBefore&&pending&&Number(pending.armedAt||0)===recallBefore.armedAt&&Number(pending.sessionStartedAt||0)===recallBefore.session){
+        const branches=recallBefore.branches;
+        if(JSON.stringify(pending.recallBranchesSend??null)!==JSON.stringify(branches)){
+          if(branches)pending.recallBranchesSend=[...branches];else delete pending.recallBranchesSend;
+          void saveRoom(currentRoom).catch(e=>console.warn('[Wish] 기억 호출 전송 표시 복구 저장 실패',e));
+        }
+      }
       const draft=parsed.payload?.message??parsed.payload?.content??parsed.payload?.text;
       if(parsed.event==='send'&&rid===currentChat()&&typeof draft==='string'){
         const composer=findCrackComposer();
@@ -68554,7 +69040,7 @@ body[data-theme="dark"] .m3-ui,body[data-theme="dark"] #wish-rp-monitor{--m3-she
 .wq-foot .m3-muted{flex:1;font-size:10.5px;line-height:1.5}
 .wq-empty{padding:20px 8px;text-align:center;color:var(--m3-muted);font-size:12px}
 
-@media (max-width:768px){#wish-rp-quick{left:0!important;right:0!important;bottom:0!important;top:auto!important;width:100%;border-radius:16px 16px 0 0;max-height:80vh;transform-origin:50% 100%}}
+@media (max-width:768px){#wish-rp-quick{left:0!important;right:0!important;bottom:0;top:auto!important;width:100%;border-radius:16px 16px 0 0;max-height:80vh;transform-origin:50% 100%}}
 /* ── 5. 청묵 UI 본체 ── */
 .m3-ui{--m3-r-shell:16px;--m3-r-card:11px;--m3-r-ctl:8px;--m3-spring:cubic-bezier(.34,1.42,.5,1);--m3-ease:cubic-bezier(.2,.8,.3,1);color:var(--m3-fg);font:13.5px/1.7 var(--f);-webkit-font-smoothing:antialiased;text-align:left}
 .m3-ui *,.m3-ui *::before,.m3-ui *::after{box-sizing:border-box}
@@ -71552,6 +72038,11 @@ function vQuick() {
       const r = mon.getBoundingClientRect(), w = quickEl.offsetWidth;
       const right = Math.max(12, innerWidth - r.right - 4), left = Math.max(12, innerWidth - right - w);
       quickEl.style.left = left + 'px'; quickEl.style.right = 'auto'; quickEl.style.top = 'auto'; quickEl.style.bottom = Math.max(12, innerHeight - r.top + 10) + 'px';
+    } else if (mon) {
+      // Phone: the full-width sheet ends above the launcher (the same bottom as on PC), its height fitted to the space above it, so the
+      // launcher stays visible and a second tap on it closes the sheet instead of landing on a row underneath.
+      const r = mon.getBoundingClientRect();
+      quickEl.style.cssText = ''; quickEl.style.bottom = Math.max(12, innerHeight - r.top + 10) + 'px'; quickEl.style.maxHeight = 'min(80vh,' + Math.max(0, r.top - 22) + 'px)';
     } else { quickEl.style.cssText = ''; }
   }
   function closeQuick() { if (!S.quick || S.quickLeaving) return; S.quickLeaving = true; paint(); setTimeout(() => { S.quick = false; S.quickLeaving = false; paint(false); }, 200); }
@@ -72331,7 +72822,7 @@ function WUIInjectionView(room, candidates) {
  const pending=room.pending, active=safeMemoryItems(room,candidates).map(projection.item).filter(i=>String(i.content||'').trim());
  const groups={}, keys=new Set(active.map(pendingItemIdentity));
  const kindOf=i=>({currentState:'state',cognition:'cog',speech:'speech',relationship:'relationship',threads:'threads',log:'log',lore:'lore',character:'char',extra:'extra'})[injectionCadenceKind(i)] || (i.sourceSlotId==='currentState'?'state':i.slotId==='__lore'?'lore':'misc');
- const row=(i,n,off=false,isActive=true)=>({key:pendingItemIdentity(i)||String(n),rowKey:String(n),kind:kindOf(i),sourceKey:i.sourceKey||'',title:i.title||itemCategory(i),why:i.reason||remainingLabelForItem(i),size:safeForHtmlComment(String(i.content||'').trim()).length,content:i.content||'',off,offReason:off?injectionExclusionReason(room,i,isActive):''});
+ const row=(i,n,off=false,isActive=true)=>{const sent=!off&&typeof i.relationshipLine==='string'&&i.relationshipLine.trim()?i.relationshipLine:i.content;return {key:pendingItemIdentity(i)||String(n),rowKey:String(n),kind:kindOf(i),sourceKey:i.sourceKey||'',title:i.title||itemCategory(i),why:i.reason||remainingLabelForItem(i),size:safeForHtmlComment(String(sent||'').trim()).length,content:sent||'',off,offReason:off?injectionExclusionReason(room,i,isActive):''};};
  // Count every emitted occurrence; the quick-edit map intentionally deduplicates identities.
  const plan=active.map((i,n)=>row(i,n));
  if(pending){
@@ -72722,7 +73213,7 @@ function WUILorePackImport(){
   if(Array.isArray(data.loreEntries))out.push({src:{},list:data.loreEntries,name:base});
   return out.length?out:null;
  };
- input.onchange=async()=>{const f=input.files?.[0];if(!f)return;let before=null;try{await WLOG.show('자료집 JSON 검증·가져오는 중',async()=>{
+ pickFile(input,async()=>{const f=input.files?.[0];if(!f)return;let before=null;try{await WLOG.show('자료집 JSON 검증·가져오는 중',async()=>{
   const data=await readImportedJsonFile(f,{maxBytes:25*1024*1024,strict:true}),packs=packsOf(data);
   if(!packs)throw Error('자료집을 찾지 못했습니다.');
   if(packs.some(x=>!x.list.length))throw Error('이 팩에는 카드가 없습니다.');
@@ -72743,8 +73234,8 @@ function WUILorePackImport(){
   if(clones.length){await putImportedLorePacksAndRoomAtomic(clones,room,{expectedStorageFingerprints:Object.fromEntries(clones.map(p=>[p.scopeId,null])),validateBeforeWrite:()=>{if(state.currentRoom!==room||epoch!==localRestoreEpoch)throw Error('가져오는 동안 방·복원 상태가 바뀌었습니다.');}});const warning=await syncLoreMutation(room,'lore-pack-save');notify(`자료집 ‘${clones.map(c=>c.name).join('’, ‘')}’을 저장했습니다.${warning?' 현재 주입 갱신은 다음 전송 때 다시 시도합니다.':''}`,warning?'warn':'success',warning?5000:2400);}
   if(added<total)notify(`동일 출처·동일 내용의 기존 사본 ${total-added}개는 추가하지 않습니다. 기존 사본의 사용 설정은 바꾸지 않습니다.`,'info',6000);
   renderModal();
- });}catch(e){if(before)room.activeLorePackIds=before;notify(`불러오기 실패: ${e.message}`,'error',6000,{error:e});}finally{input.value='';}};
- input.click();return true;
+ });}catch(e){if(before)room.activeLorePackIds=before;notify(`불러오기 실패: ${e.message}`,'error',6000,{error:e});}finally{input.value='';}});
+ return true;
 }
 
 async function WUILoreConvert(d){d.draft.busy=true;WUI.paint();try{const room=d.wishRoom,entries=await convertTextToLoreEntries(d.draft.src),existingPack=(state.v2LorePacks||[]).find(p=>p.scopeId===d.draft.target);if(existingPack?.ownerChatId&&String(existingPack.ownerChatId)!==String(room.chatId||''))throw Error('다른 방 소유 자료집에는 직접 변환 결과를 넣을 수 없습니다. 독립 사본을 만든 뒤 사용해 주세요.');let pack=existingPack?structuredClone(existingPack):null,createdNew=!pack;if(pack){const byKey=new Map(pack.entries.map(e=>[loreEntryMergeKey(e),e]));for(const entry of entries){const old=byKey.get(loreEntryMergeKey(entry));if(old){entry.id=old.id;entry.anchor=entry.speechRule?false:old.anchor||entry.anchor;entry.enabled=old.enabled!==false;}byKey.set(loreEntryMergeKey(entry),entry);}pack.entries=[...byKey.values()];}else pack=normalizeLorePack({name:String(d.draft.name||'가져온 자료집').trim(),entries,ownerChatId:room.chatId,ownerApiChatId:apiChatIdOf(room)});pack=existingPack?await putManualLorePack(pack,existingPack):await putLorePack(pack);if(createdNew&&!(room.activeLorePackIds||[]).includes(pack.scopeId))room.activeLorePackIds.push(pack.scopeId);await saveRoom(room);if(room.pending){replaceLorePendingItems(room,room.autoRecallContextText||'',null);await syncPendingCarrier(room,'lore-convert');}notify('자료집 변환 완료 · '+entries.length+'개 자료','success');WUI.closeSheet(d);renderModalIfOpen();}finally{d.draft.busy=false;}}
@@ -72801,7 +73292,7 @@ Object.assign(WUI_ADAPTER.act,{
 Object.assign(WUI_ADAPTER.act,{
  manualAiCopy:async id=>{const d=WUI.ui.dlg(id);if(!d)return;const ok=await copyPlainText(d.request);d.draft.copied=ok;if(!ok)notify('복사하지 못했습니다. [TXT로 받기]로 파일을 받아 외부 AI에 첨부해 주세요.','warn',6000);WUI.paint();},
  manualAiDownload:id=>{const d=WUI.ui.dlg(id);if(!d)return;const stamp=new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');downloadText(d.request,'Wish-외부AI-요청문-'+stamp+'.txt','text/plain');notify('요청문 TXT 저장을 요청했습니다. 외부 AI 새 대화에 파일로 첨부해 주세요.','success',5000);},
- manualAiFile:id=>{const d=WUI.ui.dlg(id);if(!d)return;const input=document.createElement('input');input.type='file';input.accept='.json,.txt,application/json,text/plain';input.onchange=async()=>{const file=input.files?.[0],live=WUI.ui.dlg(id);if(!file||!live)return;if(file.size>8*1024*1024){live.draft.error='답 파일이 너무 큽니다(8MB 초과).';WUI.paint();return;}try{const text=await file.text(),now=WUI.ui.dlg(id);if(!now)return;now.draft.answer=text;now.draft.file=file.name+' · '+text.length.toLocaleString()+'자';now.draft.error='';}catch(e){live.draft.error='답 파일을 읽지 못했습니다: '+String(e.message||e);}WUI.paint();};input.click();},
+ manualAiFile:id=>{const d=WUI.ui.dlg(id);if(!d)return;const input=document.createElement('input');input.type='file';input.accept='.json,.txt,application/json,text/plain';pickFile(input,async()=>{const file=input.files?.[0],live=WUI.ui.dlg(id);if(!file||!live)return;if(file.size>8*1024*1024){live.draft.error='답 파일이 너무 큽니다(8MB 초과).';WUI.paint();return;}try{const text=await file.text(),now=WUI.ui.dlg(id);if(!now)return;now.draft.answer=text;now.draft.file=file.name+' · '+text.length.toLocaleString()+'자';now.draft.error='';}catch(e){live.draft.error='답 파일을 읽지 못했습니다: '+String(e.message||e);}WUI.paint();});},
  manualAiApply:id=>{const d=WUI.ui.dlg(id);if(!d)return;let data;try{data=parseAiJsonText(d.draft.answer,{how:'relay',keys:d.keys||[]});}catch(e){d.draft.error=String(e.message||e);WUI.paint();return;}d.draft.error='';
   // The task's own format pass runs here first (on a copy; the task repeats it and logs what it left out).
   let fix=null;try{fix=WUICache.pending.get(id)?.check?.(JSON.parse(JSON.stringify(data)))||null;}catch(_){fix=null;}
@@ -72820,7 +73311,7 @@ Object.assign(WUI_ADAPTER.act,{
  manualPasteApply:async id=>{const d=WUI.ui.dlg(id);if(!d||d.busy)return;d.busy=true;WUI.paint();try{await manualApplyFrom(state.currentRoom,d.draft.answer,id);}finally{const live=WUI.ui.dlg(id);if(live){live.busy=false;WUI.paint();}}},
  manualCopy:async()=>{const r=state.currentRoom,j=loadManualJob(r);if(!j)return;const text=loadManualRequest(r,j.code);if(!text){notify('요청문을 다시 만듭니다.','info',2500);return U3.run(r,j.force);}const ok=await copyPlainText(text);notify(ok?'요청문을 다시 복사했습니다 ('+text.length.toLocaleString()+'자).':'복사하지 못했습니다. 확인 탭의 [TXT 다시 받기]로 받아 외부 AI에 첨부해 주세요.',ok?'success':'warn',5000);},
  manualTxt:()=>{const r=state.currentRoom,j=loadManualJob(r);if(!j)return;const text=loadManualRequest(r,j.code);if(!text){notify('요청문을 다시 만듭니다.','info',2500);return U3.run(r,j.force);}downloadText(text,'Wish-외부AI-요청문-'+j.code+'.txt','text/plain');notify('요청문 TXT를 다시 저장했습니다 ('+text.length.toLocaleString()+'자). 외부 AI 새 대화에 파일로 첨부해 주세요.','success',5000);},
- manualFile:()=>{const r=state.currentRoom;if(!loadManualJob(r))return;const input=document.createElement('input');input.type='file';input.accept='.json,.txt,application/json,text/plain';input.onchange=async()=>{const file=input.files?.[0];if(!file)return;if(file.size>8*1024*1024){notify('답 파일이 너무 큽니다(8MB 초과).','error');return;}let text='';try{text=await file.text();}catch(e){notify('답 파일을 읽지 못했습니다: '+String(e.message||e),'error');return;}await manualApplyFrom(state.currentRoom,text,'');};input.click();},
+ manualFile:()=>{const r=state.currentRoom;if(!loadManualJob(r))return;const input=document.createElement('input');input.type='file';input.accept='.json,.txt,application/json,text/plain';pickFile(input,async()=>{const file=input.files?.[0];if(!file)return;if(file.size>8*1024*1024){notify('답 파일이 너무 큽니다(8MB 초과).','error');return;}let text='';try{text=await file.text();}catch(e){notify('답 파일을 읽지 못했습니다: '+String(e.message||e),'error');return;}await manualApplyFrom(state.currentRoom,text,'');});},
  manualCancel:id=>{const r=state.currentRoom;if(!loadManualJob(r))return;if(!confirm('기다리는 외부 AI 작업을 취소할까요? 이미 받은 답은 쓸 수 없게 됩니다.'))return;clearManualJob(r);const d=id&&WUI.ui.dlg(id);if(d)WUI.closeSheet(d);notify('외부 AI 작업을 취소했습니다.','info',3500);WUI.paint();},
  manualErrCopy:async()=>{const j=loadManualJob(state.currentRoom);if(!j?.lastError)return;const ok=await copyPlainText(aiFixRequest(j.lastError,j.code));notify(ok?'오류 문구를 복사했습니다 · 외부 AI의 같은 대화에 붙여 넣어 고친 답을 받아 주세요.':'복사하지 못했습니다.',ok?'success':'warn',6000);},
  errorFixCopy:async id=>{const row=WLOG.find(id);if(!row)return;const x=WLOG.describe(row),job=x.mode==='manual'&&!x.relay?loadManualJob(state.currentRoom):null;const ok=await copyPlainText(aiFixRequest(row.message,job?.code||'',!!x.relay));notify(ok?(x.mode==='manual'?'오류 문구를 복사했습니다 · 외부 AI의 같은 대화에 붙여 넣어 고친 답을 받아 주세요.':'AI에게 보낼 문구를 복사했습니다 · JSON을 만든 AI 대화에 붙여 넣어 고친 JSON 전체를 받아 주세요.'):'복사하지 못했습니다.',ok?'success':'warn',6000);},
