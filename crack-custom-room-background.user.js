@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         🖼️ Crack Custom Room Image Background (배경 이미지&테마)
 // @namespace    crack-custom-room-background
-// @version      4.3.0.4
-// @description  방별 이미지·기존 테마·NYANG 5종·웹폰트를 유지하고 CSP와 동일한 사용자 테마 24종·장식선·전용 채팅창 이미지를 추가하고 “대사” 배경 감지를 보완한 4.3.0.4 통합판.
+// @version      4.3.0.5
+// @description  방별 이미지·기존 테마·NYANG 5종·웹폰트를 유지하고 CSP와 동일한 사용자 테마 24종·장식선·전용 채팅창 이미지를 추가하고 “대사” 배경 감지를 보완한 4.3.0.5 통합판.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        none
@@ -55,7 +55,7 @@
   }
 
   const SCRIPT_NAME = 'Custom Room Image Background';
-  const VERSION = '4.3.0.4';
+  const VERSION = '4.3.0.5';
 
   // User artwork: original filenames are the visible theme names.
   const USER_THEME_PACK = Object.freeze([
@@ -1099,8 +1099,7 @@
     const spark = (x, yy, r, color, opacity=1) => `<path d="M${x-r} ${yy}Q${x} ${yy-1} ${x} ${yy-r}Q${x+1} ${yy} ${x+r} ${yy}Q${x} ${yy+1} ${x} ${yy+r}Q${x-1} ${yy} ${x-r} ${yy}Z" fill="${color}" opacity="${opacity}" stroke="none"/>`;
     const symbols = divider
       ? spark(119,y,3,c,.84)+spark(311,y,3,a,.82)+`<circle cx="303" cy="${y}" r="1" fill="${b}" stroke="none"/><circle cx="319" cy="${y}" r="1" fill="${b}" stroke="none"/>`
-      : `<g transform="translate(332 ${y-12})">${userPackMotif(variant,a,b,c)}</g>`
-        + spark(100,y-12,5,c,.87)+spark(223,y+13,4,a,.84)+spark(290,y-8,2.5,c,.9)
+      : spark(100,y-12,5,c,.87)+spark(223,y+13,4,a,.84)+spark(290,y-8,2.5,c,.9)
         + `<path d="M100 ${y-7}v17m123 8v11" stroke="${a}" stroke-opacity=".48"/><circle cx="100" cy="${y+13}" r="1.7" fill="${b}" stroke="none"/><circle cx="223" cy="${y+30}" r="1.6" fill="${c}" stroke="none"/>`;
     const inside = `<defs><linearGradient id="line" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="440" y2="0"><stop stop-color="${a}" stop-opacity="0"/><stop offset=".18" stop-color="${a}" stop-opacity=".58"/><stop offset=".72" stop-color="${b}" stop-opacity=".92"/><stop offset="1" stop-color="${a}" stop-opacity=".30"/></linearGradient></defs><g fill="none" stroke-width=".85" stroke-linecap="round" stroke-linejoin="round"><path d="${path}" stroke="url(#line)" vector-effect="non-scaling-stroke"/>${divider ? '' : curl}${symbols}</g>`;
     return userPackSvgUrl(right ? `<g transform="translate(440 0) scale(-1 1)">${inside}</g>` : inside, `0 0 440 ${height}`, true);
@@ -1354,7 +1353,7 @@
     const rgb = hex => [1,3,5].map(i => parseInt(hex.slice(i,i+2),16)).join(',');
     let css = '\n/* 2026-09-29: 24 user themes; small translucent bottom artwork and large centered circles. */\n';
     css += rule(base, '--sgb-pack-art:none;--sgb-pack-chat-art:none;');
-    css += rule(base, '--sgb-novel-sep-content:"";--sgb-novel-sep-margin:10px clamp(8px,2vw,22px) 16px;--sgb-novel-sep-bg:none;--sgb-novel-sep-shadow:none;--sgb-novel-sep-border-top:0;--sgb-novel-sep-border-bottom:0;--sgb-pack-divider-height:34px;');
+    css += rule(base, '--sgb-novel-sep-content:"";--sgb-novel-sep-margin:10px clamp(8px,2vw,22px) 16px;--sgb-novel-sep-bg:none;--sgb-novel-sep-shadow:none;--sgb-novel-sep-border-top:0;--sgb-novel-sep-border-bottom:0;--sgb-pack-divider-height:34px;--sgb-pack-side-glyph-size:13.090909px;');
     for (const t of USER_THEME_PACK) {
       const s = `html.${CLS_ACTIVE}[data-sgb-ui-style="${t.value}"]`;
       const darkTop = userPackMix(t.accent, '#101725', .85), darkBottom = userPackMix(t.secondary, '#0d1220', .91);
@@ -1365,7 +1364,7 @@
         const c = light ? userPackMix(t.highlight,'#23334b',.51) : t.highlight;
         const graceful = t.motif === 'schoolhat';
         const ornaments = graceful ? `--sgb-pack-charm:${userPackSvgUrl(userPackMotif('softheart',a,b,c),'0 0 24 24')};--sgb-pack-charm-width:${14}px;--sgb-pack-charm-height:${14}px;--sgb-pack-soft-star:${userPackSvgUrl(userPackMotif('softstar',a,b,c))};--sgb-pack-soft-glint:${userPackSvgUrl(userPackMotif('softglint',a,b,c))};--sgb-pack-divider-charm:${userPackSvgUrl(userPackMotif('softheart',a,b,c))};--sgb-pack-glyph-width:${26}px;` : '';
-        return `--sgb-pack-left:${userPackSide(t,light)};--sgb-pack-right:${userPackSide(t,light,true)};--sgb-pack-divider-left:${userPackSide(t,light,false,true)};--sgb-pack-divider-right:${userPackSide(t,light,true,true)};--sgb-pack-glyph:${userPackSvgUrl(userPackMotif(t.motif,a,b,c),'0 0 24 24')};--sgb-pack-border:rgba(${rgb(a)},${light ? '.30' : '.32'});--sgb-pack-ink:${userPackTextPatch(t,light).textColor};--sgb-pack-surface-top:${rgb(light?lightTop:darkTop)};--sgb-pack-surface-bottom:${rgb(light?lightBottom:darkBottom)};` + ornaments;
+        return `--sgb-pack-left:${userPackSide(t,light)};--sgb-pack-right:${userPackSide(t,light,true)};--sgb-pack-divider-left:${userPackSide(t,light,false,true)};--sgb-pack-divider-right:${userPackSide(t,light,true,true)};--sgb-pack-glyph:${userPackSvgUrl(userPackMotif(t.motif,a,b,c),'0 0 24 24')};--sgb-pack-side-glyph-right:${userPackSvgUrl(`<g transform="translate(24 0) scale(-1 1)">${userPackMotif(t.motif,a,b,c)}</g>`,'0 0 24 24')};--sgb-pack-border:rgba(${rgb(a)},${light ? '.30' : '.32'});--sgb-pack-ink:${userPackTextPatch(t,light).textColor};--sgb-pack-surface-top:${rgb(light?lightTop:darkTop)};--sgb-pack-surface-bottom:${rgb(light?lightBottom:darkBottom)};` + ornaments;
       };
       const centered = t.align === 'center';
       // The legacy Sakura circle already contains faint alpha; use it unchanged.
@@ -1373,7 +1372,9 @@
       css += rule(s+'[data-sgb-theme="light"]', colors(true) + `--sgb-pack-chat-opacity:${t.lightChatOpacity};--sgb-pack-chat-filter:${t.chatOpacity === 1 ? 'brightness(.8)' : 'none'};`);
       css += `@media(max-width:620px){${rule(s,`--sgb-pack-scene-height:${t.sceneMobile}px;--sgb-pack-scene-gap:${(t.sceneMobile*t.sceneRatio/2+10).toFixed(2)}px;--sgb-novel-sep-box-height:${t.sceneMobile+8}px;--sgb-pack-divider-height:30px;`)}}`;
     }
-    css += rule(scene, `content:""!important;display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-novel-sep-box-height)!important;min-height:var(--sgb-novel-sep-box-height)!important;border:0!important;border-radius:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-art),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;background-repeat:no-repeat!important;`);
+    // Keep side motifs at their original 24 * 48 / 88 px height and centers (344 / 440 of each side).
+    // Separate square layers restore their width without changing the stretched lines or sparkles.
+    css += rule(scene, `content:""!important;display:block!important;box-sizing:border-box!important;width:100%!important;height:var(--sgb-novel-sep-box-height)!important;min-height:var(--sgb-novel-sep-box-height)!important;border:0!important;border-radius:0!important;box-shadow:none!important;opacity:1!important;pointer-events:none!important;background-color:transparent!important;background-image:var(--sgb-pack-art),var(--sgb-pack-glyph),var(--sgb-pack-side-glyph-right),var(--sgb-pack-left),var(--sgb-pack-right)!important;background-size:auto var(--sgb-pack-scene-height),var(--sgb-pack-side-glyph-size) var(--sgb-pack-side-glyph-size),var(--sgb-pack-side-glyph-size) var(--sgb-pack-side-glyph-size),max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px,max(0px,calc(50% - var(--sgb-pack-scene-gap))) 48px!important;background-position:calc(50% + var(--sgb-ornament-shift,0px)) center,calc(39.090909% - var(--sgb-pack-scene-gap) * .781818182 - var(--sgb-pack-side-glyph-size) * .109090909 + var(--sgb-ornament-shift,0px)) center,calc(60.909091% + var(--sgb-pack-scene-gap) * .781818182 + var(--sgb-pack-side-glyph-size) * .109090909 + var(--sgb-ornament-shift,0px)) center,left var(--sgb-ornament-shift,0px) center,right calc(0px - var(--sgb-ornament-shift,0px)) center!important;background-repeat:no-repeat!important;`);
     const gracefulBase = base.replace('[data-sgb-ui-style^="pack29-"]', '[data-sgb-ui-style="pack29-usagi-school"]');
     const gracefulScene = scene.replace(base, gracefulBase);
     // Keep every charm in a fixed-aspect layer; only the graceful lines stretch.
@@ -7741,7 +7742,7 @@ function createSettingsModal() {
     collectQuoteTextNodes(md, /["“”「」❝❞]/).forEach(replaceTextNodeWithQuotes);
 
     // 이미 data-sgb-quote로 감싼 큰따옴표 내부는 walker에서 제외된다.
-    collectQuoteTextNodes(md, /'/).forEach(replaceTextNodeWithSingleQuotes);
+    collectQuoteTextNodes(md, /['‘’]/).forEach(replaceTextNodeWithSingleQuotes);
   }
 
   function resetQuoteDecorateCache(root = document) {
