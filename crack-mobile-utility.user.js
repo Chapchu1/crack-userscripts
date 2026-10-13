@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.9
-// @description  4.6.0.9: 모델 선택 시 접힌 상단바가 잠깐 나타나는 현상 대응. 모델 조작 중 헤더 숨김 유지 및 재생성 즉시 처리. 기존 기능·설정 유지.
+// @version      4.6.3.1
+// @description  4.6.3.1: 사용자판 4.6.0.9 기능·설정 보존 + 원작자 4.6.1~4.6.3 통합. 현재 모델 이미지, 입력창 모델 버튼 자동 숨김/복원, 로어 위치, 라디오존데 묶음 조회, 최신 메시지 기준 초안 정리, 배지 부분 갱신·방 이동 보호·대시보드 중복 처리 감소. 소형 모델 선택창·상단바 깜빡임 방지 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -45,8 +45,8 @@
     'use strict';
     if (window.top !== window.self) return;
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.0.9' || page.__CMU_4609_BOOT_PENDING__) return;
-    page.__CMU_4609_BOOT_PENDING__ = true;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.3.1' || page.__CMU_4631_BOOT_PENDING__) return;
+    page.__CMU_4631_BOOT_PENDING__ = true;
     function earlySorterEnabled() {
         for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
             try {
@@ -1070,7 +1070,7 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
 
 function cmuMain() {
     'use strict';
-    const VERSION = '4.6.0.9';
+    const VERSION = '4.6.3.1';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -1964,31 +1964,56 @@ function cmuMain() {
         if (getChatId() === chatId) BADGE.apiCache = null;
         return room;
     }
+    function cmuCollectBadgeTargetIds(chatId, messageId) {
+        const ids = new Set(isObjectId(messageId) ? [messageId] : []);
+        if (getChatId() !== chatId) return ids;
+        const rows = cmuRoomData(chatId).messages;
+        const parentTurnId = rows.get(messageId)?.parentTurnId;
+        if (parentTurnId) {
+            for (const [id, row] of rows) {
+                if (row.parentTurnId === parentTurnId && isObjectId(id)) ids.add(id);
+            }
+        }
+        for (const [key, resolved] of BADGE.resultCache) {
+            if (ids.has(resolved?.messageId)) {
+                const anchorId = key.split(':')[0];
+                if (isObjectId(anchorId)) ids.add(anchorId);
+            }
+        }
+        return ids;
+    }
+    function cmuQueueBadgeTargets(chatId, ids, invalidate = true) {
+        if (!shouldRun() || !chatId || getChatId() !== chatId) return;
+        if (invalidate) {
+            BADGE.apiCache = null;
+            for (const [key, resolved] of BADGE.resultCache) {
+                if (ids.has(key.split(':')[0]) || ids.has(resolved?.messageId)) BADGE.resultCache.delete(key);
+            }
+            for (const id of ids) BADGE.missCache.delete(id);
+        }
+        let queued = false;
+        for (const id of ids) {
+            if (!isObjectId(id)) continue;
+            const group = document.querySelector(`[data-message-group-id="${id}"]`);
+            if (group) { cmuRouterAddGroup(group); queued = true; }
+        }
+        if (queued) scheduleCmuDomRouterFlush();
+    }
     function cmuMessageChanged(chatId, messageId, message, deleted = false) {
+        // Capture reroll siblings before deleting their raw row or resolved cache entry.
+        const affected = cmuCollectBadgeTargetIds(chatId, messageId);
         const room = cmuRoomData(chatId);
         room.revision++;
         room.pages.clear(); room.firstAt = 0; room.first = null;
         if (deleted) room.messages.delete(messageId);
         else if (message) cmuRememberMessages(chatId, [{ ...message, _id: messageId, chatId }]);
         else room.messages.delete(messageId);
-        if (getChatId() !== chatId) return;
-        const affected = new Set([messageId]);
-        for (const [key, resolved] of BADGE.resultCache) {
-            if (key.split(':')[0] === messageId || resolved?.messageId === messageId) {
-                affected.add(key.split(':')[0]);
-                BADGE.resultCache.delete(key);
-            }
-        }
-        BADGE.missCache.delete(messageId);
-        BADGE.apiCache = null;
+        if (getChatId() !== chatId) return affected;
         BADGE.apiPromise = null;
         BADGE.forcePromise = null;
         BADGE.generation = (BADGE.generation || 0) + 1;
-        for (const id of affected) {
-            if (!isObjectId(id)) continue;
-            const group = document.querySelector(`[data-message-group-id="${id}"]`);
-            if (group) { cmuRouterAddGroup(group); scheduleCmuDomRouterFlush(); }
-        }
+        cmuQueueBadgeTargets(chatId, affected);
+        return affected;
     }
     function cmuMessageRequest(method, value) {
         try {
@@ -2028,8 +2053,8 @@ function cmuMain() {
             }
         } else if (meta.messageId) {
             if (meta.method === 'DELETE') {
-                cmuMessageChanged(meta.chatId, meta.messageId, null, true);
-                cmiRecordSuccessfulDeletion(meta.chatId, meta.messageId);
+                const affected = cmuMessageChanged(meta.chatId, meta.messageId, null, true);
+                cmiRecordSuccessfulDeletion(meta.chatId, meta.messageId, affected);
             } else {
                 let request = null;
                 try { request = typeof body === 'string' ? JSON.parse(body) : body; } catch (_) { }
@@ -12258,10 +12283,15 @@ function cmuMain() {
         catch (_) { }
     }
     function cmuDraftVisibleMessageIds() {
-        return Array.from(document.querySelectorAll('[data-message-group-id]'))
-            .map(el => String(el.getAttribute('data-message-group-id') || ''))
-            .filter(Boolean)
-            .slice(-160);
+        // 09/30 native list: newest group first; skip non-group streaming/recommendation children.
+        const first = document.querySelector('.stick-to-bottom [data-message-group-id]')
+            || document.querySelector('[data-message-group-id]');
+        const ids = [];
+        for (let group = first; group && ids.length < 160; group = group.nextElementSibling) {
+            const id = String(group.getAttribute('data-message-group-id') || '');
+            if (id) ids.push(id);
+        }
+        return ids;
     }
     function cmuDraftWrite(roomId, text, reason = 'input', pending = null) {
         if (!roomId || cmuDraftIsBlank(text))
@@ -14040,12 +14070,17 @@ function cmuMain() {
             .some(icon => icon.closest('button, [role="button"]') === button);
         const hasModelLabel = /모델\s*(?:선택|변경|전환)|(?:model[-_\s]*(?:select|switch|picker)|(?:select|switch|change)[-_\s]*(?:ai[-_\s]*)?model)/i.test(label);
         // A companion hider clips the native button but intentionally retains its DOM/click handler.
-        const hiddenModel = button.getAttribute('data-crack-himb-target') === '1';
+        const relocated = button.getAttribute('data-cmu-model-relocated') === '1';
+        const hiddenModel = button.getAttribute('data-crack-himb-target') === '1' || relocated;
+        // Continue-generation controls can also contain a model icon. Keep the
+        // custom icon-only fallback for legacy triggers without aria-haspopup.
+        if (/이어서\s*(?:생성|쓰기)|계속\s*생성|continue\s*(?:generat|writ)|regenerat/i.test(label + ' ' + (button.textContent || '')))
+            return -1;
         if (!hasIcon && !hasModelLabel && !hiddenModel)
             return -1;
         const style = getComputedStyle(button);
         const rect = button.getBoundingClientRect();
-        if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || rect.height <= 0)
+        if (style.display === 'none' || style.visibility === 'hidden' || (!relocated && rect.width <= 0) || rect.height <= 0)
             return -1;
         let score = hasIcon ? 100 : 60;
         if (hiddenModel) score += 20;
@@ -14058,6 +14093,11 @@ function cmuMain() {
         // A generic header menu (the room's ... button) must never be used as a fallback.
         const input = findChatInput();
         const composer = input ? findComposerShell(input) : null;
+        // Prefer the exact 10/13 composer row, preserving the custom safe fallback.
+        const rowButtons = document.querySelectorAll('main .flex.items-center.justify-between > .flex.min-w-0 > button[aria-haspopup="dialog"]');
+        for (const button of rowButtons) {
+            if (compactModelTriggerScore(button, composer) >= 0) return button;
+        }
         let best = null;
         let bestScore = -1;
         for (const button of document.querySelectorAll('button, [role="button"]')) {
@@ -14693,6 +14733,7 @@ function cmuMain() {
         // control (or a clipped trigger) changes its flex/transform context and
         // can make the input box jump out of view while the native menu is open.
         if (nativeButton.getAttribute('data-crack-himb-target') === '1' ||
+            nativeButton.getAttribute('data-cmu-model-relocated') === '1' ||
             nativeButton.querySelector('textarea, input, [contenteditable="true"], .__chat_input_textarea, #chud-model-btn') ||
             isButtonInsideChatComposer(nativeButton))
             return () => {};
@@ -15853,7 +15894,78 @@ function cmuMain() {
         applySideVisible();
         applyDashboardLayout(shell, input);
     }
+    // 4.6.3 upstream model image / 4.6.2 relocation, adapted to the custom picker.
+    // Keep the native handler in place; never move the composer or reveal its header.
+    var cmuModelMovedNative = null, cmuSideModelNative = null, cmuSideModelMo = null;
+    function cmuResetSideModelTracking() {
+        cmuSideModelMo?.disconnect();
+        cmuSideModelMo = cmuSideModelNative = null;
+        cmuModelMovedNative?.removeAttribute('data-cmu-model-relocated');
+        cmuModelMovedNative = null;
+        document.documentElement.removeAttribute('data-cmu-model-moved');
+    }
+    function cmuSyncModelMoved() {
+        const mb = DASH_SIDE.btns?.modelButton;
+        const moved = shouldRun() && settings.enabled !== false && settings.dashboardSidebar && isChatRoomPath() &&
+            !!(DASH_SIDE.el?.isConnected && mb?.isConnected && mb.style.display !== 'none');
+        if (!moved) {
+            cmuResetSideModelTracking();
+            return;
+        }
+        const native = getNativeModelMenuButton();
+        if (cmuModelMovedNative !== native) {
+            cmuModelMovedNative?.removeAttribute('data-cmu-model-relocated');
+            cmuModelMovedNative = native;
+        }
+        if (native && native.getAttribute('data-cmu-model-relocated') !== '1')
+            native.setAttribute('data-cmu-model-relocated', '1');
+        if (!document.documentElement.hasAttribute('data-cmu-model-moved'))
+            document.documentElement.setAttribute('data-cmu-model-moved', '');
+        cmuSyncSideModelIcon(native);
+    }
+    function cmuSyncSideModelIcon(native = cmuSideModelNative) {
+        const mb = DASH_SIDE.btns?.modelButton;
+        if (!mb?.isConnected) return;
+        const img = native?.querySelector('img[src*="model-icon"], img[srcset*="model-icon"]');
+        // currentSrc can still point at the previous image when a src mutation fires.
+        const src = img ? ((img.getAttribute('srcset') || '').split(',')[0].trim().split(/\s+/)[0] ||
+            img.getAttribute('src') || img.currentSrc || '') : '';
+        const name = native ? String(native.textContent || native.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim() : '';
+        const sig = src + '|' + name;
+        if (mb.dataset.modelSig !== sig) {
+            mb.dataset.modelSig = sig;
+            if (src) {
+                const im = document.createElement('img');
+                im.className = 'chud-btn-icon chud-model-img';
+                im.alt = '';
+                im.src = src;
+                mb.replaceChildren(im);
+            } else mb.innerHTML = SIDE_ICON.model;
+            const title = name ? name + ' · 모델 변경' : '모델 변경';
+            mb.title = title;
+            mb.setAttribute('aria-label', title);
+        }
+        if (cmuSideModelNative !== native) {
+            cmuSideModelMo?.disconnect();
+            cmuSideModelMo = null;
+            cmuSideModelNative = native;
+            if (native) {
+                cmuSideModelMo = new MutationObserver(() => cmuSyncSideModelIcon(native));
+                cmuSideModelMo.observe(native, { subtree: true, childList: true, characterData: true,
+                    attributes: true, attributeFilter: ['src', 'srcset', 'aria-label'] });
+            }
+        }
+    }
+    addStyle(`
+      html[data-cmu-model-moved] [data-cmu-model-relocated="1"] {
+        width:0!important;min-width:0!important;max-width:0!important;flex:0 0 0px!important;
+        padding:0!important;margin:0!important;border:0!important;overflow:hidden!important;
+        opacity:0!important;pointer-events:none!important;
+      }
+      #chud-model-btn .chud-model-img {width:18px;height:18px;flex-shrink:0;border-radius:5px;object-fit:cover}
+    `);
     function removeDashboardSidebar() {
+        cmuResetSideModelTracking();
         closeCompactModelPicker({ closeNative: true });
         document.getElementById(ID.dashboardSidebar)?.remove();
         document.getElementById('chud-side-menu')?.remove();
@@ -15881,6 +15993,7 @@ function cmuMain() {
         });
         syncCmuQuickButtons();
         cmuSyncAddonButtons();
+        cmuSyncModelMoved();
     }
     function syncSideMenu() {
         const visible = sideLoadVisible();
@@ -16085,6 +16198,7 @@ function cmuMain() {
             bar.addEventListener('pointerup', releaseHold, true);
             bar.addEventListener('pointercancel', releaseHold, true);
             bar.addEventListener('pointerleave', releaseHold, true);
+            DASH.lastHtml = '';
             DASH.textSpan = document.createElement('span');
             DASH.textSpan.id = 'chud-info-text';
             DASH.textSpan.addEventListener('click', (e) => {
@@ -16100,7 +16214,9 @@ function cmuMain() {
             bar.append(DASH.textSpan);
         }
         else {
-            DASH.textSpan = bar.querySelector('#chud-info-text');
+            const textSpan = bar.querySelector('#chud-info-text');
+            if (DASH.textSpan !== textSpan) DASH.lastHtml = '';
+            DASH.textSpan = textSpan;
         }
         if (bar.parentElement !== shell) {
             shell.insertBefore(bar, shell.firstChild || null);
@@ -16570,11 +16686,9 @@ function cmuMain() {
                 DASH.state.cumulative = Number(snap.cumulative) || 0;
             if (snap.lastDiff != null)
                 DASH.state.lastDiff = Number(snap.lastDiff) || 0;
-            DASH.lastHtml = '';
             renderDashboardParts();
         }
         else if (!changedRoom) {
-            DASH.lastHtml = '';
             renderDashboardParts();
         }
         try {
@@ -16589,13 +16703,11 @@ function cmuMain() {
             if (!shouldRun() || updateSeq !== DASH.updateSeq || getChatId() !== requestChatId || DASH.state.chatId !== requestChatId)
                 return;
             saveDashboardSnapshot(requestChatId);
-            DASH.lastHtml = '';
             renderDashboardParts();
         }
         catch (err) {
             console.warn(LOG, 'dashboard failed', err);
             if (getChatId() === chatId && DASH.state.chatId === chatId) {
-                DASH.lastHtml = '';
                 renderDashboardParts();
             }
         }
@@ -16620,7 +16732,7 @@ function cmuMain() {
         const detail = getDashDetail();
         const logs = DASH.state.logs;
         const justMoved = !logs && DASH.state.roomChangedAt && Date.now() - DASH.state.roomChangedAt < 900;
-        const domGroups = justMoved ? 0 : document.querySelectorAll('div[data-message-group-id]').length;
+        const domGroups = !logs && !justMoved ? document.querySelectorAll('div[data-message-group-id]').length : 0;
         const turns = logs ? Math.max(0, Number(logs.officialTurnCount ?? logs.userTurnCount) || 0) : (justMoved ? null : Math.max(0, Math.floor(domGroups / 2) - 1));
         const parts = [];
         // A DOM-based estimate is shown until the message scan finishes; don't animate from it.
@@ -17541,10 +17653,36 @@ function cmuMain() {
         igxMetricInflight.set(slug, task);
         return task;
     }
+    // 묶음 요청: 30개씩 한 번에. 받은 값은 모델별 캐시에 넣어 아래 모델별 경로가 다시 묻지 않게 한다
+    async function fetchIgxBulk(slugs, force) {
+        const now = Date.now();
+        const want = slugs.filter(slug => {
+            const cached = igxMetricCache.get(slug);
+            return force || !cached || now - cached.at >= 15000;
+        });
+        for (let i = 0; i < want.length; i += 30) {
+            const part = want.slice(i, i + 30);
+            try {
+                const data = await igxRequestJson('simple/bulk?models=' + part.map(encodeURIComponent).join(','));
+                if (!data || typeof data !== 'object') continue;
+                for (const slug of part) {
+                    const record = metricRecordFromObject(data[slug], slug);
+                    if (!record) continue;
+                    igxMetricCache.set(slug, { at: Date.now(), record });
+                    igxMetricFailures.delete(slug);
+                }
+            }
+            catch (error) {
+                if (error.name === 'AbortError') throw error;
+            }
+        }
+    }
     async function fetchIgxSnapshot({ force = false, slugs = [], onRecord } = {}) {
         const requested = [...new Set(slugs)];
+        await fetchIgxBulk(requested, force);
         const results = await Promise.allSettled(requested.map(async slug => {
-            const record = await fetchIgxOfficialModel(slug, { force });
+            const fresh = igxMetricCache.get(slug);
+            const record = fresh && Date.now() - fresh.at < 15000 ? fresh.record : await fetchIgxOfficialModel(slug, { force });
             if (igxCanRequest() && onRecord) onRecord(slug, record);
             return record;
         }));
@@ -17837,6 +17975,7 @@ function cmuMain() {
         if (BADGE.cacheKey === key)
             return;
         BADGE.cacheKey = key;
+        BADGE.routeEpoch = (BADGE.routeEpoch || 0) + 1;
         BADGE.generation = (BADGE.generation || 0) + 1;
         BADGE.forcePromise = null;
         BADGE.lastForceAt = 0;
@@ -18157,10 +18296,13 @@ function cmuMain() {
         }
         if (BADGE.editing.has(groupId)) {
             const revision = BADGE.editing.get(groupId);
+            const epoch = BADGE.routeEpoch, href = location.href;
+            const current = () => shouldRun() && group.isConnected && getChatId() === chatId && location.href === href && BADGE.routeEpoch === epoch;
             BADGE.editing.delete(groupId);
             setTimeout(async () => {
-                if (!shouldRun() || !group.isConnected || getChatId() !== chatId) return;
+                if (!current()) return;
                 if (cmuRoomData(chatId).revision === revision) await refreshBadgeApiCacheThrottled().catch(() => null);
+                if (!current()) return;
                 for (const key of BADGE.resultCache.keys()) if (key === groupId || key.startsWith(groupId + ':')) BADGE.resultCache.delete(key);
                 processBadgeGroup(group);
             }, 1500);
@@ -18417,8 +18559,14 @@ function cmuMain() {
         catch (_) { }
         return cacWithLocalStorageLock(guardedCallback);
     }
-    function cacRefreshCurrentRoom(chatId = '') {
+    function cacRefreshCurrentRoom(chatId = '', messageId = '', targetIds = null) {
         if (!chatId || getChatId() === chatId) {
+            if (isObjectId(messageId)) {
+                // Cost changes do not invalidate the cached message text/model/date.
+                cmuQueueBadgeTargets(chatId || getChatId(), targetIds || cmuCollectBadgeTargetIds(chatId || getChatId(), messageId), false);
+                return;
+            }
+            // Cross-tab storage events may replace many records and have no single message ID.
             BADGE.apiCache = null;
             BADGE.resultCache.clear();
             scheduleBadgeScan();
@@ -18489,8 +18637,7 @@ function cmuMain() {
             if (settings.dashboard) await claimConsumption(record, job.chatId);
         });
         if (measured && getChatId() === job.chatId) {
-            const group = isObjectId(job.messageId) && document.querySelector(`[data-message-group-id="${job.messageId}"]`);
-            if (group) { cmuRouterAddGroup(group); scheduleCmuDomRouterFlush(); }
+            cacRefreshCurrentRoom(job.chatId, job.messageId);
         }
         return measured;
     }
@@ -18565,7 +18712,7 @@ function cmuMain() {
             return;
         const existing = cacLoadCosts(chatId)[messageId];
         if (existing && Number(existing.amount) > 0) {
-            cacRefreshCurrentRoom(chatId);
+            cacRefreshCurrentRoom(chatId, messageId);
             return;
         }
         const doneAt = Date.now();
@@ -18582,7 +18729,7 @@ function cmuMain() {
             isReroll: meta?.is_regenerate === true || meta?.isRegenerate === true || remembered?.isReroll === true,
         };
         CAC.pendingStarts.delete(chatId);
-        cacRefreshCurrentRoom(chatId);
+        cacRefreshCurrentRoom(chatId, messageId);
         const promise = cacPollAndMeasure(job)
             .catch(err => { try {
             console.debug(`${LOG} answer cost measure failed`, err);
@@ -18656,7 +18803,7 @@ function cmuMain() {
         if (amountEl)
             amountEl.textContent = `${formatNumber(amount)}개`;
     }
-    async function cacRecordSuccessfulDeletion(chatId, messageId) {
+    async function cacRecordSuccessfulDeletion(chatId, messageId, targetIds = null) {
         chatId = cacNormalizeId(chatId);
         messageId = cacNormalizeId(messageId);
         if (!chatId || !messageId)
@@ -18671,11 +18818,9 @@ function cmuMain() {
                 cacSaveCosts(chatId, costs);
             }
         });
-        document.querySelectorAll('.cac-answer-cost').forEach(badge => {
-            if (badge.dataset.messageId === messageId)
-                badge.remove();
-        });
-        cacRefreshCurrentRoom(chatId);
+        if (!shouldRun() || getChatId() !== chatId) return;
+        if (isObjectId(messageId)) document.querySelectorAll(`.cac-answer-cost[data-message-id="${messageId}"]`).forEach(badge => badge.remove());
+        cacRefreshCurrentRoom(chatId, messageId, targetIds);
     }
     function cacBindFallbackStartListeners() {
         if (document.documentElement.dataset.cmuAnswerCostBound === '1')
@@ -19764,6 +19909,7 @@ function cmuMain() {
             : (entry || {});
         return {
             msgId: String(meta?.msg_id || meta?.fe_msg_id || meta?.message_id || meta?.messageId || meta?.id || ''),
+            chatId: String(meta?.chat_id || meta?.chatId || meta?.episode_id || ''),
             chatMode: meta?.chat_mode || meta?.chatMode || '',
             modelName: meta?.model_name || meta?.modelName || '',
         };
@@ -19778,18 +19924,27 @@ function cmuMain() {
     function cmiRecordGenerateDone(entry) {
         try {
             const meta = cmiExtractGdMeta(entry);
-            if (!isObjectId(meta.msgId))
-                return;
+            if (!isObjectId(meta.msgId)) return;
             const token = cmiTokenFromGdMeta(meta);
-            if (!token)
-                return;
+            if (!token) return;
             cmiEnsureModel(token, meta.modelName);
             cmiGdLoadMap()[meta.msgId] = token;
             cmiGdSaveMap();
-            setTimeout(() => {
-                BADGE.apiCache = null;
-                BADGE.resultCache.clear();
-                scheduleBadgeScan();
+            const chatId = meta.chatId || getChatId();
+            if (!chatId || getChatId() !== chatId) return;
+            resetBadgeCacheIfNeeded();
+            const epoch = BADGE.routeEpoch, href = location.href;
+            const current = () => shouldRun() && getChatId() === chatId && location.href === href && BADGE.routeEpoch === epoch;
+            setTimeout(async () => {
+                if (!current()) return;
+                // A reroll's new ID may differ from the visible group's anchor ID.
+                // Reuse the shared head request only when its parent-turn mapping is still missing.
+                if (isGenerateDoneReroll(entry) && !cmuRoomData(chatId).messages.has(meta.msgId) &&
+                    (anyBadgeEnabled() || cmiWanted() || cacWanted())) {
+                    try { await cmuSharedMessagePage(chatId, '', true); } catch (_) { }
+                    if (!current()) return;
+                }
+                cmuQueueBadgeTargets(chatId, cmuCollectBadgeTargetIds(chatId, meta.msgId));
             }, 700);
         }
         catch (_) { }
@@ -19815,37 +19970,36 @@ function cmuMain() {
             return { chatId: match[1], messageId: match[2] };
         }
     }
-    function cmiRecordSuccessfulDeletion(chatId, messageId) {
+    function cmiRecordSuccessfulDeletion(chatId, messageId, targetIds = null) {
         chatId = String(chatId || '').trim();
         messageId = String(messageId || '').trim();
-        if (!isObjectId(messageId))
-            return;
+        if (!isObjectId(messageId)) return;
+        const affected = targetIds || cmuCollectBadgeTargetIds(chatId, messageId);
         if (chatId) {
             invalidateDashboardRoomStats(chatId);
-            if (getChatId() === chatId)
-                scheduleDashboardUpdate(true);
+            if (getChatId() === chatId) scheduleDashboardUpdate(true);
         }
-        cacRecordSuccessfulDeletion(chatId, messageId)
-            .catch(err => { try {
-            console.debug(`${LOG} answer cost delete cleanup failed`, err);
-        }
-        catch (_) { } });
+        cacRecordSuccessfulDeletion(chatId, messageId, affected)
+            .catch(err => { try { console.debug(`${LOG} answer cost delete cleanup failed`, err); } catch (_) { } });
         const map = cmiGdLoadMap();
         if (Object.prototype.hasOwnProperty.call(map, messageId)) {
             delete map[messageId];
             cmiGdSaveMap();
         }
-        document.querySelectorAll('.cmi-model-badge').forEach(badge => {
-            if (badge.dataset.messageId === messageId) {
-                const group = badge.closest(BADGE.selector);
-                badge.remove();
-                group?.querySelectorAll('.cmi-model-slot:empty').forEach(el => el.remove());
-            }
+        if (!shouldRun() || getChatId() !== chatId) return;
+        document.querySelectorAll(`.cmi-model-badge[data-message-id="${messageId}"]`).forEach(badge => {
+            const group = badge.closest(BADGE.selector);
+            badge.remove();
+            group?.querySelectorAll('.cmi-model-slot:empty').forEach(el => el.remove());
         });
-        BADGE.apiCache = null;
-        BADGE.resultCache.clear();
+        resetBadgeCacheIfNeeded();
+        const epoch = BADGE.routeEpoch, href = location.href;
         BADGE.lastForceAt = 0;
-        [80, 450, 1200].forEach(ms => setTimeout(scheduleBadgeScan, ms));
+        // Keep the native DOM-settle retries, but only for this answer and its reroll siblings.
+        [80, 450, 1200].forEach(ms => setTimeout(() => {
+            if (shouldRun() && getChatId() === chatId && location.href === href && BADGE.routeEpoch === epoch)
+                cmuQueueBadgeTargets(chatId, affected);
+        }, ms));
     }
     function cmiInstallDeleteHooks() {
         const w = getPublicWindow();
@@ -20837,7 +20991,7 @@ function cmuMain() {
         if (!loreButton?.parentElement)
             return 'found-unplaced';
         const next = loreButton.nextElementSibling;
-        if (next?.getAttribute?.('aria-haspopup') === 'menu')
+        if (next?.getAttribute?.('aria-haspopup') === 'menu' || next?.querySelector?.('svg path[d^="M11 11h2v2h-2"]'))
             return 'before-model';
         return loreButton.dataset.cmuLorePlaced || 'found-unplaced';
     }
@@ -20851,7 +21005,8 @@ function cmuMain() {
         const topBar = findLoreRoomTopBar();
         if (!topBar)
             return;
-        const modelButton = topBar.querySelector('button[aria-haspopup="menu"]') || topBar.querySelector('img[src*="model-icon"]')?.closest('button');
+        const modelButton = topBar.querySelector('button[aria-haspopup="menu"]') || topBar.querySelector('img[src*="model-icon"]')?.closest('button') ||
+            topBar.querySelector('svg path[d^="M11 11h2v2h-2"]')?.closest('button');
         if (!modelButton?.parentElement)
             return;
         if (modelButton.previousElementSibling !== loreButton)
@@ -20971,7 +21126,8 @@ function cmuMain() {
             return true;
         if (observedScope && (node === observedScope || node.contains?.(observedScope)))
             return true;
-        if (observedScope?.contains?.(node) && node.matches?.('button, form, textarea, [contenteditable="true"]'))
+        if (observedScope?.contains?.(node) && (node.matches?.('button, form, textarea, [contenteditable="true"], img[src*="model-icon"], img[srcset*="model-icon"]') ||
+            node.querySelector?.('button img[src*="model-icon"], button img[srcset*="model-icon"]')))
             return true;
         return !!(node.matches?.(CMU_ROUTER_COMPOSER_SELECTOR) || node.querySelector?.(CMU_ROUTER_COMPOSER_SELECTOR));
     }
@@ -21093,6 +21249,8 @@ function cmuMain() {
         }
         if (inlineDirty)
             ensureInlineBlocks(input || findChatInput());
+        // A native trigger can be replaced within the composer's 900ms heal cooldown.
+        if (composerDirty || headerDirty) cmuSyncModelMoved();
         if (headerDirty) {
             markGlobalHeader();
             ensureLoreEntryButtonInRoomTopBar();
@@ -21385,6 +21543,11 @@ function cmuMain() {
             if (Array.from(CMU_DOM_WATCH.textRoots).some(root => !root.isConnected))
                 dirty = true;
             if (cmuCachedChatInput && !cmuCachedChatInput.isConnected) {
+                CMU_DOM_ROUTER.composerDirty = true;
+                dirty = true;
+            }
+            // Rebind only when the tracked native trigger was replaced by React.
+            if (cmuSideModelNative && !cmuSideModelNative.isConnected) {
                 CMU_DOM_ROUTER.composerDirty = true;
                 dirty = true;
             }
@@ -31201,6 +31364,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
         CMU_DRAFT.restoreToken += 1;
         CMU_DRAFT.verifyToken += 1;
         const safely = fn => { try { fn(); } catch (_) { } };
+        safely(cmuResetSideModelTracking);
         safely(restoreGlobalHeaderShellLayout);
         safely(cmuDisposeResources);
         CMU_INPUT_COUNTER.disposed = true;
@@ -31253,7 +31417,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
 }
 
     function startCmuOnce() {
-        delete page.__CMU_4609_BOOT_PENDING__;
+        delete page.__CMU_4631_BOOT_PENDING__;
         try { cmuMain(); }
         catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
     }

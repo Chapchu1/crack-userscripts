@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.9
-// @description  4.6.0.9: 모델 선택 시 접힌 상단바가 잠깐 나타나는 현상 대응. 모델 조작 중 헤더 숨김 유지 및 재생성 즉시 처리. 기존 기능·설정 유지.
+// @version      4.6.3.1
+// @description  4.6.3.1: 사용자판 4.6.0.9 기능·설정 보존 + 원작자 4.6.1~4.6.3 통합. 현재 모델 이미지, 입력창 모델 버튼 자동 숨김/복원, 로어 위치, 라디오존데 묶음 조회, 최신 메시지 기준 초안 정리, 배지 부분 갱신·방 이동 보호·대시보드 중복 처리 감소. 소형 모델 선택창·상단바 깜빡임 방지 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
