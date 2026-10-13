@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.7
-// @description  4.6.0.7: 사이트 모델 버튼 이동 대응. 모델 메뉴 오인식·팝업 위치 초기화 수정, 입력창 큐브 기준 표시 안정화. 기존 기능·설정 유지.
+// @version      4.6.0.8
+// @description  4.6.0.8: 모델 선택 시 입력창 깜빡임 대응. 실제 모델 버튼만 탐색, 입력창 버튼 강제 고정 제거, 같은 모델 재선택 생략. 기존 기능·설정 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -45,8 +45,8 @@
     'use strict';
     if (window.top !== window.self) return;
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.0.7' || page.__CMU_4607_BOOT_PENDING__) return;
-    page.__CMU_4607_BOOT_PENDING__ = true;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.0.8' || page.__CMU_4608_BOOT_PENDING__) return;
+    page.__CMU_4608_BOOT_PENDING__ = true;
     function earlySorterEnabled() {
         for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
             try {
@@ -1070,7 +1070,7 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
 
 function cmuMain() {
     'use strict';
-    const VERSION = '4.6.0.7';
+    const VERSION = '4.6.0.8';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -14017,11 +14017,16 @@ function cmuMain() {
             button.matches(':disabled, [aria-disabled="true"], [type="submit"], [type="reset"]') ||
             button.closest('[data-message-group-id], .wrtn-markdown, [role="dialog"], [role="menu"], [role="listbox"], [data-radix-menu-content], [data-radix-popper-content-wrapper]'))
             return -1;
+        // 4.6.0.8: a clickable composer/container can also contain a model icon.
+        // It must never become the trigger or be moved by the legacy header freeze.
+        if (button === composer || button.querySelector('textarea, input, [contenteditable="true"], .__chat_input_textarea, #chud-model-btn'))
+            return -1;
         const label = ['aria-label', 'title', 'data-tooltip', 'data-testid', 'id']
             .map(name => button.getAttribute(name) || '').join(' ');
         if (/답변\s*길이|생각\s*조절|출력량|모델\s*필터|전송|보내기|\b(?:send|submit)\b/i.test(label))
             return -1;
-        const hasIcon = !!button.querySelector('img[src*="model-icon"], img[srcset*="model-icon"], [style*="model-icon"], svg use[href*="model-icon"]');
+        const hasIcon = Array.from(button.querySelectorAll('img[src*="model-icon"], img[srcset*="model-icon"], [style*="model-icon"], svg use[href*="model-icon"]'))
+            .some(icon => icon.closest('button, [role="button"]') === button);
         const hasModelLabel = /모델\s*(?:선택|변경|전환)|(?:model[-_\s]*(?:select|switch|picker)|(?:select|switch|change)[-_\s]*(?:ai[-_\s]*)?model)/i.test(label);
         // A companion hider clips the native button but intentionally retains its DOM/click handler.
         const hiddenModel = button.getAttribute('data-crack-himb-target') === '1';
@@ -14662,6 +14667,14 @@ function cmuMain() {
         if (!(nativeButton instanceof HTMLElement) || !nativeButton.isConnected)
             return () => {};
 
+        // Only the old header trigger needs this workaround. Moving a composer
+        // control (or a clipped trigger) changes its flex/transform context and
+        // can make the input box jump out of view while the native menu is open.
+        if (nativeButton.getAttribute('data-crack-himb-target') === '1' ||
+            nativeButton.querySelector('textarea, input, [contenteditable="true"], .__chat_input_textarea, #chud-model-btn') ||
+            isButtonInsideChatComposer(nativeButton))
+            return () => {};
+
         const rect = nativeButton.getBoundingClientRect();
         if (!rect.width || !rect.height)
             return () => {};
@@ -14854,15 +14867,20 @@ function cmuMain() {
                 event.stopPropagation();
                 if (COMPACT_MODEL.selecting || option.dataset.selecting === '1')
                     return;
+                // Use the live trigger, not the opening snapshot: another UI may
+                // have changed the model while this list was visible.
+                if (nativeButton.isConnected && compactModelButtonToken(nativeButton) === entry.token) {
+                    closeCompactModelPicker({ closeNative: true });
+                    return;
+                }
                 option.dataset.selecting = '1';
                 COMPACT_MODEL.selecting = true;
                 const selectionSeq = COMPACT_MODEL.seq;
                 const focusGuard = COMPACT_MODEL.focusGuard;
                 menu.querySelectorAll('button').forEach(button => button.disabled = true);
 
-                // 4.5.0.4.11:
-                // 실제 모델 선택을 위해 숨겨진 원본 메뉴를 잠깐 다시 여는 동안
-                // Crack 상단 모델 버튼이 좌우로 재배치되지 않도록 현재 화면 좌표에 잠깐 고정한다.
+                // Legacy header buttons retain their old placement workaround;
+                // composer controls keep their native DOM and layout untouched.
                 const releaseNativeButtonFreeze = compactModelFreezeNativeButton(nativeButton);
                 try {
                     const freshSnapshot = await compactModelHiddenSnapshotForSelection(nativeButton);
@@ -31208,7 +31226,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
 }
 
     function startCmuOnce() {
-        delete page.__CMU_4607_BOOT_PENDING__;
+        delete page.__CMU_4608_BOOT_PENDING__;
         try { cmuMain(); }
         catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
     }
