@@ -1,8 +1,11 @@
 // ==UserScript==
 // @name         크랙 · 입력창 모델 버튼 숨기기
 // @namespace    crack-input-model-button-hider
-// @version      1.0.0
-// @description  채팅 입력창의 기본 모델 선택 버튼 숨김. 자동 감지 / 직접 지정 / 다시 표시 지원.
+// @version      1.0.1
+// @description  채팅 입력창의 기본 모델·무료 채팅권 버튼 숨김. 자동 감지 / 직접 지정 / 다시 표시 지원.
+// @homepageURL  https://github.com/Chapchu1/crack-userscripts
+// @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-hide-input-model-button.user.js
+// @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-hide-input-model-button.meta.js
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @noframes
@@ -10,15 +13,12 @@
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
-// @homepageURL  https://github.com/Chapchu1/crack-userscripts
-// @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-hide-input-model-button.meta.js
-// @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-hide-input-model-button.user.js
 // ==/UserScript==
 
 /*
  * 설치: 탬퍼몽키 → 새 스크립트 → 기본 내용을 전부 지우고 이 파일 전체 붙여넣기 → 저장.
  * 크랙을 새로고침하면 자동 감지를 시작합니다.
- * 버튼이 남으면: 탬퍼몽키 → 이 스크립트 → '숨길 버튼 직접 지정' → 번개 버튼 누르기.
+ * 버튼이 남으면: 탬퍼몽키 → 이 스크립트 → '숨길 버튼 직접 지정' → 번개·선물 버튼 누르기.
  * 복원: 메뉴의 '모델 버튼 다시 표시', 또는 스크립트를 끄고 새로고침.
  *
  * 참고한 코드: 사용자의 CMU 4.6.0.6에 있는 model-icon / __chat_input_textarea 식별 방식.
@@ -50,10 +50,15 @@
   ].join(',');
   const ICON = 'img[src*="model-icon"],img[srcset*="model-icon"],svg use[href*="model-icon"]';
   const MODEL_LABEL = /(?:모델\s*(?:선택|변경|전환)|^(?:AI\s*)?모델$|\bmodel[-_\s]*(?:select|switch|picker)|\b(?:select|switch|change)[-_\s]*(?:ai[-_\s]*)?model\b)/i;
-  const NON_MODEL = /(?:전송|보내기|답변\s*길이|생각\s*조절|이미지\s*생성|\bsend\b|\bsubmit\b)/i;
+  const FREE_CHAT_LABEL = /(?:무료\s*(?:채팅|대화)(?:\s*권)?|(?:채팅|대화)\s*권|\bfree[-_\s]*(?:chat|conversation)(?:[-_\s]*(?:ticket|pass))?\b|\bchat[-_\s]*(?:ticket|pass)\b)/i;
+  const GIFT_ICON_LABEL = /(?:선물|(?:^|[^a-z0-9])(?:gift|present)(?=$|[^a-z0-9]))/i;
+  const NON_MODEL = /(?:전송|보내기|답변\s*길이|생각\s*조절|이미지\s*생성|선물함|보관함|출석|보상|충전|구매|\b(?:send|submit|reward|attendance|inventory|purchase)\b)/i;
+  const EDITOR = 'textarea,input,[contenteditable="true"],.__chat_input_textarea,#chud-model-btn';
+  const ROOM_HEADER = '.h-12.justify-between.bg-bg_screen,.h-12.justify-between.border-b';
   let enabled = GM_getValue('enabled', true) !== false;
   let manual = GM_getValue('manualFingerprint', null);
   let roots = [];
+  let neighborhoods = [];
   let pending = 0;
   let picking = false;
   let banner = null;
@@ -98,39 +103,72 @@
     return !(el instanceof Element) || !!el.closest(EXCLUDE);
   }
 
-  function discoverRoots() {
+  function discoverRoots({ forPicker = false } = {}) {
     const result = new Set();
+    const nearby = new Set();
     for (const input of document.querySelectorAll(INPUT)) {
       if (blocked(input) || !input.getClientRects().length) continue;
-      // Stop at the smallest common container of the editor and its controls.
-      // Never climb to a page-wide wrapper containing messages, a header or navigation.
+      // Find the smallest common container that actually contains a matching
+      // control. An earlier utility row with two unrelated buttons is not enough.
       let node = input.parentElement;
+      let candidateRoot = null;
+      let pickerRoot = null;
+      let neighborhood = null;
       for (let depth = 0; node && depth < 7; depth++, node = node.parentElement) {
-        if (node.matches('main,body,html') || blocked(node) ||
-            node.querySelector('[data-message-group-id],.wrtn-markdown,header,nav')) break;
-        const buttons = [...node.querySelectorAll(BUTTON)].filter(el => !blocked(el));
-        if (buttons.length >= 2) {
-          result.add(node);
-          break;
-        }
+        if (node.matches(`main,body,html,${ROOM_HEADER}`) || blocked(node) ||
+            node.querySelector(`[data-message-group-id],.wrtn-markdown,header,nav,[data-cmu-global-header="1"],[data-crack-ui-header="1"],#wrtn-custom-global-header,${ROOM_HEADER}`)) break;
+        neighborhood = node;
+        const buttons = [...node.querySelectorAll(BUTTON)].filter(eligible);
+        if (!candidateRoot && buttons.some(el => automatic(el) || matchesManual(el))) candidateRoot = node;
+        // Explicit picking must remain available for an unlabelled icon. Only
+        // that user-driven mode uses the bounded safe editor neighborhood.
+        if (forPicker && buttons.length) pickerRoot = node;
+        if (node.tagName === 'FORM') break;
       }
+      if (neighborhood) nearby.add(neighborhood);
+      if (candidateRoot) result.add(candidateRoot);
+      else if (forPicker && pickerRoot) result.add(pickerRoot);
     }
+    neighborhoods = [...nearby];
     return [...result];
   }
 
   function label(el) {
-    return ['aria-label', 'title', 'data-testid']
+    return ['aria-label', 'title', 'data-testid', 'data-tooltip']
       .map(name => el.getAttribute(name) || '').filter(Boolean).join(' ');
   }
 
   function eligible(el) {
     return el instanceof HTMLElement && !blocked(el) &&
       !el.matches('input,[type="submit"],[type="reset"]') &&
+      !el.querySelector(`${EDITOR},${BUTTON}`) &&
       !NON_MODEL.test(label(el));
   }
 
+  function freeChatSignal(el) {
+    // Identity only: callers must restrict this to the editor's native controls.
+    // Do not infer gifts from arbitrary SVG paths, color, or button position.
+    if (!(el instanceof Element) || !el.matches(BUTTON) || el.querySelector(`${EDITOR},${BUTTON}`)) return false;
+    const accessibleLabel = label(el);
+    if (FREE_CHAT_LABEL.test(accessibleLabel) || /🎁/.test(accessibleLabel)) return true;
+    const text = String(el.textContent || '').trim();
+    if (text.length <= 80 && (FREE_CHAT_LABEL.test(text) || /🎁/.test(text))) return true;
+    const icons = [...el.querySelectorAll('img,svg,use,[style*="url("]')];
+    if (/url\(/i.test(el.getAttribute('style') || '')) icons.push(el);
+    return icons.some(icon => {
+      if (icon.closest(BUTTON) !== el) return false;
+      const identity = ['src', 'srcset', 'alt', 'aria-label', 'title', 'data-icon', 'data-testid', 'class', 'href', 'xlink:href', 'style']
+        .map(name => {
+          const raw = icon.getAttribute(name) || '';
+          try { return decodeURIComponent(raw); } catch { return raw; }
+        }).join(' ').replace(/([a-z])([A-Z])/g, '$1 $2');
+      return GIFT_ICON_LABEL.test(identity) || FREE_CHAT_LABEL.test(identity) || /🎁/.test(identity);
+    });
+  }
+
   function automatic(el) {
-    return !!el.querySelector(ICON) || MODEL_LABEL.test(label(el));
+    return eligible(el) && ([...el.querySelectorAll(ICON)].some(icon => icon.closest(BUTTON) === el) ||
+      MODEL_LABEL.test(label(el)) || freeChatSignal(el));
   }
 
   function imageKey(image) {
@@ -147,7 +185,7 @@
   function fingerprint(el) {
     for (const name of ['data-testid', 'aria-label', 'title']) {
       const value = el.getAttribute(name);
-      if (value && value.length < 160 && MODEL_LABEL.test(value)) {
+      if (value && value.length < 160 && (MODEL_LABEL.test(value) || FREE_CHAT_LABEL.test(value))) {
         return { kind: 'attribute', name, value };
       }
     }
@@ -181,17 +219,28 @@
   }
 
   function hide(el) {
-    if (marked.has(el)) return;
-    marked.set(el, { tab: el.getAttribute('tabindex'), aria: el.getAttribute('aria-hidden') });
-    el.setAttribute(MARK, '1');
-    el.setAttribute('tabindex', '-1');
-    el.setAttribute('aria-hidden', 'true');
+    let saved = marked.get(el);
+    if (!saved) {
+      saved = { tab: el.getAttribute('tabindex'), aria: el.getAttribute('aria-hidden') };
+      marked.set(el, saved);
+    }
+    // React may reuse the button when its icon changes. Reapply only missing
+    // values, and remember newer site attributes for the eventual restore.
+    if (el.getAttribute(MARK) !== '1') el.setAttribute(MARK, '1');
+    if (el.getAttribute('tabindex') !== '-1') {
+      saved.tab = el.getAttribute('tabindex');
+      el.setAttribute('tabindex', '-1');
+    }
+    if (el.getAttribute('aria-hidden') !== 'true') {
+      saved.aria = el.getAttribute('aria-hidden');
+      el.setAttribute('aria-hidden', 'true');
+    }
   }
 
   function restore(el) {
     const saved = marked.get(el);
     if (!saved) return;
-    el.removeAttribute(MARK);
+    if (el.getAttribute(MARK) === '1') el.removeAttribute(MARK);
     for (const [name, value, ours] of [['tabindex', saved.tab, '-1'], ['aria-hidden', saved.aria, 'true']]) {
       if (el.getAttribute(name) !== ours) continue;
       if (value === null) el.removeAttribute(name); else el.setAttribute(name, value);
@@ -227,17 +276,23 @@
 
   const observer = new MutationObserver(records => {
     if (!enabled || picking || document.hidden) return;
-    if (roots.some(root => !root.isConnected)) { schedule(); return; }
+    if (roots.some(root => !root.isConnected) || neighborhoods.some(root => !root.isConnected)) { schedule(); return; }
     for (const record of records) {
       const target = record.target instanceof Element ? record.target : record.target.parentElement;
-      if (!target || blocked(target) || target.closest(INPUT)) continue;
-      if (roots.some(root => root.contains(target))) { schedule(); return; }
+      if (!target) continue;
+      // A reused hidden node may have become a send control or popup. Recheck
+      // it even if the new role would now exclude it from normal discovery.
+      if ([...marked.keys()].some(el => el === target || el.contains(target) || target.contains(el))) { schedule(); return; }
+      if (blocked(target) || (target.closest(INPUT) && record.type !== 'attributes')) continue;
+      // These scopes exist even before the first matching icon arrives.
+      if (neighborhoods.some(root => root.contains(target))) { schedule(); return; }
       if (record.type === 'childList') {
         for (const node of record.addedNodes) {
           if (node instanceof Element && !blocked(node) &&
               (node.matches(INPUT) || node.querySelector(INPUT))) { schedule(); return; }
         }
       }
+      if (record.type === 'attributes' && (target.matches(INPUT) || target.querySelector(INPUT))) { schedule(); return; }
     }
   });
 
@@ -247,8 +302,9 @@
     if (!enabled || document.hidden || picking) return;
     scan();
     observer.observe(document.body, {
-      childList: true, subtree: true, attributes: true,
-      attributeFilter: ['src', 'srcset', 'aria-label', 'title', 'data-testid', 'type']
+      childList: true, subtree: true, attributes: true, characterData: true,
+      // Our marker/tabindex/aria-hidden writes are deliberately not observed.
+      attributeFilter: ['src', 'srcset', 'alt', 'aria-label', 'title', 'data-testid', 'data-icon', 'data-tooltip', 'type', 'role', 'aria-haspopup', 'href', 'xlink:href', 'class', 'id', 'style', 'd', 'placeholder', 'data-placeholder', 'contenteditable']
     });
   }
 
@@ -308,7 +364,7 @@
 
   function startPicker() {
     stopPicker();
-    roots = discoverRoots();
+    roots = discoverRoots({ forPicker: true });
     if (!roots.length) {
       alert('채팅 입력창을 찾지 못했어요. 크랙 채팅방을 연 다음 다시 눌러 주세요.');
       return;
@@ -317,7 +373,7 @@
     for (const el of marked.keys()) restore(el);
     banner = document.createElement('div'); banner.id = `${PREFIX}-banner`;
     banner.setAttribute('role', 'status');
-    banner.append(document.createTextNode('숨길 번개 모델 버튼을 한 번 눌러 주세요.'));
+    banner.append(document.createTextNode('숨길 번개·선물 모델 버튼을 한 번 눌러 주세요.'));
     const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '취소';
     cancel.addEventListener('click', stopPicker); banner.append(cancel); document.body.append(banner);
     for (const name of ['pointerdown', 'mousedown', 'touchstart']) window.addEventListener(name, blockPress, true);
