@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.6
-// @description  4.6.0.6: 설정 톱니바퀴를 입력창 하단 원래 버튼 줄에 복원. 단축어 정렬 아이콘을 순정 단축어로 오인하던 문제 수정. 단축어 정렬·핀셋·개별 ON/OFF 유지.
+// @version      4.6.0.7
+// @description  4.6.0.7: 사이트 모델 버튼 이동 대응. 모델 메뉴 오인식·팝업 위치 초기화 수정, 입력창 큐브 기준 표시 안정화. 기존 기능·설정 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -45,8 +45,8 @@
     'use strict';
     if (window.top !== window.self) return;
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.0.6' || page.__CMU_4606_BOOT_PENDING__) return;
-    page.__CMU_4606_BOOT_PENDING__ = true;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.0.7' || page.__CMU_4607_BOOT_PENDING__) return;
+    page.__CMU_4607_BOOT_PENDING__ = true;
     function earlySorterEnabled() {
         for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
             try {
@@ -899,6 +899,8 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
     // Always-on work is only a URL check for XHR opens; no timers, DOM scans, or background requests.
     CMU_EARLY_SORTER.start();
 /*
+ * 4.6.0.7 수정: 입력창 모델 트리거 우선 식별, 무관한 상단 메뉴 폴백 제거.
+ * 원본 팝업 좌표 보존·닫힘 애니메이션 가림·초기 뷰포트/앵커 측정 보완.
  * 4.6.0.6 수정: 단축어 정렬 아이콘을 순정 단축어 버튼으로 오인하던 설정 위치 오류 수정.
  * 현재 입력창 안의 순정 버튼만 기준으로 찾아 설정 톱니바퀴를 하단 버튼 줄에 배치.
  * 감시기·타이머 추가 없이 기존 재배치 경로 사용.
@@ -1068,7 +1070,7 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
 
 function cmuMain() {
     'use strict';
-    const VERSION = '4.6.0.6';
+    const VERSION = '4.6.0.7';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -3994,7 +3996,9 @@ function cmuMain() {
     /* 큐브 버튼용 소형 모델 선택기: 원본 메뉴는 실제 선택 동작만 담당한다. */
     html.cmu-compact-model-probing :is([data-radix-popper-content-wrapper], [data-radix-menu-content]),
     html.cmu-compact-model-selecting :is([data-radix-popper-content-wrapper], [data-radix-menu-content]),
-    [data-cmu-compact-model-native="1"] {
+    [data-cmu-compact-model-native="1"],
+    [data-cmu-compact-model-native="closing"][data-state="closed"],
+    [data-cmu-compact-model-native="closing"]:has([data-radix-menu-content][data-state="closed"]) {
       opacity: 0 !important;
       pointer-events: none !important;
     }
@@ -12889,6 +12893,10 @@ function cmuMain() {
         closing: false,
         selecting: false,
         focusGuard: null,
+        anchorGeometry: null,
+        geometryGraceUntil: 0,
+        positionSettleTimer: 0,
+        nativeLiveStyles: new WeakMap(),
         toggleLockUntil: 0,
     };
     CMU_RESOURCES.cleanups.push(compactModelReleaseFocusGuard);
@@ -14003,17 +14011,47 @@ function cmuMain() {
         showToast('시작 설정 버튼 못 찾음');
         return false;
     }
+
+    function compactModelTriggerScore(button, composer = null) {
+        if (!(button instanceof HTMLElement) || !button.isConnected || isOwnElement(button) ||
+            button.matches(':disabled, [aria-disabled="true"], [type="submit"], [type="reset"]') ||
+            button.closest('[data-message-group-id], .wrtn-markdown, [role="dialog"], [role="menu"], [role="listbox"], [data-radix-menu-content], [data-radix-popper-content-wrapper]'))
+            return -1;
+        const label = ['aria-label', 'title', 'data-tooltip', 'data-testid', 'id']
+            .map(name => button.getAttribute(name) || '').join(' ');
+        if (/답변\s*길이|생각\s*조절|출력량|모델\s*필터|전송|보내기|\b(?:send|submit)\b/i.test(label))
+            return -1;
+        const hasIcon = !!button.querySelector('img[src*="model-icon"], img[srcset*="model-icon"], [style*="model-icon"], svg use[href*="model-icon"]');
+        const hasModelLabel = /모델\s*(?:선택|변경|전환)|(?:model[-_\s]*(?:select|switch|picker)|(?:select|switch|change)[-_\s]*(?:ai[-_\s]*)?model)/i.test(label);
+        // A companion hider clips the native button but intentionally retains its DOM/click handler.
+        const hiddenModel = button.getAttribute('data-crack-himb-target') === '1';
+        if (!hasIcon && !hasModelLabel && !hiddenModel)
+            return -1;
+        const style = getComputedStyle(button);
+        const rect = button.getBoundingClientRect();
+        if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || rect.height <= 0)
+            return -1;
+        let score = hasIcon ? 100 : 60;
+        if (hiddenModel) score += 20;
+        if (composer?.contains(button)) score += 200;
+        if (button.hasAttribute('aria-haspopup')) score += 10;
+        return score;
+    }
     function getNativeModelMenuButton() {
-        const topBar = findLoreRoomTopBar();
-        const topButton = topBar?.querySelector('button[aria-haspopup="menu"]') ||
-            topBar?.querySelector('img[src*="model-icon"]')?.closest('button');
-        if (topButton instanceof HTMLElement)
-            return topButton;
-        const iconButton = Array.from(document.querySelectorAll('img[src*="model-icon"]'))
-            .map(icon => icon.closest('button'))
-            .find(button => button instanceof HTMLElement &&
-            !button.closest(nmfNativeModelRootSelector()) && visibleClickable(button));
-        return iconButton || Array.from(document.querySelectorAll('button[aria-haspopup="menu"]')).find(visibleClickable) || null;
+        // 4.6.0.7: the native model trigger moved from the header to the composer.
+        // A generic header menu (the room's ... button) must never be used as a fallback.
+        const input = findChatInput();
+        const composer = input ? findComposerShell(input) : null;
+        let best = null;
+        let bestScore = -1;
+        for (const button of document.querySelectorAll('button, [role="button"]')) {
+            const score = compactModelTriggerScore(button, composer);
+            if (score > bestScore) {
+                best = button;
+                bestScore = score;
+            }
+        }
+        return best;
     }
     function compactModelImageSource(item, flatToken) {
         if (!(item instanceof Element))
@@ -14361,8 +14399,13 @@ function cmuMain() {
         document.documentElement.classList.remove('cmu-compact-model-selecting', 'cmu-compact-model-probing');
         shells.forEach(el => {
             compactModelClearNativeLiveMarks(el);
-            // On failure reveal the real menu so the user can still dismiss it.
-            el.removeAttribute('data-cmu-compact-model-native');
+            const root = el.matches('[data-radix-menu-content]') ? el : el.querySelector('[data-radix-menu-content]');
+            // React/Radix may keep an exiting menu mounted. Hide only its closed state;
+            // an intentional native reopen is visible immediately without timers/observers.
+            if (closed && el.isConnected && (el.getAttribute('data-state') === 'closed' || root?.getAttribute('data-state') === 'closed'))
+                el.setAttribute('data-cmu-compact-model-native', 'closing');
+            else
+                el.removeAttribute('data-cmu-compact-model-native');
         });
         if (!closed) compactModelReleaseFocusGuard();
         return closed;
@@ -14441,17 +14484,59 @@ function cmuMain() {
         focusAnchor();
         return guard;
     }
+
+    function compactModelMeasurePickerGeometry(anchor) {
+        if (!(anchor instanceof HTMLElement) || !anchor.isConnected) return null;
+        const rect = anchor.getBoundingClientRect();
+        const vv = window.visualViewport;
+        const viewport = {
+            left: Number(vv?.offsetLeft || 0), top: Number(vv?.offsetTop || 0),
+            width: Number(vv?.width || window.innerWidth), height: Number(vv?.height || window.innerHeight),
+        };
+        // Edge can update innerHeight before visualViewport after a keyboard/fold resize.
+        // Intersect both bounds instead of positioning outside the current layout viewport.
+        if (Number.isFinite(window.innerWidth) && window.innerWidth > 0)
+            viewport.width = Math.min(viewport.width, Math.max(0, window.innerWidth - viewport.left));
+        if (Number.isFinite(window.innerHeight) && window.innerHeight > 0)
+            viewport.height = Math.min(viewport.height, Math.max(0, window.innerHeight - viewport.top));
+        if (![rect.left, rect.top, rect.right, rect.bottom, rect.width, rect.height, ...Object.values(viewport)].every(Number.isFinite) ||
+            rect.width <= 0 || rect.height <= 0 || viewport.width < 40 || viewport.height < 40)
+            return null;
+        // Hidden native-menu focus can briefly report a viewport that cannot contain
+        // the tapped cube. Do not clamp that transient measurement to the top-left.
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        if (cx < viewport.left || cx > viewport.left + viewport.width ||
+            cy < viewport.top || cy > viewport.top + viewport.height)
+            return null;
+        return {
+            rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height },
+            viewport,
+        };
+    }
     function positionCompactModelPicker() {
         const menu = COMPACT_MODEL.menu;
-        const anchor = COMPACT_MODEL.anchor;
+        // The site can replace the composer while its native menu opens/closes.
+        const anchor = document.getElementById('chud-model-btn') || COMPACT_MODEL.anchor;
         if (!(menu instanceof HTMLElement) || !menu.isConnected ||
             !(anchor instanceof HTMLElement) || !anchor.isConnected) return;
-        const vv = window.visualViewport;
-        const left = Number(vv?.offsetLeft || 0);
-        const top = Number(vv?.offsetTop || 0);
-        const width = Math.max(1, Number(vv?.width || window.innerWidth || 1));
-        const height = Math.max(1, Number(vv?.height || window.innerHeight || 1));
-        const rect = anchor.getBoundingClientRect();
+        COMPACT_MODEL.anchor = anchor;
+        const current = compactModelMeasurePickerGeometry(anchor);
+        const previous = COMPACT_MODEL.anchorGeometry;
+        const settling = COMPACT_MODEL.opening || Date.now() < Number(COMPACT_MODEL.geometryGraceUntil || 0);
+        const measuredWidth = Number(window.visualViewport?.width || window.innerWidth);
+        // Reuse pre-probe geometry only briefly, and never across a real layout resize.
+        const canReuse = settling && previous && Math.abs(measuredWidth - previous.viewport.width) < 2 &&
+            previous.viewport.left + previous.viewport.width <= window.innerWidth + 2 &&
+            previous.viewport.top + previous.viewport.height <= window.innerHeight + 2;
+        const geometry = COMPACT_MODEL.opening && canReuse ? previous : (current || (canReuse ? previous : null));
+        if (!geometry) {
+            menu.style.visibility = 'hidden';
+            return;
+        }
+        COMPACT_MODEL.anchorGeometry = geometry;
+        const { rect, viewport } = geometry;
+        const { left, top, width, height } = viewport;
         const insetX = Math.min(12, Math.max(0, (width - 1) / 2));
         const insetY = Math.min(12, Math.max(0, (height - 1) / 2));
         const minLeft = left + insetX;
@@ -14461,8 +14546,6 @@ function cmuMain() {
         const gap = 8;
         const spaceAbove = Math.max(0, Math.min(bottom, rect.top - gap) - minTop);
         const spaceBelow = Math.max(0, bottom - Math.max(minTop, rect.bottom + gap));
-        // Keep the list beside its trigger, including while the mobile keyboard resizes.
-        // Prefer above the sidebar; a trigger near the top opens downward instead.
         const placeAbove = spaceAbove >= 112 || spaceAbove >= spaceBelow;
         const available = Math.min(360, Math.max(1, placeAbove ? spaceAbove : spaceBelow));
         menu.style.width = `${Math.round(menuWidth)}px`;
@@ -14486,6 +14569,8 @@ function cmuMain() {
         }
         cancelAnimationFrame(COMPACT_MODEL.positionFrame);
         COMPACT_MODEL.positionFrame = 0;
+        clearTimeout(COMPACT_MODEL.positionSettleTimer);
+        COMPACT_MODEL.positionSettleTimer = COMPACT_MODEL.geometryGraceUntil = 0;
         COMPACT_MODEL.outsideHandler = COMPACT_MODEL.keyHandler = COMPACT_MODEL.resizeHandler = null;
     }
     function compactModelClearNativeLiveMarks(shell = null) {
@@ -14515,10 +14600,16 @@ function cmuMain() {
             }
             catch (_) { }
         });
-        if (shell instanceof HTMLElement) {
-            for (const prop of ['left', 'top', 'right', 'bottom', 'width', 'max-width', 'position', 'transform', 'z-index']) {
-                try { shell.style.removeProperty(prop); } catch (_) { }
+        // Only restore properties that CMU actually overrode in legacy native-live mode.
+        // Ordinary Radix wrappers own their position/transform; clearing them sends menus to (0,0).
+        for (const el of new Set([shell, ...marked])) {
+            const saved = el && COMPACT_MODEL.nativeLiveStyles.get(el);
+            if (!saved) continue;
+            for (const [prop, value, priority] of saved) {
+                if (value) el.style.setProperty(prop, value, priority);
+                else el.style.removeProperty(prop);
             }
+            COMPACT_MODEL.nativeLiveStyles.delete(el);
         }
     }
     function closeCompactModelPicker(options = {}) {
@@ -14535,6 +14626,7 @@ function cmuMain() {
         COMPACT_MODEL.revealTimer = COMPACT_MODEL.closeTimer = 0;
         const nativeShell = COMPACT_MODEL.nativeShell;
         const nativeButton = COMPACT_MODEL.nativeButton;
+        COMPACT_MODEL.anchorGeometry = null;
         const guard = COMPACT_MODEL.focusGuard;
         COMPACT_MODEL.nativeShell = COMPACT_MODEL.nativeButton = COMPACT_MODEL.anchor = null;
         if (CMU_RUNTIME.disposed) {
@@ -14543,7 +14635,7 @@ function cmuMain() {
             if (closeNative) compactModelDispatchEscape(nativeShell);
             compactModelClearNativeLiveMarks(nativeShell);
             nativeShell?.removeAttribute?.('data-cmu-compact-model-native');
-            document.querySelectorAll('[data-cmu-compact-model-native="1"]').forEach(el => {
+            document.querySelectorAll('[data-cmu-compact-model-native]').forEach(el => {
                 compactModelClearNativeLiveMarks(el);
                 el.removeAttribute('data-cmu-compact-model-native');
             });
@@ -14819,9 +14911,15 @@ function cmuMain() {
         (document.body || document.documentElement).appendChild(menu);
         COMPACT_MODEL.menu = menu;
         COMPACT_MODEL.anchor = anchor;
+        COMPACT_MODEL.geometryGraceUntil = Date.now() + 240;
         bindCompactModelPickerEvents();
         positionCompactModelPicker();
         requestAnimationFrame(positionCompactModelPicker);
+        // One bounded recheck; no repeating timer or background polling.
+        COMPACT_MODEL.positionSettleTimer = setTimeout(() => {
+            COMPACT_MODEL.positionSettleTimer = COMPACT_MODEL.geometryGraceUntil = 0;
+            positionCompactModelPicker();
+        }, 250);
     }
     function compactModelTokenSetOf(el) {
         return Array.from(new Set(
@@ -14967,6 +15065,10 @@ function cmuMain() {
         const sideSpace = placeAbove ? spaceAbove : spaceBelow;
         const available = Math.max(88, Math.min(naturalHeight, sideSpace));
         root?.style?.setProperty?.('--cmu-compact-native-max-h', `${Math.round(available)}px`);
+        if (!COMPACT_MODEL.nativeLiveStyles.has(shell)) {
+            const props = ['left', 'top', 'right', 'bottom', 'width', 'max-width', 'position', 'transform', 'z-index'];
+            COMPACT_MODEL.nativeLiveStyles.set(shell, props.map(prop => [prop, shell.style.getPropertyValue(prop), shell.style.getPropertyPriority(prop)]));
+        }
         shell.style.setProperty('position', 'fixed', 'important');
         shell.style.setProperty('width', `${Math.round(width)}px`, 'important');
         shell.style.setProperty('max-width', `${Math.round(width)}px`, 'important');
@@ -15202,6 +15304,7 @@ function cmuMain() {
             return true;
         }
 
+        const openingGeometry = compactModelMeasurePickerGeometry(anchor);
         COMPACT_MODEL.opening = true;
         const focusGuard = compactModelHoldFocus(anchor, nativeButton);
         COMPACT_MODEL.toggleLockUntil = now + 180;
@@ -15214,6 +15317,7 @@ function cmuMain() {
 
             const seq = ++COMPACT_MODEL.seq;
             COMPACT_MODEL.anchor = anchor;
+            COMPACT_MODEL.anchorGeometry = openingGeometry;
             COMPACT_MODEL.nativeButton = nativeButton;
             let snapshot = compactModelSnapshot();
             if (!snapshot) {
@@ -15260,20 +15364,20 @@ function cmuMain() {
                     showToast('모델 메뉴가 남아 있어요 · 목록 밖을 눌러 닫아 주세요');
                     return false;
                 }
-                renderCompactModelPicker(snapshot, anchor, nativeButton);
-                COMPACT_MODEL.nativeShell = snapshot.shell;
-                COMPACT_MODEL.nativeButton = nativeButton;
-                COMPACT_MODEL.anchor = anchor;
-                COMPACT_MODEL.toggleLockUntil = Date.now() + 160;
-
-                // 원본 모델 메뉴는 목록 정보만 읽고 즉시 닫는다.
-                // 이렇게 해야 Crack 업데이트 후 상단 모델 버튼 위치가 열림 상태 스타일에 끌려가지 않는다.
-                // Dismissal above is awaited; no stale timer can toggle a later selection.
                 if (releaseOpenButtonFreeze) {
                     const release = releaseOpenButtonFreeze;
                     releaseOpenButtonFreeze = null;
                     release();
                 }
+                const currentAnchor = document.getElementById('chud-model-btn') || anchor;
+                if (!currentAnchor.isConnected) return false;
+                renderCompactModelPicker(snapshot, currentAnchor, nativeButton);
+                COMPACT_MODEL.nativeShell = snapshot.shell;
+                COMPACT_MODEL.nativeButton = nativeButton;
+                COMPACT_MODEL.anchor = currentAnchor;
+                COMPACT_MODEL.toggleLockUntil = Date.now() + 160;
+
+                // Native dismissal and trigger restoration finish before the custom picker is revealed.
             }
             catch (_) {
                 try { await compactModelDismissNativeMenu(nativeButton, snapshot.shell); } catch (_) { }
@@ -31104,7 +31208,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
 }
 
     function startCmuOnce() {
-        delete page.__CMU_4606_BOOT_PENDING__;
+        delete page.__CMU_4607_BOOT_PENDING__;
         try { cmuMain(); }
         catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
     }
