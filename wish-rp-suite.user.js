@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.55
+// @version      0.5.56
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.56 · 진행 규칙 카드 바로 편집
+ * 각 지침 카드의 주입 버튼 옆에 편집 버튼을 추가합니다.
+ * 카드를 접거나 펼친 상태에서 기존 편집창을 바로 엽니다.
+ * 좁은 화면에서는 제목과 버튼이 자연스럽게 줄바꿈됩니다.
+ */
 
 /* 0.5.55 · WRMC 1.6.1 호환 통합 · Suite 0.5.54 기능 보존
  * 페이지 경계의 동일 메시지 중복을 합치고 상태창 날짜 인식을 보완합니다.
@@ -560,7 +566,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.55'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.56'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49049,7 +49055,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.55-suite';
+  const SCRIPT_VERSION = '0.5.56-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -69200,6 +69206,11 @@ html.rpcm-custom-surface body[data-theme="dark"] :is(#wish-rp-root,#wish-suite-e
 #wish-rp-root .m3-muted{color:var(--m3-muted);line-height:1.8}
 #wish-rp-root .m3-btn{border-radius:11px;font-weight:600;line-height:1.5;transition:background .15s,border-color .15s;box-shadow:none}
 #wish-rp-root .m3-main .m3-btn{min-height:40px;padding:9px 13px;font-size:12px}
+/* Keep quick editing beside injection, including on narrow mobile screens. */
+#wish-rp-root .m3-card[data-open^="x-"]>.m3-card-head{flex-wrap:wrap;column-gap:8px;row-gap:7px}
+#wish-rp-root .m3-card[data-open^="x-"]>.m3-card-head>.m3-t{flex:1 1 140px;overflow-wrap:anywhere}
+#wish-rp-root .m3-extra-head-actions{display:inline-flex;align-items:center;gap:6px;flex:none;margin-left:auto}
+#wish-rp-root .m3-extra-head-actions>.m3-btn{flex:none;min-height:34px;padding:5px 8px;font-size:11.5px;white-space:nowrap}
 #wish-rp-root .m3-btn.primary,#wish-rp-root .m3-inject{background:var(--wish-button);color:var(--m3-accent-ink);border:1px solid transparent;box-shadow:0 4px 12px #8871c822;font-weight:730}
 #wish-rp-root .m3-btn.primary:hover{filter:brightness(1.07)}
 #wish-rp-root .m3-inject{background:var(--wish-button)!important;border-color:transparent!important;border-radius:13px!important}
@@ -70016,7 +70027,7 @@ function mRelationships() {
   }
   function mExtra() {
     return `${`<div class="m3-toolbar"><span class="m3-muted m3-grow">OOC·문체·진행 규칙 ${V.extras.rows.length}개</span><div class="m3-actions">${btn('첫 턴 시작 설정 제거','freshRemove',{cls:'quiet mini'})}${btn('프리셋 열기', 'presets', { cls: 'quiet mini', feat: 'presets' })}${btn('이 방 지침 저장', 'psRoomSave', { cls: 'mini', icon: 'save', feat: 'presets' })}${btn('추가', 'xNew', { cls: 'mini', icon: 'plus' })}${chip('주입','pol.extra',V.pol.extra)}</div></div>`}
-    ${V.extras.rows.map(x => card('x-' + x.id, esc(x.title), `${fmt(x.size)}자${''}`, `<p>${esc(x.content)}</p>`, btn('편집', 'xEdit', { arg: x.id, cls: 'mini', icon: 'edit' }) + btn('삭제', 'xDel', { arg: x.id, cls: 'danger mini' }), chip('주입', 'extra.enabled:' + x.id, x.enabled), COL.extra)).join('') || empty('기타·OOC 항목이 없습니다.')}`;
+    ${V.extras.rows.map(x => card('x-' + x.id, esc(x.title), `${fmt(x.size)}자${''}`, `<p>${esc(x.content)}</p>`, btn('편집', 'xEdit', { arg: x.id, cls: 'mini', icon: 'edit' }) + btn('삭제', 'xDel', { arg: x.id, cls: 'danger mini' }), `<span class="m3-extra-head-actions">${chip('주입', 'extra.enabled:' + x.id, x.enabled)}${btn('편집', 'xEdit', { arg: x.id, cls: 'mini', icon: 'edit' })}</span>`, COL.extra)).join('') || empty('기타·OOC 항목이 없습니다.')}`;
   }
   function vMemory(){
     const group=S.memoryGroup||'records',groups=[['records','기록'],...(has('lore')?[['reference','자료집']]:[]),['rules','진행 규칙']];
