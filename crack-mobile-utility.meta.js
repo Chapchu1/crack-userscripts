@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.8
-// @description  4.6.0.8: 모델 선택 시 입력창 깜빡임 대응. 실제 모델 버튼만 탐색, 입력창 버튼 강제 고정 제거, 같은 모델 재선택 생략. 기존 기능·설정 유지.
+// @version      4.6.0.9
+// @description  4.6.0.9: 모델 선택 시 접힌 상단바가 잠깐 나타나는 현상 대응. 모델 조작 중 헤더 숨김 유지 및 재생성 즉시 처리. 기존 기능·설정 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js

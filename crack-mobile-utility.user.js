@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.0.8
-// @description  4.6.0.8: 모델 선택 시 입력창 깜빡임 대응. 실제 모델 버튼만 탐색, 입력창 버튼 강제 고정 제거, 같은 모델 재선택 생략. 기존 기능·설정 유지.
+// @version      4.6.0.9
+// @description  4.6.0.9: 모델 선택 시 접힌 상단바가 잠깐 나타나는 현상 대응. 모델 조작 중 헤더 숨김 유지 및 재생성 즉시 처리. 기존 기능·설정 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -45,8 +45,8 @@
     'use strict';
     if (window.top !== window.self) return;
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.0.8' || page.__CMU_4608_BOOT_PENDING__) return;
-    page.__CMU_4608_BOOT_PENDING__ = true;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.0.9' || page.__CMU_4609_BOOT_PENDING__) return;
+    page.__CMU_4609_BOOT_PENDING__ = true;
     function earlySorterEnabled() {
         for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
             try {
@@ -1070,7 +1070,7 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
 
 function cmuMain() {
     'use strict';
-    const VERSION = '4.6.0.8';
+    const VERSION = '4.6.0.9';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -2320,6 +2320,17 @@ function cmuMain() {
     html.cmu-enabled.cmu-panel-open [data-cmu-global-header="1"] {
       transform: translateY(0) !important;
       box-shadow: 0 12px 34px rgba(0,0,0,.24) !important;
+    }
+
+    /* 4.6.0.9: a hidden native model menu may refocus or remount the room
+       header. Keep an already collapsed header unpainted during that operation;
+       a deliberate handle/settings-panel reveal always wins. Known native IDs
+       also cover replacement nodes before CMU's header attribute is installed. */
+    html.cmu-enabled.cmu-auto-hide.cmu-model-header-hold:not(.cmu-header-reveal):not(.cmu-panel-open)
+      :is([data-cmu-global-header="1"], #wrtn-custom-global-header, [data-crack-ui-header="1"], div[height="56"][width="100%"]) {
+      transform: translateY(-112%) !important;
+      opacity: 0 !important;
+      transition: none !important;
     }
 
     html.cmu-enabled.cmu-auto-hide body {
@@ -14421,6 +14432,14 @@ function cmuMain() {
     }
     function compactModelHoldFocus(anchor, nativeButton) {
         compactModelReleaseFocusGuard();
+        const html = document.documentElement;
+        const holdingHeader = shouldRun() && settings.autoHideHeader && isEpisodePath() &&
+            html.classList.contains('cmu-auto-hide') &&
+            !html.classList.contains('cmu-header-reveal') && !html.classList.contains('cmu-panel-open');
+        if (holdingHeader) {
+            html.classList.add('cmu-model-header-hold');
+            markGlobalHeader();
+        }
         const scrollPositions = new Map();
         for (const origin of [anchor, nativeButton, document.activeElement, document.scrollingElement]) {
             for (let node = origin; node instanceof HTMLElement; node = node.parentElement) {
@@ -14464,6 +14483,8 @@ function cmuMain() {
         const release = () => {
             if (!active) return;
             active = false;
+            guard.holdingHeader = false;
+            html.classList.remove('cmu-model-header-hold');
             clearTimeout(releaseTimer);
             document.removeEventListener('focusin', onFocus, true);
             document.removeEventListener('pointerdown', onPointer, true);
@@ -14477,6 +14498,7 @@ function cmuMain() {
         };
         const onWheel = event => { if (event.isTrusted) release(); };
         const guard = {
+            holdingHeader,
             release,
             deferRelease() { clearTimeout(releaseTimer); releaseTimer = setTimeout(release, 350); },
         };
@@ -21366,6 +21388,11 @@ function cmuMain() {
                 CMU_DOM_ROUTER.composerDirty = true;
                 dirty = true;
             }
+            // Header replacements must inherit the collapsed state before the
+            // next paint, while the model picker owns this brief focus guard.
+            // Reuse the existing observer; no extra observer or polling loop.
+            if (CMU_DOM_ROUTER.headerDirty && COMPACT_MODEL.focusGuard?.holdingHeader)
+                markGlobalHeader();
             if (dirty || CMU_DOM_ROUTER.messageGroups.size || CMU_DOM_ROUTER.markdownNodes.size)
                 scheduleCmuDomRouterFlush();
         });
@@ -31226,7 +31253,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
 }
 
     function startCmuOnce() {
-        delete page.__CMU_4608_BOOT_PENDING__;
+        delete page.__CMU_4609_BOOT_PENDING__;
         try { cmuMain(); }
         catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
     }
