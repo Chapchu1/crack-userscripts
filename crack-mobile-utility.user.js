@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.3.2
-// @description  4.6.3.2: 울트라챗 빠른 선택 누락 수정. 실제 메뉴의 모델 이름·API 아이콘으로 기존 목록 보완, 새 Popover 구조·이미지 지연 대응, 숨김 설정·실제 모델 선택 연동. 4.6.3.1 통합 기능·설정·소형 선택창·깜빡임 방지 유지.
+// @version      4.6.3.3
+// @description  4.6.3.3: 답변 하단 울트라챗 아이콘 표시 수정. 사이트의 실제 모델 아이콘 우선 사용, 기존 실패 배지 갱신, 제한된 대체 아이콘 시도. 4.6.3.2 빠른 선택창 수정과 기존 기능·설정 보존.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -45,8 +45,8 @@
     'use strict';
     if (window.top !== window.self) return;
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.3.2' || page.__CMU_4632_BOOT_PENDING__) return;
-    page.__CMU_4632_BOOT_PENDING__ = true;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.3.3' || page.__CMU_4633_BOOT_PENDING__) return;
+    page.__CMU_4633_BOOT_PENDING__ = true;
     function earlySorterEnabled() {
         for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
             try {
@@ -1070,7 +1070,7 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
 
 function cmuMain() {
     'use strict';
-    const VERSION = '4.6.3.2';
+    const VERSION = '4.6.3.3';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -19001,6 +19001,7 @@ function cmuMain() {
             return false;
         all[token] = next;
         cmuSaveModelMeta(all);
+        cmiRefreshModelBadgeIcons(all, token);
         return true;
     }
     function cmuModelCatalogRequest(method, value) {
@@ -19081,6 +19082,8 @@ function cmuMain() {
                 renderSettingsPanel();
             applyNativeModelFilterCss();
             omfScanOpenDialogs();
+            if (metaChanged)
+                cmiRefreshModelBadgeIcons(nextMeta);
         }
         return true;
     }
@@ -19800,40 +19803,80 @@ function cmuMain() {
         return shouldRun() && !!settings.modelIcon && isChatRoomPath() &&
             document.documentElement.getAttribute('data-cmu-native-ui-mode') === 'novel';
     }
-    function cmiCreateImg(token) {
-        const meta = cmiLoadRegistry()[token];
+    function cmiModelIconInfo(token, catalog = cmuLoadModelMeta()) {
+        const registry = cmiLoadRegistry()[token];
+        const meta = catalog?.[token];
+        const label = meta?.label || registry?.label || cmiAutoLabel(token) || token;
+        const engine = registry?.engine || '';
+        // 4.6.3.3: 답변 배지도 설정/선택창과 같은 실제 아이콘 주소를 우선 사용한다.
+        const sources = Array.from(new Set([
+            cmuCleanModelIconUrl(meta?.icon),
+            token ? cmiIconUrl(token) : '',
+        ].filter(Boolean)));
+        return {
+            label,
+            title: engine ? `${label} / ${engine}` : label,
+            sources,
+            key: JSON.stringify([label, engine, sources]),
+        };
+    }
+    function cmiCreateImg(token, info = cmiModelIconInfo(token)) {
         const img = document.createElement('img');
-        img.src = cmiIconUrl(token);
-        img.alt = meta?.label || token;
+        img.alt = info.label;
         img.className = 'cmi-model-img';
         img.width = 16;
         img.height = 16;
         img.decoding = 'async';
         img.draggable = false;
-        img.addEventListener('error', () => {
+        let sourceIndex = 0;
+        const onError = () => {
+            // 서로 다른 후보를 한 번씩만 시도한다. 반복 스캔으로 실패 주소를 재요청하지 않는다.
+            sourceIndex += 1;
+            if (sourceIndex < info.sources.length) {
+                img.src = info.sources[sourceIndex];
+                return;
+            }
+            img.removeEventListener('error', onError);
             const fb = document.createElement('span');
             fb.className = 'cmi-model-fallback';
-            fb.textContent = '?';
-            fb.title = '아이콘 로드 실패';
+            fb.textContent = Array.from(info.label || token || '?')[0];
+            fb.title = `${info.title} · 아이콘 로드 실패`;
+            fb.setAttribute('aria-label', info.label);
             img.replaceWith(fb);
-        }, { once: true });
+        };
+        img.addEventListener('error', onError);
+        img.src = info.sources[0] || '';
         return img;
     }
     function cmiLabel(token) {
-        const meta = cmiLoadRegistry()[token];
-        if (!meta)
-            return '모델 선택';
-        return meta.engine ? `${meta.label} / ${meta.engine}` : meta.label;
+        return token ? cmiModelIconInfo(token).title : '모델 선택';
+    }
+    function cmiUpdateBadgeIcon(badge, catalog = cmuLoadModelMeta()) {
+        const token = badge?.dataset?.token;
+        if (!token)
+            return;
+        const info = cmiModelIconInfo(token, catalog);
+        if (badge.dataset.iconKey === info.key)
+            return;
+        badge.replaceChildren(cmiCreateImg(token, info));
+        badge.title = `${info.title} · 생성 당시 모델`;
+        badge.dataset.iconKey = info.key;
+    }
+    function cmiRefreshModelBadgeIcons(catalog = cmuLoadModelMeta(), tokenHint = '') {
+        if (!cmiWanted())
+            return;
+        const token = cmuNormalizeModelToken(tokenHint);
+        const selector = token ? `.cmi-model-badge[data-token="${token}"]` : '.cmi-model-badge[data-token]';
+        // 이미 표시된 배지만 갱신한다. 추가 메시지/API 조회·상시 폴링은 만들지 않는다.
+        document.querySelectorAll(selector).forEach(badge => cmiUpdateBadgeIcon(badge, catalog));
     }
     function cmiCreateBadge(token) {
         const badge = document.createElement('span');
         badge.className = 'cmi-model-badge';
         badge.dataset.token = token || '';
         badge.dataset.source = 'measured';
-        const meta = token ? cmiLoadRegistry()[token] : null;
-        if (meta) {
-            badge.appendChild(cmiCreateImg(token));
-            badge.title = `${cmiLabel(token)} · 생성 당시 모델`;
+        if (token) {
+            cmiUpdateBadgeIcon(badge);
         }
         else {
             badge.textContent = '?';
@@ -19898,8 +19941,10 @@ function cmuMain() {
         if (!token) {
             // A DOM-only pass runs before every API refresh; keep the resolved icon instead of flashing it.
             const old = group.querySelector('.cmi-model-badge');
-            if (resolved?.source === 'dom' && old && old.dataset.messageId === String(resolved.messageId || ''))
+            if (resolved?.source === 'dom' && old && old.dataset.messageId === String(resolved.messageId || '')) {
+                cmiUpdateBadgeIcon(old);
                 return;
+            }
             cmiClearModelIcon(group);
             return;
         }
@@ -19910,8 +19955,10 @@ function cmuMain() {
         }
         const messageId = String(resolved?.messageId || '');
         const old = group.querySelector('.cmi-model-badge');
-        if (old && old.parentElement === slot && old.dataset.token === token && old.dataset.messageId === messageId)
+        if (old && old.parentElement === slot && old.dataset.token === token && old.dataset.messageId === messageId) {
+            cmiUpdateBadgeIcon(old);
             return;
+        }
         group.querySelectorAll('.cmi-model-badge').forEach(el => el.remove());
         group.querySelectorAll('.cmi-model-slot:empty').forEach(el => {
             if (el !== slot)
@@ -31470,7 +31517,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
 }
 
     function startCmuOnce() {
-        delete page.__CMU_4632_BOOT_PENDING__;
+        delete page.__CMU_4633_BOOT_PENDING__;
         try { cmuMain(); }
         catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
     }

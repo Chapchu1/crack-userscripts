@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.3.2
-// @description  4.6.3.2: 울트라챗 빠른 선택 누락 수정. 실제 메뉴의 모델 이름·API 아이콘으로 기존 목록 보완, 새 Popover 구조·이미지 지연 대응, 숨김 설정·실제 모델 선택 연동. 4.6.3.1 통합 기능·설정·소형 선택창·깜빡임 방지 유지.
+// @version      4.6.3.3
+// @description  4.6.3.3: 답변 하단 울트라챗 아이콘 표시 수정. 사이트의 실제 모델 아이콘 우선 사용, 기존 실패 배지 갱신, 제한된 대체 아이콘 시도. 4.6.3.2 빠른 선택창 수정과 기존 기능·설정 보존.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
