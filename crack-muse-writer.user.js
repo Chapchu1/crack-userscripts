@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         ✨ Crack Muse Writer (AI 답변 커스텀)
 // @namespace    muse writer
-// @version      5.2.19
+// @version      5.2.21
 // @description  Crack 캐릭터챗 입력을 맥락·프로필·유저 노트·참고자료·서사 나침반에 맞춰 다듬고, 단기·장기 기억과 최신 에리 로어를 읽기 전용으로 참고하며 유저 입력 번역까지 처리하는 AI 집필 보조 도구
 // @author       chu
-// @updateURL   https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-muse-writer.user.js
-// @downloadURL https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-muse-writer.user.js
+// @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-muse-writer.meta.js
+// @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-muse-writer.user.js
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_addStyle
@@ -16,10 +16,390 @@
 // @grant        unsafeWindow
 // @connect      generativelanguage.googleapis.com
 // @connect      api.deepseek.com
+// @grant        GM_registerMenuCommand
+// @connect      firebaseappcheck.googleapis.com
 // ==/UserScript==
+
+/* 5.2.21 · Gemini 4 Argon 지원
+ * Google API/Firebase 모델 선택, Low/Medium/High 추론, 32K 비스트리밍 응답 한도를 연결합니다.
+ * 여러 응답 조각의 본문을 모으고 thought 조각은 제외합니다. 빈 응답/출력 한도 오류를 구분합니다.
+ * Gemini 일반 출력과 추론 토큰의 요금 계산을 분리합니다. 기존 저장 키/프롬프트는 유지합니다.
+ * API 기준: https://ai.google.dev/gemini-api/docs/generate-content/latest-model (2026-10-14 확인)
+ */
+
+/* 5.2.20 · App Check 사전 대응 (개인용 수동 업데이트판)
+ * 기본 OFF: 기존 API/모델/프롬프트/자동 정리/저장 데이터를 유지합니다.
+ * 설정창 + 토큰 발급 검사, Enterprise 기본 보호, 개발용 디버그 토큰을 추가합니다.
+ * 설정 후 저장 및 새로고침이 필요합니다. 서버 강제 적용을 우회하지 않습니다.
+ * 일반 백업에 디버그 비밀값을 포함하지 않으며 전역 디버그 모드를 설정하지 않습니다.
+ * 기본 보호용입니다. 별도 Replay protection 강제 적용은 지원 범위가 아닙니다.
+ * 검증 범위/설치 안내는 함께 제공한 README와 검증 보고서를 참고하세요.
+ */
+
 
 (function () {
   "use strict";
+/* Crack Firebase App Check support, 2026-10-01.
+ * Opt-in: an absent setting is OFF, with no App Check imports or requests.
+ * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
+ * Development: registered debug secrets stay in this userscript's GM storage;
+ * the official exchangeDebugToken endpoint returns short-lived tokens to a
+ * CustomProvider. No global FIREBASE_APPCHECK_DEBUG_TOKEN is set or shared.
+ * https://firebase.google.com/docs/app-check/web/recaptcha-enterprise-provider
+ * https://firebase.google.com/docs/reference/appcheck/rest/v1/projects.apps/exchangeDebugToken
+ */
+function createCrackFirebaseAppCheck(options) {
+  'use strict';
+  const defaults = () => ({mode:'off', siteKey:'', debugToken:'', revision:'off'});
+  const brokers = new Map(), usedScopes = new Map(), needsReload = new Set();
+  const fields = ['apiKey','authDomain','databaseURL','projectId','storageBucket','messagingSenderId','appId','measurementId'];
+  const makeError = text => new Error('App Check: ' + text);
+  const uuid = () => {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    const bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+    const h = Array.from(bytes, x => x.toString(16).padStart(2,'0')).join('');
+    return [h.slice(0,8),h.slice(8,12),h.slice(12,16),h.slice(16,20),h.slice(20)].join('-');
+  };
+  function parseConfig(raw) {
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      return Object.fromEntries(fields.filter(k => typeof raw[k] === 'string').map(k => [k,raw[k]]));
+    }
+    const text = String(raw || '').trim();
+    if (!text) return null;
+    try { const value = JSON.parse(text); if (value && typeof value === 'object') return parseConfig(value); } catch (_) {}
+    const out = {};
+    for (const field of fields) {
+      const m = text.match(new RegExp('(?:^|[,{\\s])(?:["\\\']?' + field + '["\\\']?)\\s*:\\s*(["\\\'])((?:\\\\.|(?!\\1)[\\s\\S])*?)\\1'));
+      if (m) {
+        try { out[field] = m[1] === '"' ? JSON.parse('"' + m[2] + '"') : m[2].replace(/\\(['\\])/g,'$1'); }
+        catch (_) { return null; }
+      }
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  const scopeOf = cfg => JSON.stringify([String(cfg?.projectId || ''),String(cfg?.appId || '')]);
+  const keyOf = cfg => 'cfa.appcheck.v1:' + options.id + ':' + encodeURIComponent(scopeOf(cfg));
+  function normalize(raw) {
+    if (!raw || typeof raw !== 'object' || !['off','enterprise','debug'].includes(raw.mode)) throw makeError('저장된 설정을 읽지 못했습니다. 설정창에서 다시 저장해 주세요.');
+    return {mode:raw.mode, siteKey:String(raw.siteKey || '').trim(), debugToken:String(raw.debugToken || '').trim(), revision:String(raw.revision || 'off').replace(/[^A-Za-z0-9_-]/g,'').slice(0,80)};
+  }
+  function get(cfg) {
+    if (!cfg?.projectId || !cfg?.appId) return defaults();
+    let raw;
+    try { raw = typeof GM_getValue === 'function' ? GM_getValue(keyOf(cfg), null) : null; }
+    catch (_) { throw makeError('로컬 인증 설정을 읽지 못했습니다. 새로고침해 주세요.'); }
+    if (raw == null || raw === '') return defaults();
+    try { return normalize(typeof raw === 'string' ? JSON.parse(raw) : raw); }
+    catch (_) { throw makeError('저장된 인증 설정이 손상되었습니다. 설정창에서 다시 저장해 주세요.'); }
+  }
+  const signature = s => JSON.stringify([s.mode,s.siteKey,s.debugToken,s.revision]);
+  function validateConfig(cfg) {
+    if (!cfg?.apiKey || !cfg?.projectId || !cfg?.appId) throw makeError('Firebase Config의 apiKey · projectId · appId가 모두 필요합니다.');
+    if (!/^1:\d+:web:[A-Za-z0-9_-]+$/.test(cfg.appId)) throw makeError('Firebase 콘솔의 웹 앱 appId를 확인해 주세요.');
+  }
+  function validate(cfg, s) {
+    if (s.mode === 'off') return;
+    validateConfig(cfg);
+    if (s.mode === 'enterprise' && !/^[A-Za-z0-9_-]{20,300}$/.test(s.siteKey)) throw makeError('reCAPTCHA Enterprise 사이트 키를 입력해 주세요. Firebase API 키가 아닙니다.');
+    if (s.mode === 'enterprise' && /^AIza/.test(s.siteKey)) throw makeError('API 키가 아니라 reCAPTCHA Enterprise 사이트 키가 필요합니다.');
+    if (s.mode === 'debug' && (!s.debugToken || s.debugToken.length > 512 || /\s/.test(s.debugToken))) throw makeError('본인 프로젝트에 등록한 디버그 토큰을 입력해 주세요.');
+  }
+  function save(cfg, draft) {
+    validateConfig(cfg);
+    const next = normalize(draft); validate(cfg,next);
+    let old; try { old = get(cfg); } catch (_) { old = defaults(); }
+    const changed = old.mode !== next.mode || old.siteKey !== next.siteKey || old.debugToken !== next.debugToken;
+    next.revision = changed ? uuid() : old.revision;
+    if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw makeError('Tampermonkey 보안 저장소를 사용할 수 없습니다. 저장 권한을 확인해 주세요.');
+    const value = JSON.stringify(next);
+    try {
+      GM_setValue(keyOf(cfg), value);
+      if (GM_getValue(keyOf(cfg), '') !== value) throw Error();
+    } catch (_) { throw makeError('설정을 저장하지 못했습니다. 기존 인증을 유지하고 다시 시도해 주세요.'); }
+    if (changed) {
+      needsReload.add(scopeOf(cfg));
+      for (const [key,b] of brokers) if (b.scope === scopeOf(cfg)) { b.dispose(); brokers.delete(key); }
+    }
+    return {changed, settings:next};
+  }
+  function current(cfg) {
+    const s = get(cfg), scope = scopeOf(cfg), sig = signature(s);
+    if (needsReload.has(scope) || (usedScopes.has(scope) && usedScopes.get(scope) !== sig)) throw makeError('인증 설정이 바뀌었습니다. 크랙 페이지를 새로고침한 뒤 사용해 주세요.');
+    usedScopes.set(scope,sig);
+    return s;
+  }
+  function suffix(cfg) {
+    const s = current(cfg);
+    return s.mode === 'off' ? '' : '-ac-' + s.mode + '-' + s.revision;
+  }
+  function hash(value) {
+    let h = 2166136261;
+    for (const ch of String(value)) { h ^= ch.charCodeAt(0); h = Math.imul(h,16777619); }
+    return (h >>> 0).toString(36);
+  }
+  const nameFor = (cfg, prefix = options.id) => prefix + '-' + hash(JSON.stringify([cfg?.projectId,cfg?.appId,cfg?.apiKey])) + suffix(cfg);
+  function safeMessage(error) {
+    const text = String(error?.message || error || '');
+    const at = text.indexOf('App Check: ');
+    if (at >= 0 && text.length - at < 230) return text.slice(at);
+    if (/429|quota|throttl|resource.exhausted/i.test(text)) return 'App Check: 인증 요청 한도에 도달했습니다. 잠시 기다린 뒤 다시 시도해 주세요.';
+    if (/403|401|invalid|denied|forbidden/i.test(text)) return 'App Check: 인증을 거절했습니다. 웹 앱 등록·사이트 키 또는 디버그 토큰 등록을 확인해 주세요.';
+    if (/network|fetch|timeout|시간|CSP|recaptcha/i.test(text)) return 'App Check: 인증 서버 연결을 확인하지 못했습니다. 네트워크·차단 확장·페이지 보안 설정을 확인해 주세요.';
+    return 'App Check: 인증을 완료하지 못했습니다. 설정과 Firebase 콘솔을 확인해 주세요.';
+  }
+  // An opaque, per-project broker serves only the captured project/configuration.
+  // Requests cannot choose a URL, API key, project, token secret, or HTTP headers.
+  function getBroker(cfg, s, test = false) {
+    const key = scopeOf(cfg) + '|' + s.revision + '|' + hash(cfg.apiKey) + (test ? '|test' : '');
+    if (brokers.has(key)) return brokers.get(key);
+    const endpoint = document.createElement('span'); endpoint.hidden = true;
+    endpoint.id = 'cfa-debug-' + uuid();
+    const requestEvent = 'cfa-request-' + uuid(), responseEvent = 'cfa-result-' + uuid();
+    let disposed = false, inFlight = null, cached = null, retryAfter = 0, lastError = '', activeHandle = null;
+    function exchange() {
+      if (disposed) return Promise.reject(makeError('인증 설정이 바뀌었습니다. 새로고침해 주세요.'));
+      if (cached && cached.expireTimeMillis > Date.now() + 60000) return Promise.resolve(cached);
+      if (inFlight) return inFlight;
+      if (Date.now() < retryAfter) return Promise.reject(makeError(lastError || '인증 재시도 대기 중입니다. 잠시 뒤 다시 시도해 주세요.'));
+      const xhr = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function' ? GM.xmlHttpRequest.bind(GM) : null;
+      if (!xhr) return Promise.reject(makeError('디버그 테스트에는 Tampermonkey 네트워크 권한이 필요합니다.'));
+      inFlight = new Promise((resolve,reject) => {
+        const started = Date.now();
+        const fail = (status) => {
+          retryAfter = Date.now() + (status === 429 ? 60000 : 10000);
+          lastError = status === 429 ? '디버그 인증 요청 한도입니다. 1분 뒤 다시 시도해 주세요.' : status === 403 || status === 401 ? '디버그 인증 거절. 같은 웹 앱에 토큰을 등록했는지, API 키 제한이 맞는지 확인해 주세요.' : status === 400 ? '디버그 인증 요청을 거절했습니다. 프로젝트·웹 앱·토큰을 확인해 주세요.' : '디버그 인증 서버에 연결하지 못했습니다. 네트워크와 확프 권한을 확인해 주세요.';
+          reject(makeError(lastError));
+        };
+        try {
+          activeHandle = xhr({method:'POST', url:'https://firebaseappcheck.googleapis.com/v1/projects/' + encodeURIComponent(cfg.projectId) + '/apps/' + encodeURIComponent(cfg.appId) + ':exchangeDebugToken?key=' + encodeURIComponent(cfg.apiKey),
+            headers:{'Content-Type':'application/json'}, data:JSON.stringify({debugToken:s.debugToken,limitedUse:false}), anonymous:true, timeout:18000,
+            onload:res => {
+              if (res.status < 200 || res.status >= 300) return fail(res.status);
+              try {
+                const data = JSON.parse(res.responseText), ttl = String(data.ttl || '').match(/^(\d+(?:\.\d+)?)s$/);
+                const seconds = ttl ? Number(ttl[1]) : 0;
+                if (!data.token || typeof data.token !== 'string' || seconds <= 0 || !Number.isFinite(seconds)) throw Error();
+                if (disposed) return reject(makeError('인증 설정이 바뀌었습니다. 새로고침해 주세요.'));
+                cached = {token:data.token,expireTimeMillis:started + seconds * 1000 - 5000};
+                if (cached.expireTimeMillis <= Date.now()) throw Error();
+                resolve(cached);
+              } catch (_) { fail(0); }
+            }, onerror:() => fail(0), ontimeout:() => fail(0), onabort:() => fail(0)});
+        } catch (_) { fail(0); }
+      }).finally(() => { inFlight = null; activeHandle = null; });
+      return inFlight;
+    }
+    const receive = async event => {
+      const node = event.target;
+      if (disposed || node?.parentNode !== endpoint || node.nodeType !== 1 || node.textContent !== 'token') return;
+      node.textContent = ''; // accept this request only once
+      let response;
+      try { response = {ok:true,...await exchange()}; } catch (e) { response = {ok:false,error:safeMessage(e)}; }
+      if (disposed || !node.isConnected) return;
+      node.textContent = JSON.stringify(response); node.dispatchEvent(new Event(responseEvent));
+    };
+    endpoint.addEventListener(requestEvent,receive);
+    (document.documentElement || document.body).appendChild(endpoint);
+    const broker = {scope:scopeOf(cfg), data:{id:endpoint.id,requestEvent,responseEvent}, dispose:() => {
+      disposed = true; cached = null; try { activeHandle?.abort?.(); } catch (_) {}
+      endpoint.removeEventListener(requestEvent,receive); endpoint.remove();
+    }};
+    brokers.set(key,broker); return broker;
+  }
+  function payload(cfg, override = null, test = false) {
+    const s = override ? normalize(override) : current(cfg);
+    if (s.mode === 'off') return {mode:'off'};
+    validate(cfg,s);
+    const data = {mode:s.mode,siteKey:s.mode === 'enterprise' ? s.siteKey : '',scope:scopeOf(cfg),revision:s.revision,test:!!test};
+    if (s.mode === 'debug') data.broker = getBroker(cfg,s,test).data;
+    return data;
+  }
+  // This function is self-contained: it also runs in the page-world module bridge.
+  // The source and its payload never contain a long-lived debug token secret.
+  async function pagePrepare(app, data, sdkVersion) {
+    if (!data || data.mode === 'off') return null;
+    const fail = t => new Error('App Check: ' + t);
+    const limit = async promise => {
+      let timer;
+      try { return await Promise.race([promise,new Promise((_,reject) => { timer = setTimeout(() => reject(fail('인증 시간이 초과되었습니다. 새로고침 후 네트워크·페이지 보안 설정을 확인해 주세요.')),24000); })]); }
+      finally { clearTimeout(timer); }
+    };
+    try {
+      if (!app?.options || data.scope !== JSON.stringify([String(app.options.projectId || ''),String(app.options.appId || '')])) throw fail('프로젝트와 웹 앱이 일치하지 않습니다.');
+      if (!/^\d+\.\d+\.\d+$/.test(String(sdkVersion))) throw fail('Firebase SDK 버전을 확인해 주세요.');
+      if (globalThis.FIREBASE_APPCHECK_DEBUG_TOKEN) throw fail('다른 코드의 전역 디버그 모드가 켜져 있습니다. 해당 설정을 제거하고 새로고침해 주세요.');
+      const key = Symbol.for('crack.appcheck.runtime.v1');
+      let registry = globalThis[key];
+      if (!registry) { registry = {apps:new WeakMap(),modules:new Map()}; globalThis[key] = registry; }
+      const fingerprint = JSON.stringify([data.scope,data.mode,data.siteKey,data.revision,String(sdkVersion)]);
+      let state = registry.apps.get(app);
+      if (state && state.fingerprint !== fingerprint) throw fail('동일 앱의 인증 설정이 변경되었습니다. 새로고침해 주세요.');
+      if (!state) {
+        state = {fingerprint,instance:null,promise:null}; registry.apps.set(app,state);
+        state.promise = (async () => {
+          if (!registry.modules.has(sdkVersion)) {
+            const promise = import('https://www.gstatic.com/firebasejs/' + sdkVersion + '/firebase-app-check.js').catch(e => { registry.modules.delete(sdkVersion); throw e; });
+            registry.modules.set(sdkVersion,promise);
+          }
+          const sdk = await registry.modules.get(sdkVersion);
+          const requestDebugToken = () => new Promise((resolve,reject) => {
+            const endpoint = document.getElementById(data.broker?.id);
+            if (!endpoint) return reject(fail('디버그 인증 연결이 닫혔습니다. 새로고침해 주세요.'));
+            const node = document.createElement('span'); node.hidden = true; node.textContent = 'token';
+            let timer;
+            const cleanup = () => { clearTimeout(timer); node.removeEventListener(data.broker.responseEvent,receive); node.remove(); };
+            const receive = () => {
+              try {
+                const result = JSON.parse(node.textContent || '{}'); cleanup();
+                if (!result.ok) return reject(fail(String(result.error || '디버그 인증 실패').replace(/^App Check: /,'')));
+                if (typeof result.token !== 'string' || !(result.expireTimeMillis > Date.now())) return reject(fail('유효한 인증 토큰을 받지 못했습니다.'));
+                resolve({token:result.token,expireTimeMillis:result.expireTimeMillis});
+              } catch (_) { cleanup(); reject(fail('인증 응답을 읽지 못했습니다.')); }
+            };
+            node.addEventListener(data.broker.responseEvent,receive);
+            timer = setTimeout(() => { cleanup(); reject(fail('디버그 인증 응답이 없습니다. 새로고침해 주세요.')); },20000);
+            endpoint.appendChild(node); node.dispatchEvent(new Event(data.broker.requestEvent,{bubbles:true}));
+          });
+          const provider = data.mode === 'enterprise' ? new sdk.ReCaptchaEnterpriseProvider(data.siteKey) : data.mode === 'debug' ? new sdk.CustomProvider({getToken:requestDebugToken}) : null;
+          if (!provider) throw fail('지원하지 않는 인증 방식입니다.');
+          state.instance = sdk.initializeAppCheck(app,{provider,isTokenAutoRefreshEnabled:!data.test});
+          state.sdk = sdk;
+        })().catch(e => { if (!state.instance) registry.apps.delete(app); throw e; });
+      }
+      await limit(state.promise);
+      const result = await limit(state.sdk.getToken(state.instance,false));
+      if (!result?.token) throw fail('유효한 인증 토큰이 없습니다.');
+      return state.instance;
+    } catch (e) {
+      const message = String(e?.message || '');
+      if (message.startsWith('App Check: ') && message.length < 230) throw e;
+      if (/429|quota|throttl/i.test(message)) throw fail('인증 요청 한도입니다. 잠시 기다린 뒤 다시 시도해 주세요.');
+      if (/403|401|invalid|denied/i.test(message)) throw fail('인증을 거절했습니다. 앱 등록·사이트 키·도메인·토큰을 확인해 주세요.');
+      throw fail('인증 모듈 또는 토큰을 준비하지 못했습니다. 네트워크·차단 확장·페이지 보안 설정을 확인해 주세요.');
+    }
+  }
+  async function prepare(app, version) { return pagePrepare(app,payload(app.options),version); }
+  function versionOf(raw, fallback = '12.8.0') { return String(raw || '').match(/firebasejs\/(\d+\.\d+\.\d+)\//)?.[1] || fallback; }
+  async function probe(cfg, draft, version) {
+    validate(cfg,draft);
+    if (draft.mode === 'off') throw makeError('OFF에서는 토큰 검사를 실행하지 않습니다. 사용할 인증 방식을 선택해 주세요.');
+    if (!/^\d+\.\d+\.\d+$/.test(String(version))) throw makeError('Firebase SDK 버전을 확인해 주세요.');
+    const testSettings = {...draft,revision:uuid()};
+    const data = payload(cfg,testSettings,true), id = 'cfa-probe-' + uuid(), event = 'cfa-probe-result-' + uuid();
+    const channel = document.createElement('span'), script = document.createElement('script');
+    channel.hidden = true; channel.id = id; channel.textContent = JSON.stringify({cfg,data});
+    try {
+      return await new Promise((resolve,reject) => {
+        let timer, settled = false;
+        const done = (error,result) => { if (settled) return; settled = true; clearTimeout(timer); channel.removeEventListener(event,receive); channel.remove(); script.remove(); error ? reject(error) : resolve(result); };
+        const receive = () => { try { const r = JSON.parse(channel.textContent || '{}'); done(r.ok ? null : makeError(String(r.error || '토큰 검사 실패').replace(/^App Check: /,'')),r); } catch (_) { done(makeError('토큰 검사 응답을 읽지 못했습니다.')); } };
+        channel.addEventListener(event,receive); (document.documentElement || document.body).appendChild(channel);
+        script.type = 'module'; const nonce = document.querySelector('script[nonce]')?.nonce; if (nonce) script.nonce = nonce;
+        script.onerror = () => done(makeError('인증 검사 모듈이 차단되었습니다. 페이지 보안 설정을 확인해 주세요.'));
+        timer = setTimeout(() => done(makeError('토큰 검사 시간이 초과되었습니다. 네트워크·CSP를 확인해 주세요.')),29000);
+        script.textContent = `
+const channel=document.getElementById(${JSON.stringify(id)});let sdk,app,answer;
+try{
+ const req=JSON.parse(channel?.textContent||'{}');if(channel)channel.textContent='';
+ sdk=await import('https://www.gstatic.com/firebasejs/${version}/firebase-app.js');
+ app=sdk.initializeApp(req.cfg,${JSON.stringify(id)});
+ await (${pagePrepare.toString()})(app,req.data,${JSON.stringify(version)});
+ answer={ok:true,at:Date.now()};
+}catch(e){answer={ok:false,error:String(e?.message||'App Check: 검사 실패')};}
+finally{if(app&&sdk)try{await sdk.deleteApp(app);}catch(_){} }
+if(channel?.isConnected){channel.textContent=JSON.stringify(answer);channel.dispatchEvent(new Event(${JSON.stringify(event)}));}`;
+        (document.head || document.documentElement).appendChild(script);
+      });
+    } finally {
+      const key = scopeOf(cfg) + '|' + testSettings.revision + '|' + hash(cfg.apiKey) + '|test';
+      if (brokers.has(key)) { brokers.get(key).dispose(); brokers.delete(key); }
+    }
+  }
+  function makeButton(getRaw = options.getConfig, getVersion = options.getVersion) {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Firebase App Check 설정';
+    b.style.cssText = 'display:block;width:100%;margin-top:8px;padding:9px 12px;border:1px solid #8a8a9a;border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px;cursor:pointer;';
+    b.onclick = e => { e.preventDefault(); e.stopPropagation(); open(getRaw,getVersion); }; return b;
+  }
+  function open(getRaw = options.getConfig, getVersion = options.getVersion) {
+    const existing = document.getElementById('crack-firebase-appcheck-panel');
+    if (existing) { existing.focus(); return; }
+    let raw, cfg, saved, initialError = '';
+    try { raw = typeof getRaw === 'function' ? getRaw() : getRaw; cfg = parseConfig(raw); saved = get(cfg); }
+    catch (e) { saved = defaults(); initialError = safeMessage(e); }
+    saved = saved || defaults();
+    let version = typeof getVersion === 'function' ? getVersion(raw) : getVersion || versionOf(raw,'12.8.0');
+    const host = document.createElement('div'); host.id = 'crack-firebase-appcheck-panel'; host.tabIndex = -1;
+    host.style.cssText = 'position:fixed;inset:auto;margin:0;padding:0;border:0;background:transparent;z-index:2147483647;pointer-events:auto;';
+    const root = host.attachShadow({mode:'closed'});
+    root.innerHTML = `<style>
+:host{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;color:#eee;--bg:#22232b;--line:#515260;--muted:#c0c2ce;--field:#16171e}*{box-sizing:border-box}.scrim{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#0007;padding:12px}.panel{width:min(560px,100%);max-height:min(620px,100%);display:flex;flex-direction:column;background:var(--bg);color:#eee;border:1px solid var(--line);border-radius:14px;box-shadow:0 16px 50px #0007;overflow:hidden}header{display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line)}header strong{font-size:15px;flex:1}button{border:1px solid var(--line);border-radius:8px;background:#343644;color:#fff;padding:9px 11px;font:inherit;font-size:13px;cursor:pointer;min-height:36px}button:disabled{opacity:.5;cursor:wait}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #bca9ff;outline-offset:2px}.body{overflow:auto;overscroll-behavior:contain;padding:12px 15px;min-height:0}.sub{font-size:12px;color:var(--muted);line-height:1.55;overflow-wrap:anywhere;margin:0 0 10px;white-space:pre-line}.field{display:grid;gap:6px;font-size:13px;margin:10px 0}select,input{width:100%;border:1px solid var(--line);border-radius:8px;background:var(--field);color:#fff;padding:9px;font:inherit;font-size:16px;min-width:0}.row{display:flex;gap:7px;flex-wrap:wrap}.row>*{flex:1}.small{font-size:12px;color:var(--muted);line-height:1.6}.state{white-space:pre-wrap;overflow-wrap:anywhere;background:#181921;border:1px solid var(--line);border-radius:8px;padding:9px;font-size:12px;line-height:1.6;margin-top:10px}.state[data-error='1']{border-color:#e79494}details{margin-top:10px}summary{font-size:13px;cursor:pointer}.help{font-size:12px;line-height:1.65;color:var(--muted);white-space:pre-line}footer{display:grid;grid-template-columns:1fr 1fr;gap:8px;border-top:1px solid var(--line);padding:10px 15px;flex-shrink:0}.primary{background:#66518e;border-color:#9680bb}[hidden]{display:none!important}label.check{display:flex;gap:8px;font-size:12px;line-height:1.5;margin:10px 0}label.check input{width:17px;min-height:17px;flex:0 0 17px}a{color:#cbbcff}@media(max-width:380px){.body{padding:10px}.row button{padding:8px}.panel header{padding:10px}}
+</style><div class="scrim"><section class="panel" role="dialog" aria-modal="true" aria-labelledby="title"><header><strong id="title">Firebase App Check</strong><button type="button" id="close" aria-label="닫기">×</button></header><div class="body"><p class="sub" id="scope"></p><p class="sub">지금은 <b>OFF · 기존 연결 유지</b>로 두면 됩니다. 설치만으로 인증·과금·모델·자동 정리 설정을 바꾸지 않습니다.</p><label class="field">인증 방식<select id="mode"><option value="off">OFF · 기존 연결 유지</option><option value="enterprise">ON · reCAPTCHA Enterprise</option><option value="debug">개발 테스트 · 디버그 토큰</option></select></label><div id="enterprise"><label class="field">reCAPTCHA Enterprise 사이트 키<input id="site" type="text" autocomplete="off" spellcheck="false" placeholder="Firebase API 키가 아닌 사이트 키"></label><p class="small">같은 프로젝트의 웹 앱에 등록한 점수 기반 키를 사용합니다. 실행 도메인·CSP·차단 확장에 따라 실제 인증 확인이 필요합니다.</p></div><div id="debug"><label class="field">본인 프로젝트의 디버그 토큰<input id="secret" type="password" autocomplete="new-password" spellcheck="false" placeholder="본인 Firebase 콘솔에 등록한 토큰"></label><div class="row"><button type="button" id="reveal">보기</button><button type="button" id="copy">토큰 복사</button><button type="button" id="new">새 토큰 생성</button></div><label class="check"><input type="checkbox" id="consent"><span>개발·검증에만 사용하며, 토큰과 디버그 설정을 다른 사람에게 배포하지 않겠습니다.</span></label><p class="small">생성만으로 등록되지 않습니다. Firebase → 보안 → App Check → 앱 → 해당 웹 앱 ⋮ → 디버그 토큰 관리에 등록하세요. 토큰은 이 확프의 GM 저장소에 별도 보관하며 일반 백업에 넣지 않습니다. 삭제·유출 시 Firebase 콘솔에서도 폐기하세요.</p></div><div class="row"><button type="button" id="test">토큰 발급 검사</button><button type="button" id="console">Firebase 콘솔</button></div><div class="state" id="status" role="status" aria-live="polite"></div><details><summary>설정 순서와 주의사항</summary><div class="help">① 지금은 OFF로 사용해도 기존 연결 방식이 유지됩니다.
+② 본인 Firebase 웹 앱에 App Check 제공자를 등록합니다.
+③ 이 창에서 사이트 키를 입력하고 토큰 발급을 검사합니다.
+④ 저장 후 크랙 페이지를 새로고침합니다. 기존 초안은 먼저 저장하세요.
+⑤ 각 AI 기능을 실제로 실행해 인증된 요청을 확인한 뒤 콘솔의 강제 적용을 진행합니다.
+
+검사는 AI 생성 없이 인증 토큰만 요청합니다. reCAPTCHA 평가 할당량은 사용할 수 있습니다. 성공해도 모델 이용 권한·요금제·강제 적용 여부까지 확인한 것은 아닙니다.
+이 버전은 기본 보호(세션 토큰)용입니다. 별도 재사용 방지(Replay protection)는 강제 적용하지 마세요.
+OFF는 서버의 강제 적용을 우회하지 않습니다. 인증 실패 시 자동으로 OFF나 다른 유료 API로 전환하지 않습니다.
+각 확프에 개별 저장됩니다. 다른 확프·다른 Firebase 앱에 자동 복사되지 않습니다.</div></details></div><footer><button type="button" id="cancel">닫기</button><button type="button" id="save" class="primary">설정 저장</button><button type="button" id="reload" hidden style="grid-column:1/-1">저장 완료 · 페이지 새로고침</button></footer></section></div>`;
+    const $ = id => root.getElementById(id);
+    let closed = false, busy = false, dirty = false;
+    $('scope').textContent = options.label + ' · SDK ' + version + '\n프로젝트: ' + (cfg?.projectId || '미설정') + '\n웹 앱: ' + (cfg?.appId || '미설정');
+    $('mode').value = saved.mode; $('site').value = saved.siteKey; $('secret').value = saved.debugToken;
+    function status(text,error = false) { if (closed) return; $('status').textContent = text; $('status').dataset.error = error ? '1' : '0'; }
+    function update() {
+      $('enterprise').hidden = $('mode').value !== 'enterprise'; $('debug').hidden = $('mode').value !== 'debug';
+      $('test').disabled = busy || $('mode').value === 'off';
+    }
+    function readDraft() {
+      if ($('mode').value === 'debug' && !$('consent').checked) throw makeError('개발 테스트 전용 안내에 동의해 주세요.');
+      return normalize({mode:$('mode').value,siteKey:$('site').value,debugToken:$('secret').value,revision:saved.revision});
+    }
+    const viewport = window.visualViewport;
+    const resize = () => { const v = window.visualViewport; host.style.left = (v?.offsetLeft || 0) + 'px'; host.style.top = (v?.offsetTop || 0) + 'px'; host.style.width = (v?.width || window.innerWidth) + 'px'; host.style.height = (v?.height || window.innerHeight) + 'px'; };
+    const close = () => { if (closed) return; closed = true; $('secret').value = ''; viewport?.removeEventListener('resize',resize); viewport?.removeEventListener('scroll',resize); window.removeEventListener('resize',resize); host.remove(); };
+    for (const id of ['close','cancel']) $(id).onclick = close;
+    $('mode').onchange = () => { dirty = true; update(); status('아직 저장하지 않았습니다. 토큰 검사 후 저장해 주세요.'); };
+    for (const id of ['site','secret']) $(id).oninput = () => { dirty = true; $('reload').hidden = true; };
+    $('reveal').onclick = () => { $('secret').type = $('secret').type === 'password' ? 'text' : 'password'; $('reveal').textContent = $('secret').type === 'password' ? '보기' : '숨기기'; };
+    $('new').onclick = () => { if ($('secret').value && !window.confirm('새 토큰을 만들까요? 기존 토큰은 Firebase 콘솔에서 자동 삭제되지 않습니다.')) return; $('secret').value = uuid(); dirty = true; status('새 토큰을 만들었습니다. 복사해서 본인 Firebase 웹 앱에 등록한 다음 검사하세요.'); };
+    $('copy').onclick = async () => { try { const value = $('secret').value.trim(); if (!value) throw makeError('복사할 토큰이 없습니다.'); await navigator.clipboard.writeText(value); status('토큰을 복사했습니다. 공개 게시글·스크린샷·GitHub에 올리지 마세요.'); } catch (_) { status('복사하지 못했습니다. 보기를 누른 뒤 직접 선택해 복사해 주세요.',true); } };
+    $('console').onclick = () => { window.open('https://console.firebase.google.com/' + (cfg?.projectId ? 'project/' + encodeURIComponent(cfg.projectId) + '/appcheck/apps' : ''),'_blank','noopener,noreferrer'); };
+    $('test').onclick = async () => {
+      try {
+        const draft = readDraft(); validate(cfg,draft); busy = true; update(); $('save').disabled = true;
+        status('인증 토큰 발급을 검사하고 있습니다. AI 생성 요청은 보내지 않습니다.');
+        await probe(cfg,draft,version);
+        status('토큰 발급 성공.\nAI 모델 호출·요금제·서버 강제 적용 여부는 별도로 확인해야 합니다. 설정을 저장한 뒤 새로고침해 주세요.');
+      } catch (e) { status(safeMessage(e),true); }
+      finally { busy = false; if (!closed) { update(); $('save').disabled = false; } }
+    };
+    $('save').onclick = () => {
+      try {
+        const next = readDraft(), result = save(cfg,next); saved = result.settings; dirty = false;
+        $('secret').type = 'password'; $('reveal').textContent = '보기'; $('reload').hidden = !result.changed && !needsReload.has(scopeOf(cfg));
+        status(result.changed ? '설정을 저장했습니다.\n기존 초안과 다른 설정창의 변경을 저장한 뒤 페이지를 새로고침해 주세요. 새로고침 전에는 변경된 인증으로 AI를 호출하지 않습니다.' : '저장된 설정과 같습니다.');
+      } catch (e) { status(safeMessage(e),true); }
+    };
+    $('reload').onclick = () => { if (dirty) return status('입력한 변경을 먼저 저장해 주세요.',true); if (window.confirm('크랙 페이지를 새로고침할까요? 저장하지 않은 초안이나 다른 설정창의 변경은 사라질 수 있습니다.')) location.reload(); };
+    root.querySelector('.scrim').onclick = e => { if (e.target === root.querySelector('.scrim')) close(); };
+    host.addEventListener('click',e => e.stopPropagation());
+    host.addEventListener('keydown',e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } });
+    (document.body || document.documentElement).appendChild(host);
+    try { host.setAttribute('popover','manual'); host.showPopover(); } catch (_) { host.removeAttribute('popover'); }
+    viewport?.addEventListener('resize',resize); viewport?.addEventListener('scroll',resize); window.addEventListener('resize',resize); resize(); update();
+    status(initialError || (saved.mode === 'off' ? '현재 OFF · 기존 Firebase 연결을 유지합니다.\n설치만으로 App Check가 활성화되지는 않습니다.' : '저장된 방식: ' + (saved.mode === 'enterprise' ? 'reCAPTCHA Enterprise' : '개발 테스트') + '\n이 화면을 여는 것만으로 인증 요청은 보내지 않습니다.'),!!initialError);
+  }
+  if (typeof GM_registerMenuCommand === 'function') {
+    try { GM_registerMenuCommand(options.label + ' · Firebase App Check',() => open()); } catch (_) {}
+  }
+  return {get,save,parseConfig,scopeOf,suffix,nameFor,payload,prepare,pageSource:() => '(' + pagePrepare.toString() + ')',probe,open,makeButton,versionOf,safeMessage};
+}
+
+const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',getConfig:() => GM_getValue('firebaseScript',''),getVersion:raw => CFA.versionOf(raw,'12.12.0')});
+
 
   const API_BASE = "https://crack-api.wrtn.ai/crack-gen";
   const API_ORIGIN = "https://crack-api.wrtn.ai";
@@ -120,6 +500,20 @@
   function humanizeMuseError(error) {
     const raw = String(error?.message || error || "").trim();
     const lower = raw.toLowerCase();
+    if (/app[ -]?check/i.test(raw)) return CFA.safeMessage(error);
+
+    if (raw.includes("추론·출력 한도에 도달")) {
+      return "아르곤이 추론·출력 한도에 도달했어요.\n추론 강도를 Low로 낮추거나 참고자료를 줄여 주세요.";
+    }
+    if (raw.includes("답변 본문을 반환하지 않았")) {
+      return "모델이 답변 본문을 반환하지 않았어요.\n추론 강도를 낮추거나 참고자료를 줄여 주세요.";
+    }
+    if (raw.includes("이번 요청의 답변을 제한")) {
+      return "모델이 이번 요청의 답변을 제한했어요.\n입력 내용이나 참고자료를 확인해 주세요.";
+    }
+    if (raw.includes("응답 대기 시간이 초과")) {
+      return "모델 응답 대기 시간이 초과됐어요.\n추론 강도를 낮춰 다시 시도해 주세요.";
+    }
 
     if (/\\b429\\b/.test(lower) || lower.includes("resource exhausted") || lower.includes("resource_exhausted") || lower.includes("quota") || lower.includes("rate limit") || lower.includes("too many requests")) {
       return "AI 서버가 현재 혼잡하거나 요청 한도에 도달했어요.\n잠시 후 다시 시도해주세요.";
@@ -164,6 +558,7 @@
   const REFERENCE_CACHE_MS = 30000;
   const TOKEN_RECOMMENDED = 80000;
   const TOKEN_MODEL_LIMITS = Object.freeze({
+    "gemini-4-argon": 1048576,
     "gemini-3.8-flash": 1048576,
     "gemini-3.7-flash": 1048576,
     "gemini-3.5-flash": 1048576,
@@ -290,6 +685,7 @@
   // Gemini 3.8/3.7 Flash는 2026-12-31까지의 공식 프로모션 단가다.
   // DeepSeek V4 가격은 공식 API 문서 기준: cache hit / cache miss / output.
   const MODEL_PRICING = {
+    "gemini-4-argon": { input: 4.0, output: 20.0, cacheRead: 0.2, cacheWrite: 4.0 },
     "gemini-3.8-flash": { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0.75 },
     "gemini-3.7-flash": { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0.75 },
     "gemini-3.1-flash-lite": { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0.25 },
@@ -311,9 +707,40 @@
     return MODEL_ID_MIGRATIONS[id] || id;
   }
 
+  function isGeminiArgon(modelId) {
+    return normalizeModelId(modelId) === "gemini-4-argon";
+  }
+
+  function usesThinkingLevel(modelId) {
+    return normalizeModelId(modelId).startsWith("gemini-3") || isGeminiArgon(modelId);
+  }
+
+  function supportsMinimalThinking(modelId) {
+    const model = normalizeModelId(modelId);
+    return usesThinkingLevel(model) && !isGeminiArgon(model)
+      && model !== "gemini-3.8-flash" && model !== "gemini-3.7-flash";
+  }
+
+  const ARGON_MAX_OUTPUT_TOKENS = 32768;
+  const ARGON_REQUEST_TIMEOUT_MS = 20 * 60 * 1000;
+
+  function getModelInputLimit(modelId) {
+    const total = TOKEN_MODEL_LIMITS[normalizeModelId(modelId)] || 1048576;
+    return isGeminiArgon(modelId) ? total - ARGON_MAX_OUTPUT_TOKENS : total;
+  }
+
+  function getModelPricing(modelId, now = Date.now()) {
+    const model = normalizeModelId(modelId);
+    // 공식 도입 단가는 2026-11-30까지. 날짜가 지나면 기본 단가로 계산한다.
+    if (isGeminiArgon(model) && now < Date.UTC(2026, 11, 1)) {
+      return { input: 2.0, output: 10.0, cacheRead: 0.1, cacheWrite: 2.0 };
+    }
+    return MODEL_PRICING[model];
+  }
+
   function normalizeThinkingLevel(modelId, level) {
     const model = normalizeModelId(modelId);
-    const supportsLowToHighOnly = model === "gemini-3.8-flash" || model === "gemini-3.7-flash";
+    const supportsLowToHighOnly = isGeminiArgon(model) || model === "gemini-3.8-flash" || model === "gemini-3.7-flash";
     const allowed = supportsLowToHighOnly
       ? ["low", "medium", "high"]
       : ["minimal", "low", "medium", "high"];
@@ -324,6 +751,7 @@
 
   const PROVIDER_MODEL_OPTIONS = {
     google: [
+      ["gemini-4-argon", "Gemini 4 Argon (제미나이 4 아르곤)"],
       ["gemini-3.8-flash", "Gemini 3.8 Flash"],
       ["gemini-3.7-flash", "Gemini 3.7 Flash"],
       ["gemini-3.5-flash", "Gemini 3.5 Flash"],
@@ -333,6 +761,7 @@
       ["gemini-2.5-flash", "Gemini 2.5 Flash"],
     ],
     firebase: [
+      ["gemini-4-argon", "Gemini 4 Argon (제미나이 4 아르곤)"],
       ["gemini-3.8-flash", "Gemini 3.8 Flash"],
       ["gemini-3.7-flash", "Gemini 3.7 Flash"],
       ["gemini-3.5-flash", "Gemini 3.5 Flash"],
@@ -372,6 +801,11 @@
     u.cacheReadInputTokens = pick(["cacheReadInputTokens", "cache_read_input_tokens", "cachedContentTokenCount", "cached_content_token_count", "prompt_cache_hit_tokens", "promptCacheHitTokens"]);
     u.cacheMissInputTokens = pick(["cacheMissInputTokens", "cache_miss_input_tokens", "prompt_cache_miss_tokens", "promptCacheMissTokens"]);
     u.thoughtsTokenCount = pick(["thoughtsTokenCount", "thoughts_token_count", "thinking_tokens", "reasoning_tokens", "completion_tokens_details.reasoning_tokens"]);
+    // Gemini candidatesTokenCount에는 thoughtsTokenCount가 포함되지 않는다.
+    // OpenAI 호환 completion_tokens(DeepSeek)은 추론분을 포함하므로 그때만 분리한다.
+    u.outputIncludesThoughts = raw.outputIncludesThoughts === true
+      || ((raw.completion_tokens != null || raw.completionTokens != null)
+        && raw.candidatesTokenCount == null && raw.candidates_token_count == null);
     return u;
   }
 
@@ -380,7 +814,7 @@
     if (!u) return null;
 
     const modelIdRaw = u.model || modelOverride;
-    const pricing = MODEL_PRICING[modelIdRaw] || MODEL_PRICING[modelOverride] || MODEL_PRICING["gemini-3.5-flash"];
+    const pricing = getModelPricing(modelIdRaw) || getModelPricing(modelOverride) || MODEL_PRICING["gemini-3.5-flash"];
     if (!pricing) return null;
 
     const thoughtsTokens = u.thoughtsTokenCount || 0;
@@ -388,7 +822,7 @@
     const cacheMissTokens = u.cacheMissInputTokens || 0;
     const totalInputTokens = u.inputTokens || cacheReadTokens + cacheMissTokens || 0;
     const totalOutputTokens = u.outputTokens || 0;
-    const actualOutputTokens = thoughtsTokens > 0 && totalOutputTokens >= thoughtsTokens ? totalOutputTokens - thoughtsTokens : totalOutputTokens;
+    const actualOutputTokens = u.outputIncludesThoughts ? Math.max(0, totalOutputTokens - thoughtsTokens) : totalOutputTokens;
     const uncachedInputTokens = cacheMissTokens > 0 ? cacheMissTokens : Math.max(0, totalInputTokens - cacheReadTokens);
 
     const readCost = (cacheReadTokens * (pricing.cacheRead ?? pricing.input)) / 1000000;
@@ -903,7 +1337,7 @@
   }
 
   function getTokenSeverity(total, modelId) {
-    const limit = TOKEN_MODEL_LIMITS[modelId] || 1048576;
+    const limit = getModelInputLimit(modelId);
     if (total >= limit) return { key: "blocked", label: "모델 입력 한도 초과 예상" };
     if (total >= limit * 0.85) return { key: "critical", label: "모델 입력 한도 근접" };
     if (total > TOKEN_RECOMMENDED * 2) return { key: "danger", label: "참고자료 과다" };
@@ -919,9 +1353,9 @@
         ? { value: "off", label: "OFF", note: "짧은 맥락은 비추론으로도 충분할 가능성이 높음" }
         : { value: "on", label: "ON · High", note: "긴 기억·로어 선별과 연속성 판단에 추론 권장" };
     }
-    if (modelId.includes("gemini-3")) {
-      const isPro = modelId.includes("pro");
-      const supportsMinimal = modelId !== "gemini-3.8-flash" && modelId !== "gemini-3.7-flash";
+    if (usesThinkingLevel(modelId)) {
+      const isPro = modelId.includes("pro") || isGeminiArgon(modelId);
+      const supportsMinimal = supportsMinimalThinking(modelId);
       let level;
       if (isPro) level = tokens <= 20000 ? "low" : tokens <= 80000 ? "medium" : "high";
       else if (supportsMinimal) level = tokens <= 12000 ? "minimal" : tokens <= 45000 ? "low" : tokens <= 100000 ? "medium" : "high";
@@ -1001,7 +1435,7 @@
     if (homeFillEl) homeFillEl.style.width = `${Math.min(100, total / TOKEN_RECOMMENDED * 100)}%`;
     if (totalEl) totalEl.textContent = `${total.toLocaleString()} tokens (${exactLabel})`;
     if (statusEl) statusEl.textContent = severity.label;
-    if (metaEl) metaEl.textContent = `${modelLabel} · Muse 권장 ${TOKEN_RECOMMENDED.toLocaleString()} · 공식 입력 한도 ${limit.toLocaleString()} · 권장량 ${(total / TOKEN_RECOMMENDED * 100).toFixed(1)}%`;
+    if (metaEl) metaEl.textContent = `${modelLabel} · Muse 권장 ${TOKEN_RECOMMENDED.toLocaleString()} · ${isGeminiArgon(model) ? `입력·추론·출력 공유 한도 ${limit.toLocaleString()} (응답 여유 ${ARGON_MAX_OUTPUT_TOKENS.toLocaleString()})` : `공식 입력 한도 ${limit.toLocaleString()}`} · 권장량 ${(total / TOKEN_RECOMMENDED * 100).toFixed(1)}%`;
     if (breakdownEl) breakdownEl.innerHTML = rows.map((row) => `<div><span>${row.label}</span><b>${row.tokens.toLocaleString()}</b></div>`).join("");
     if (fillEl) fillEl.style.width = `${Math.min(100, total / TOKEN_RECOMMENDED * 100)}%`;
     if (thinkingEl) thinkingEl.innerHTML = `<b>추천 추론: ${recommendation.label}</b><span>${recommendation.note}</span>`;
@@ -2187,10 +2621,12 @@
                     <span class="setting-label" id="cfg-key-label">GEMINI API KEY</span>
                     <input type="password" id="cfg-api-key" class="expand-input" placeholder="키를 입력하세요">
                     <textarea id="cfg-firebase-script" class="expand-input" rows="5" placeholder="파이어베이스에서 복사한 코드 전체를 여기에 그대로 붙여넣어 주세요!" style="display:none; font-family: monospace; font-size:12px;"></textarea>
+                     <button type="button" class="ref-mini-btn" id="cmw-appcheck-open" style="display:none;margin-top:8px;width:100%;">Firebase App Check 설정 · 기본 OFF</button>
                 </div>
                 <div class="setting-group">
                     <span class="setting-label">AI 모델 선택</span>
                     <select id="cfg-model" class="expand-input">
+                        <option value="gemini-4-argon">Gemini 4 Argon (제미나이 4 아르곤)</option>
                         <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
                         <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
                         <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
@@ -2237,7 +2673,8 @@
       .join("");
 
     const valid = options.some(([value]) => value === current);
-    select.value = valid ? current : options[0][0];
+    const fallbackModel = provider === "deepseek" ? options[0][0] : "gemini-3.8-flash";
+    select.value = valid ? current : fallbackModel;
     return select.value;
   }
 
@@ -2264,8 +2701,8 @@
     let savedBudget = parseInt(GM_getValue("thinkBudget_" + currentModel, 1024));
     if (isNaN(savedBudget) || savedBudget < 128) savedBudget = 1024;
 
-    if (currentModel.includes("gemini-3")) {
-      const minimalOption = currentModel === "gemini-3.8-flash" || currentModel === "gemini-3.7-flash"
+    if (usesThinkingLevel(currentModel)) {
+      const minimalOption = !supportsMinimalThinking(currentModel)
         ? ""
         : `<option value="minimal" ${savedLevel === "minimal" ? "selected" : ""}>Minimal</option>`;
       container.innerHTML = `
@@ -2276,6 +2713,7 @@
                   <option value="medium" ${savedLevel === "medium" ? "selected" : ""}>Medium</option>
                   <option value="high" ${savedLevel === "high" ? "selected" : ""}>High</option>
               </select>
+              ${isGeminiArgon(currentModel) ? '<div style="font-size:10px; color:var(--text_secondary); margin-top:4px;">아르곤은 유료 API/결제 연결이 필요합니다. 속도가 느리면 Low로 낮춰 주세요.</div>' : ''}
           `;
     } else {
       container.innerHTML = `
@@ -2713,6 +3151,11 @@
   }
 
   function toggleProviderUI(preferredModel = "") {
+    const cfaButton = document.getElementById('cmw-appcheck-open');
+    if(cfaButton) {
+      cfaButton.style.display = document.getElementById('cfg-api-provider').value === 'firebase' ? 'block' : 'none';
+      cfaButton.onclick = e => { e.preventDefault(); e.stopPropagation(); CFA.open(() => document.getElementById('cfg-firebase-script')?.value || GM_getValue('firebaseScript',''),raw => CFA.versionOf(raw,'12.12.0')); };
+    }
     const provider = document.getElementById("cfg-api-provider").value;
     const keyInput = document.getElementById("cfg-api-key");
     const prevProvider = keyInput?.dataset.provider || "";
@@ -3948,7 +4391,7 @@
       if (thinkInput) {
         if (currentModel.startsWith("deepseek-")) {
           addEntry("thinkDeepSeek_" + currentModel, thinkInput.value);
-        } else if (currentModel.includes("gemini-3")) {
+        } else if (usesThinkingLevel(currentModel)) {
           addEntry("thinkLevel_" + currentModel, normalizeThinkingLevel(currentModel, thinkInput.value));
         } else {
           let parsedBudget = parseInt(thinkInput.value, 10) || 1024;
@@ -4465,14 +4908,43 @@
     return { text: text || "좋아. 조금만 더 원하는 방향을 이야기해줘.", proposal };
   }
 
-  function advisorGenerationConfig(model) {
-    if (model.includes("gemini-3")) {
-      return { thinkingConfig: { thinkingLevel: normalizeThinkingLevel(model, GM_getValue("thinkLevel_" + model, "medium")) } };
+  function geminiGenerationConfig(model, temperature = 0.8) {
+    const input = document.getElementById("cfg-model")?.value === model
+      ? document.getElementById("cfg-think-val") : null;
+    if (usesThinkingLevel(model)) {
+      const level = input?.value || GM_getValue("thinkLevel_" + model, "medium");
+      const config = { thinkingConfig: { thinkingLevel: normalizeThinkingLevel(model, level) } };
+      if (isGeminiArgon(model)) config.maxOutputTokens = ARGON_MAX_OUTPUT_TOKENS;
+      return config;
     }
-    return {
-      temperature: 0.55,
-      thinkingConfig: { thinkingBudget: Math.max(128, parseInt(GM_getValue("thinkBudget_" + model, 1024), 10) || 1024) },
-    };
+    const budget = parseInt(input?.value || GM_getValue("thinkBudget_" + model, 1024), 10);
+    return { temperature, thinkingConfig: { thinkingBudget: Math.max(128, Number.isFinite(budget) ? budget : 1024) } };
+  }
+
+  function geminiRequestOptions(model) {
+    return isGeminiArgon(model) ? { timeout: ARGON_REQUEST_TIMEOUT_MS } : {};
+  }
+
+  function readGeminiResponseText(data, model) {
+    if (data?.error) throw new Error(data.error.message || "Gemini API 오류");
+    const candidate = data?.candidates?.[0];
+    const reason = candidate?.finishReason || candidate?.finish_reason || "";
+    const continuation = data?.continuationToken || data?.continuation_token;
+    if (isGeminiArgon(model) && (reason === "MAX_TOKENS" || reason === "CONTINUATION" || continuation)) {
+      throw new Error("아르곤이 추론·출력 한도에 도달해 답변을 마치지 못했어요. 추론 강도를 Low로 낮추거나 참고자료를 줄여 주세요.");
+    }
+    const text = (candidate?.content?.parts || [])
+      .filter((part) => part && part.thought !== true && typeof part.text === "string")
+      .map((part) => part.text).join("").trim();
+    if (text) return text;
+    if (data?.promptFeedback?.blockReason || ["SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "RECITATION"].includes(reason)) {
+      throw new Error("모델이 이번 요청의 답변을 제한했어요. 입력 내용이나 참고자료를 확인해 주세요.");
+    }
+    throw new Error("모델이 답변 본문을 반환하지 않았어요. 추론 강도를 낮추거나 참고자료를 줄여 주세요.");
+  }
+
+  function advisorGenerationConfig(model) {
+    return geminiGenerationConfig(model, 0.55);
   }
 
   async function requestNarrativeAdvisor() {
@@ -4611,7 +5083,9 @@ ${conversation}`;
         : `https://www.gstatic.com/firebasejs/${fbVersion}/firebase-vertexai.js`;
       const { initializeApp, getApps, getApp } = await import(appUrl);
       const sdk = await import(aiUrl);
-      const app = getApps().length === 0 ? initializeApp(configObj) : getApp();
+      const cfaName = CFA.nameFor(configObj);
+            const app = getApps().find(a => a.name === cfaName) || initializeApp(configObj,cfaName);
+            await CFA.prepare(app,fbVersion);
       const ai = majorVersion >= 12
         ? sdk.getAI(app, { backend: new sdk.VertexAIBackend("global") })
         : sdk.getVertexAI(app);
@@ -4619,10 +5093,10 @@ ${conversation}`;
         model,
         systemInstruction: { parts: [{ text: sysPrompt }] },
         generationConfig: advisorGenerationConfig(model),
-      });
+      }, geminiRequestOptions(model));
       const result = await generativeModel.generateContent(userContent);
       if (result.response?.usageMetadata) updateCostUI(result.response.usageMetadata, model, "advisor");
-      return parseAdvisorResponse(result.response.text());
+      return parseAdvisorResponse(readGeminiResponseText(result.response, model));
     }
 
     const key = document.getElementById("cfg-api-key")?.value?.trim() || GM_getValue("apiKey", "");
@@ -4630,6 +5104,8 @@ ${conversation}`;
     const raw = await new Promise((resolve, reject) => GM_xmlhttpRequest({
       method: "POST",
       url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+      ...geminiRequestOptions(model),
+      ontimeout: () => reject(new Error("모델 응답 대기 시간이 초과됐어요. 추론 강도를 낮춰 다시 시도해 주세요.")),
       headers: { "Content-Type": "application/json" },
       data: JSON.stringify({
         system_instruction: { parts: [{ text: sysPrompt }] },
@@ -4641,8 +5117,8 @@ ${conversation}`;
           const data = JSON.parse(res.responseText);
           if (data.error) return reject(new Error(data.error.message || "Gemini API 오류"));
           if (data.usageMetadata) updateCostUI(data.usageMetadata, model, "advisor");
-          resolve(data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "");
-        } catch (_) { reject(new Error("Gemini 상담 응답 분석 실패")); }
+          resolve(readGeminiResponseText(data, model));
+        } catch (error) { reject(new Error(error.message || "Gemini 상담 응답 분석 실패")); }
       },
       onerror: () => reject(new Error("Gemini 상담 네트워크 오류")),
     }));
@@ -4694,29 +5170,9 @@ ${conversation}`;
       const provider = options.provider || GM_getValue("apiProvider", "google");
       const model = normalizeModelId(options.model || GM_getValue("cfgModel", "gemini-3.1-pro-preview"));
       const temperature = typeof options.temperature === "number" ? options.temperature : 0.3;
-      let genConfig = { temperature };
-
-      const currentThinkingInput = document.getElementById("cfg-think-val");
-      if (!model.startsWith("deepseek-")) {
-        const savedLevel = GM_getValue("thinkLevel_" + model, "medium");
-        const savedBudget = parseInt(GM_getValue("thinkBudget_" + model, 1024), 10);
-        const applyLevel =
-          currentThinkingInput && model.includes("gemini-3")
-            ? currentThinkingInput.value
-            : savedLevel;
-        let applyBudget =
-          currentThinkingInput && !model.includes("gemini-3")
-            ? parseInt(currentThinkingInput.value, 10)
-            : savedBudget;
-        if (isNaN(applyBudget) || applyBudget < 128) applyBudget = 128;
-
-        if (model.includes("gemini-3")) {
-          delete genConfig.temperature;
-          genConfig.thinkingConfig = { thinkingLevel: normalizeThinkingLevel(model, applyLevel) };
-        } else {
-          genConfig.thinkingConfig = { thinkingBudget: applyBudget };
-        }
-      }
+      const genConfig = model.startsWith("deepseek-") ? { temperature: temperature } : geminiGenerationConfig(model, temperature);
+      const currentThinkingInput = document.getElementById("cfg-model")?.value === model
+        ? document.getElementById("cfg-think-val") : null;
 
       const cleanResult = (raw) => String(raw || "")
         .trim()
@@ -4810,29 +5266,33 @@ ${conversation}`;
 
           if (majorVersion >= 12) {
             const { HarmBlockThreshold, HarmCategory, getAI, getGenerativeModel, VertexAIBackend } = await import(aiUrl);
-            const app = getApps().length === 0 ? initializeApp(configObj) : getApp();
+            const cfaName = CFA.nameFor(configObj);
+            const app = getApps().find(a => a.name === cfaName) || initializeApp(configObj,cfaName);
+            await CFA.prepare(app,fbVersion);
             ai = getAI(app, { backend: new VertexAIBackend("global") });
             generativeModel = getGenerativeModel(ai, {
               model,
               safetySettings: safetySettingsFor(HarmCategory, HarmBlockThreshold),
               systemInstruction: { parts: [{ text: sysPrompt }] },
               generationConfig: genConfig,
-            });
+            }, geminiRequestOptions(model));
           } else {
             const { HarmBlockThreshold, HarmCategory, getVertexAI, getGenerativeModel } = await import(aiUrl);
-            const app = getApps().length === 0 ? initializeApp(configObj) : getApp();
+            const cfaName = CFA.nameFor(configObj);
+            const app = getApps().find(a => a.name === cfaName) || initializeApp(configObj,cfaName);
+            await CFA.prepare(app,fbVersion);
             ai = getVertexAI(app);
             generativeModel = getGenerativeModel(ai, {
               model,
               safetySettings: safetySettingsFor(HarmCategory, HarmBlockThreshold),
               systemInstruction: { parts: [{ text: sysPrompt }] },
               generationConfig: genConfig,
-            });
+            }, geminiRequestOptions(model));
           }
 
           const result = await generativeModel.generateContent(userContent);
           if (result.response?.usageMetadata) updateCostUI(result.response.usageMetadata, model);
-          const raw = cleanResult(result.response?.text?.());
+          const raw = cleanResult(readGeminiResponseText(result.response, model));
           if (!raw) return reject(new Error("Firebase 번역 응답 본문이 비어 있습니다."));
           resolve(raw);
         } catch (error) {
@@ -4847,6 +5307,8 @@ ${conversation}`;
       GM_xmlhttpRequest({
         method: "POST",
         url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+        ...geminiRequestOptions(model),
+        ontimeout: () => reject(new Error("모델 응답 대기 시간이 초과됐어요. 추론 강도를 낮춰 다시 시도해 주세요.")),
         headers: { "Content-Type": "application/json" },
         data: JSON.stringify({
           system_instruction: { parts: [{ text: sysPrompt }] },
@@ -4858,11 +5320,11 @@ ${conversation}`;
             const data = JSON.parse(res.responseText);
             if (data.error) return reject(new Error(data.error.message));
             if (data.usageMetadata) updateCostUI(data.usageMetadata, model);
-            const raw = cleanResult(data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join(""));
+            const raw = cleanResult(readGeminiResponseText(data, model));
             if (!raw) return reject(new Error("Gemini 번역 응답 본문이 비어 있습니다."));
             resolve(raw);
-          } catch (_) {
-            reject(new Error("번역 응답 분석 실패"));
+          } catch (error) {
+            reject(new Error(error.message || "번역 응답 분석 실패"));
           }
         },
         onerror: () => reject(new Error("번역 네트워크 오류")),
@@ -5224,30 +5686,9 @@ ${styleInstruction}`);
         return;
       }
 
-      let genConfig = { temperature: 0.8 };
-
-      const currentThinkingInput = document.getElementById("cfg-think-val");
-      if (!model.startsWith("deepseek-")) {
-        const savedLevel = GM_getValue("thinkLevel_" + model, "medium");
-        const savedBudget = parseInt(GM_getValue("thinkBudget_" + model, 1024));
-
-        const applyLevel =
-          currentThinkingInput && model.includes("gemini-3")
-            ? currentThinkingInput.value
-            : savedLevel;
-        let applyBudget =
-          currentThinkingInput && !model.includes("gemini-3")
-            ? parseInt(currentThinkingInput.value)
-            : savedBudget;
-        if (isNaN(applyBudget) || applyBudget < 128) applyBudget = 128;
-
-        if (model.includes("gemini-3")) {
-          delete genConfig.temperature;
-          genConfig.thinkingConfig = { thinkingLevel: normalizeThinkingLevel(model, applyLevel) };
-        } else {
-          genConfig.thinkingConfig = { thinkingBudget: applyBudget };
-        }
-      }
+      const genConfig = model.startsWith("deepseek-") ? { temperature: 0.8 } : geminiGenerationConfig(model, 0.8);
+      const currentThinkingInput = document.getElementById("cfg-model")?.value === model
+        ? document.getElementById("cfg-think-val") : null;
 
       if (provider === "deepseek") {
         const key = GM_getValue("deepSeekApiKey", "");
@@ -5353,7 +5794,9 @@ ${styleInstruction}`);
               VertexAIBackend,
             } = await import(aiUrl);
             const apps = getApps();
-            const app = apps.length === 0 ? initializeApp(configObj) : getApp();
+            const cfaName = CFA.nameFor(configObj);
+            const app = getApps().find(a => a.name === cfaName) || initializeApp(configObj,cfaName);
+            await CFA.prepare(app,fbVersion);
             ai = getAI(app, { backend: new VertexAIBackend("global") });
 
             const safetySettings = [
@@ -5368,7 +5811,7 @@ ${styleInstruction}`);
               safetySettings,
               systemInstruction: { parts: [{ text: sysPrompt }] },
               generationConfig: genConfig,
-            });
+            }, geminiRequestOptions(model));
           } else {
             const {
               HarmBlockThreshold,
@@ -5377,7 +5820,9 @@ ${styleInstruction}`);
               getGenerativeModel,
             } = await import(aiUrl);
             const apps = getApps();
-            const app = apps.length === 0 ? initializeApp(configObj) : getApp();
+            const cfaName = CFA.nameFor(configObj);
+            const app = getApps().find(a => a.name === cfaName) || initializeApp(configObj,cfaName);
+            await CFA.prepare(app,fbVersion);
             ai = getVertexAI(app);
 
             const safetySettings = [
@@ -5392,7 +5837,7 @@ ${styleInstruction}`);
               safetySettings,
               systemInstruction: { parts: [{ text: sysPrompt }] },
               generationConfig: genConfig,
-            });
+            }, geminiRequestOptions(model));
           }
 
           const result = await generativeModel.generateContent(userContent);
@@ -5401,7 +5846,7 @@ ${styleInstruction}`);
             updateCostUI(result.response.usageMetadata, model);
           }
 
-          let rawResult = result.response.text().trim();
+          let rawResult = readGeminiResponseText(result.response, model);
           rawResult = rawResult.replace(/^```[^\n]*\n([\s\S]*?)\n```\s*$/m, "$1").trim();
           resolve(finalizeGeneratedMemoryHooks(rawResult, referenceContext));
         } catch (e) {
@@ -5414,7 +5859,9 @@ ${styleInstruction}`);
 
         GM_xmlhttpRequest({
           method: "POST",
-          url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+          url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+          ...geminiRequestOptions(model),
+          ontimeout: () => reject(new Error("모델 응답 대기 시간이 초과됐어요. 추론 강도를 낮춰 다시 시도해 주세요.")),
           headers: { "Content-Type": "application/json" },
           data: JSON.stringify({
             system_instruction: { parts: [{ text: sysPrompt }] },
@@ -5430,12 +5877,12 @@ ${styleInstruction}`);
                   updateCostUI(data.usageMetadata, model);
                 }
 
-                let raw = data.candidates[0].content.parts[0].text.trim();
+                let raw = readGeminiResponseText(data, model);
                 raw = raw.replace(/^```[^\n]*\n([\s\S]*?)\n```\s*$/m, "$1").trim();
                 resolve(finalizeGeneratedMemoryHooks(raw, referenceContext));
               }
             } catch (e) {
-              reject(new Error("응답 분석 실패"));
+              reject(new Error(e.message || "응답 분석 실패"));
             }
           },
           onerror: () => reject(new Error("네트워크 오류")),
