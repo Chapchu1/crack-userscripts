@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.66
+// @version      0.5.67
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.67 · 승인된 관계 이력 압축 결과의 실제 반영 경로 복구
+ * stageBundle에서 applyObserve로 독립 검토를 통과한 기록을 전달합니다.
+ * 압축·검증 후에도 원래의 긴 이력을 다시 검사해 6,000자에서 막히던 누락을 수정합니다.
+ * 한도는 올리지 않습니다. 저장된 승인 결과·원문·호출 예산·최종 반영 검증을 유지합니다.
+ */
 
 /* 0.5.66 · 관계 이력 압축 목표와 실제 허용 한도 정합성 수정
  * 기존 6,000자 처리 범위와 다음 최대 전환 401자 여유를 공통 기준으로 사용합니다.
@@ -641,7 +647,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.66'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.67'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49479,7 +49485,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.66-suite';
+  const SCRIPT_VERSION = '0.5.67-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -57981,7 +57987,12 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     if(p.observe) {
       const guarded=WishMemorySafety.filterFactCorrections(req,data.observe);data.observe=guarded.observe;notices.push(...guarded.notices);
       if(req.relationshipRange?.guarded&&!req.relationshipRange.indices.length&&Array.isArray(data.observe?.relationship_upsert)&&data.observe.relationship_upsert.length){const n=data.observe.relationship_upsert.length;data.observe.relationship_upsert=[];notices.push(`관계 전용 재구축 뒤 새로 반영할 RP가 없어, AI가 낸 관계 변경 ${n}건을 적용하지 않았습니다(재구축 이전 턴 재처리 방지).`);}
-      const out=applyObserve(cog,room.speechRelations,data.observe,wishTurnText(p.obs),p.obs.at(-1).assistantId,room.relationships,{sourceRows:checkedRelationshipSourceRows(room,p,req),evidenceSelections:checkedRelationshipEvidenceSelections(room,p,req,data),allowedPairs:new Set(req.relationshipPairs||[]),notices,held:heldAdds,cogHeld:cogHeldAdds,hold:req.holdContext||{bundle:'unified'},fix:fx,storedSpeech:req.storedSpeech,presenceRows:p.obs});
+      // Carry the exact independently approved projection through the real
+      // staging boundary. Dropping it here re-applies the uncompressed append
+      // and raises the same overflow even after compression/review succeeded.
+      // applyObserve -> WishRelationships.apply rechecks source, identity,
+      // original history, every change, review and consumption of every target.
+      const out=applyObserve(cog,room.speechRelations,data.observe,wishTurnText(p.obs),p.obs.at(-1).assistantId,room.relationships,{sourceRows:checkedRelationshipSourceRows(room,p,req),evidenceSelections:checkedRelationshipEvidenceSelections(room,p,req,data),allowedPairs:new Set(req.relationshipPairs||[]),trajectoryRecovery:req.trajectoryRecovery,notices,held:heldAdds,cogHeld:cogHeldAdds,hold:req.holdContext||{bundle:'unified'},fix:fx,storedSpeech:req.storedSpeech,presenceRows:p.obs});
       newCog=out.cog;next.speechRelations=normalizeSpeechRelations(out.speech);next.relationships=out.relationships;if(req.relationshipRange?.complete)next.relationshipBaseline=null;next.relationshipRevision=(Number(room.relationshipRevision)||0)+1;next.unified.observeCursor=p.obs.at(-1).key;
       preservationNotice=[out.preservedSpeech?'빈 응답의 기존 호칭·말투 '+out.preservedSpeech+'방향 유지':'',out.preservedAliases?'미언급 별칭 '+out.preservedAliases+'인물 유지':''].filter(Boolean).join(' · ');
     }
