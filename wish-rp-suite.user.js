@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.61
+// @version      0.5.62
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,14 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.62 · 임시 정리 설정 기준 오류의 재시작 반복 수정
+ * 연표를 포함한 9개 지침 기준을 정상 생성하고, 기존 7·8개 기준을 호환합니다.
+ * AI 결과가 전혀 없는 잘못된 null 임시 상태만 원문·기억 확인 후 복구합니다.
+ * 처리 결과·유료 후보·실제 설정 변경·원문 변경 보호 검사를 유지합니다.
+ * 자동 정리와 항목별 스위치·사용자 일시정지를 존중합니다.
+ * 실제 브라우저 저장소의 저장·새로고침·재개를 모의 AI 응답으로 검증했습니다.
+ */
 
 /* 0.5.61 · 관계 변화 요약 길이/형식 오류의 반복 정리 복구
  * live 관계 요청에 현재값 700자·새 전환 250자·남은 쟁점 400자 계약을 명시합니다.
@@ -605,7 +613,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.61'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.62'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49110,7 +49118,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.61-suite';
+  const SCRIPT_VERSION = '0.5.62-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -55551,8 +55559,10 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
   function draftSettingsValue(stamp){
     try{
       const value=JSON.parse(stamp);
-      if(!Array.isArray(value)||value.length!==2||!value[0]||typeof value[0]!=='object'||Array.isArray(value[0])||!Array.isArray(value[1])||![7,8].includes(value[1].length)||value[1].some(v=>typeof v!=='string'))return null;
+      if(!Array.isArray(value)||value.length!==2||!value[0]||typeof value[0]!=='object'||Array.isArray(value[0])||!Array.isArray(value[1])||![7,8,9].includes(value[1].length))return null;
       if(value[1].length===7)value[1].push(GUIDE_DEFAULTS.apiThreads);
+      if(value[1].length===8)value[1].push(GUIDE_DEFAULTS.apiTimeline);
+      if(value[1].some(v=>typeof v!=='string'))return null;
       const s={...value[0]};
       s.apiEconomy={delta:s.apiEconomy?.delta===true,index:s.apiEconomy?.index===true};
       s.recallSelection={semantic:s.recallSelection?.semantic===true,selector:s.recallSelection?.selector===true};
@@ -55562,7 +55572,35 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       return draftCanonical([s,value[1]]);
     }catch{return null;}
   }
-  function draftSettingsStamp(){return JSON.stringify(draftSettingsValue(JSON.stringify([loadAiSettings(),['apiCommon','apiMemory','apiObserve','apiSpeech','apiRelationships','apiDate','apiDelta','apiThreads','apiTimeline'].map(getGuideText)])));}
+  function draftSettingsStamp(){
+    const value=draftSettingsValue(JSON.stringify([loadAiSettings(),['apiCommon','apiMemory','apiObserve','apiSpeech','apiRelationships','apiDate','apiDelta','apiThreads','apiTimeline'].map(getGuideText)]));
+    if(!value)throw Object.assign(Error('AI 설정 기준을 생성하지 못해 임시 정리를 시작하지 않았습니다. 기존 기억은 유지됩니다.'),{code:'WISH_DRAFT_SETTINGS'});
+    return JSON.stringify(value);
+  }
+  // 0.5.59–0.5.61 emitted the literal "null" for nine-guide stamps.
+  // Rebind only a pristine draft that has never requested or retained AI work.
+  // Paid candidates and every processed/audit record keep their original guard.
+  function emptyDraftSettingsRecoverable(d){
+    try{
+      const fields=['id','kind','version','chatId','rev','createdAt','phase','settingsStamp','baseRoom','baseCog','basePacks','room','cog','packs','goals','total','sourceManifest','deferredFailure','notices','packets','changedPackIds','memoryChanged','observeChanged','reviewIndex','reviewSignature'];
+      if(!d||typeof d!=='object'||Array.isArray(d)||fields.some(k=>!Object.prototype.hasOwnProperty.call(d,k))||Object.keys(d).some(k=>!fields.includes(k)&&k!=='updatedAt'))return false;
+      if(d.settingsStamp!=='null'||d.kind!=='wish-unified-draft'||d.version!==1||d.phase!=='collecting'||typeof d.chatId!=='string'||!d.chatId||d.id!==draftId({chatId:d.chatId})||!Number.isInteger(d.rev)||d.rev<0||!Number.isFinite(d.createdAt)||d.createdAt<=0||d.updatedAt!==undefined&&(!Number.isFinite(d.updatedAt)||d.updatedAt<d.createdAt))return false;
+      if(!['notices','packets','changedPackIds'].every(k=>Array.isArray(d[k])&&d[k].length===0)||d.memoryChanged!==false||d.observeChanged!==false||d.reviewIndex!==0||d.reviewSignature!==''||d.deferredFailure!==null)return false;
+      if(!d.baseRoom?.unified||!d.room?.unified||String(d.baseRoom.chatId)!==d.chatId||String(d.room.chatId)!==d.chatId||!d.baseCog||!d.cog||!Array.isArray(d.basePacks)||!Array.isArray(d.packs)||!Array.isArray(d.sourceManifest)||!d.sourceManifest.length)return false;
+      if(d.sourceManifest.some(row=>!row||typeof row.id!=='string'||!row.id||!['user','assistant'].includes(row.role)||typeof row.hash!=='string'||!row.hash)||new Set(d.sourceManifest.map(row=>row.id)).size!==d.sourceManifest.length)return false;
+      if(!d.goals||Array.isArray(d.goals)||!d.total||Array.isArray(d.total)||!Object.keys(d.goals).length||Object.keys(d.goals).some(k=>!['memory','observe'].includes(k))||Object.keys(d.total).sort().join(',')!=='memory,observe')return false;
+      for(const kind of ['memory','observe']){
+        const goal=d.goals[kind],count=d.total[kind];
+        if(!Number.isInteger(count)||count<0||goal&&(!goal||typeof goal!=='object'||Array.isArray(goal)||Object.keys(goal).join(',')!=='messageId'||typeof goal.messageId!=='string'||!goal.messageId)||Boolean(goal)!==(count>0))return false;
+      }
+      const same=(a,b)=>JSON.stringify(draftCanonical(a))===JSON.stringify(draftCanonical(b));
+      if(!same(d.baseCog,d.cog)||!same(d.basePacks,d.packs))return false;
+      const shadow=copy(d.baseRoom);delete shadow.unified.draft;delete shadow.unified.partialFailure;
+      Object.assign(shadow.unified,{lastError:'',lastErrorCode:'',retry:null,failedKind:''});
+      shadow.unified.catchup=Object.fromEntries(Object.entries(d.goals).map(([kind,goal])=>[kind,goal.messageId]));
+      return same(shadow,d.room);
+    }catch{return false;}
+  }
   function draftSettingsChanges(before,after){
     const a=draftSettingsValue(before),b=draftSettingsValue(after);
     if(!a||!b)return ['저장된 AI 설정 기준'];
@@ -55626,7 +55664,11 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       // Runtime is authoritative even if the summary save was interrupted after its commit.
       u.draft={...draftSummary(d),...flags};
       renderModalIfIdle();
-      if(u.userPaused||u.lastErrorCode==='WISH_USER_ABORT'||u.lastErrorCode==='WISH_DRAFT_CHANGED'||flags.restartRequired||d.phase==='waiting')return false;
+      if(u.userPaused||u.lastErrorCode==='WISH_USER_ABORT'||d.phase==='waiting')return false;
+      // Only route the known empty-stamp regression to the regular guarded run.
+      // Binding waits for fresh history/cognition and source checks in that run.
+      if(u.lastErrorCode==='WISH_DRAFT_CHANGED'&&u.draft.blockedBy==='저장된 AI 설정 기준'&&emptyDraftSettingsRecoverable(d)&&draftAllowed(room,d))return await run(room,'retry');
+      if(u.lastErrorCode==='WISH_DRAFT_CHANGED'||flags.restartRequired)return false;
       if(u.lastError&&!hasPartialFailure(u)){wake(room,reason);return false;}
       checked.delete(room);schedule(room,100);return true;
     })();
@@ -55775,6 +55817,14 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       if(configChanges.length||liveBasis!==basis)throw draftChangedError([...configChanges,...(liveBasis!==basis?draftBasisChanges(basis,liveBasis):[])]);
       if(!sourceStillPresent(d.sourceManifest,fr.messages))throw Object.assign(draftChangedError(['기준 원문 수정·삭제']),{wishEditedSource:{manifest:d.sourceManifest,frame:fr,draft:d}});
     };
+    if(emptyDraftSettingsRecoverable(d)){
+      if(epoch!==localRestoreEpoch||state.currentRoom!==room||ExternalReplay.changed(apiChatIdOf(room),replay))throw Error('방 또는 복원 기준이 바뀌어 임시 정리를 보류했습니다.');
+      const liveBasis=draftBasis(room,cog,livePacks());
+      if(liveBasis!==basis)throw draftChangedError(draftBasisChanges(basis,liveBasis));
+      if(!sourceStillPresent(d.sourceManifest,frame.messages))throw Object.assign(draftChangedError(['기준 원문 수정·삭제']),{wishEditedSource:{manifest:d.sourceManifest,frame,draft:d}});
+      if(!draftSettingsValue(settingStamp))throw draftChangedError(['저장된 AI 설정 기준']);
+      d={...d,settingsStamp:settingStamp};await persistDraft(room,d);
+    }
     assertBasis(cog,frame);
     if(!force&&!draftAllowed(room,d)){room.unified.draft={...draftSummary(d),phase:'paused'};return false;}
     if(draftFinished(d)&&!sourceStillPresent(d.sourceManifest,frame.stable)){d={...d,phase:'waiting'};await persistDraft(room,d);return false;}
