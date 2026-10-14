@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.3.3
-// @description  4.6.3.3: 답변 하단 울트라챗 아이콘 표시 수정. 사이트의 실제 모델 아이콘 우선 사용, 기존 실패 배지 갱신, 제한된 대체 아이콘 시도. 4.6.3.2 빠른 선택창 수정과 기존 기능·설정 보존.
+// @version      4.6.3.4
+// @description  4.6.3.4: 무료 채팅권 선물 버튼 인식, 모델 선택 시 교체된 원본 버튼·메뉴 재연결, 울트라챗 아이콘 동기화. 모델 버튼 숨기기 통합 및 독립 설정·직접 지정 지원. 기존 기능·설정 보존.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -45,8 +45,8 @@
     'use strict';
     if (window.top !== window.self) return;
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.3.3' || page.__CMU_4633_BOOT_PENDING__) return;
-    page.__CMU_4633_BOOT_PENDING__ = true;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.3.4' || page.__CMU_4634_BOOT_PENDING__) return;
+    page.__CMU_4634_BOOT_PENDING__ = true;
     function earlySorterEnabled() {
         for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
             try {
@@ -1070,7 +1070,7 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
 
 function cmuMain() {
     'use strict';
-    const VERSION = '4.6.3.3';
+    const VERSION = '4.6.3.4';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -1327,6 +1327,8 @@ function cmuMain() {
         badgeTime: true,
         modelIcon: true,
         answerCost: true,
+        hideInputModelButton: true,
+        inputModelButtonFingerprint: null,
         nativeModelFilter: false,
         outputModelFilter: true,
         logCapture: false,
@@ -1344,7 +1346,7 @@ function cmuMain() {
         seongjwa: { label: '성좌', bg: '#0E1220' },
         heugyo: { label: '흑요', bg: '#131210' },
     });
-    const CMU_ADDONS = { sorter: null, pinset: null };
+    const CMU_ADDONS = { sorter: null, pinset: null, modelHider: null };
     function cmuPinsetSelecting() {
         return shouldRun() && !!CMU_ADDONS.pinset?.isRunning();
     }
@@ -4034,7 +4036,7 @@ function cmuMain() {
     html.cmu-compact-model-selecting :is([data-radix-popper-content-wrapper], [data-radix-menu-content]),
     [data-cmu-compact-model-native="1"],
     [data-cmu-compact-model-native="closing"][data-state="closed"],
-    [data-cmu-compact-model-native="closing"]:has([data-radix-menu-content][data-state="closed"]) {
+    [data-cmu-compact-model-native="closing"]:has(:is([data-radix-menu-content], [role="dialog"])[data-state="closed"]) {
       opacity: 0 !important;
       pointer-events: none !important;
     }
@@ -4875,6 +4877,8 @@ function cmuMain() {
             scheduleAnimatedThumbState();
         }
         cmuSyncAddons();
+        CMU_ADDONS.modelHider?.sync();
+        cmuSyncModelMoved();
         syncCmuDomWatchOptions();
         scheduleCmuInputCounterSync();
     }
@@ -8967,7 +8971,7 @@ function cmuMain() {
         { id: 'radiosonde', icon: Q_ICONS.radio, label: '라존데', keys: ['radiosonde'] },
         { id: 'dashboard', icon: Q_ICONS.dash, label: '대시보드', keys: ['dashboard', 'dashboardNumberAnimation', 'dashboardSidebar'] },
         { id: 'badge', icon: Q_ICONS.badge, label: '배지', keys: ['badgeChars', 'badgeTime', 'modelIcon', 'answerCost'] },
-        { id: 'nativemodel', icon: Q_ICONS.filter, label: '모델', keys: ['nativeModelFilter', 'outputModelFilter', 'outputLayout'] },
+        { id: 'nativemodel', icon: Q_ICONS.filter, label: '모델', keys: ['hideInputModelButton', 'nativeModelFilter', 'outputModelFilter', 'outputLayout'] },
         { id: 'capture', icon: Q_ICONS.capture, label: '로그 캡처', keys: ['logCapture'] }
     ]);
     function normalizeCmuSettingsTab(id) {
@@ -11305,6 +11309,12 @@ function cmuMain() {
             ? qChipWrap('g-omf', outputRows, !!settings.outputModelFilter)
             : `<div class="subrow"><div class="lbl">아직 감지된 모델 없음<div class="note">답변 길이 · 생각 조절 창을 한 번 열면 자동으로 등록돼요.</div></div></div>`;
         return qPage('nativemodel', `
+      <div class="sec">입력창 모델 버튼</div>
+      ${qCard(`
+        ${qSwitch('hideInputModelButton', '기본 모델·무료 채팅권 버튼 숨기기', '선물 아이콘도 함께 숨겨요. 끄면 기본 버튼이 다시 표시돼요.')}
+        <div class="subrow"><div class="lbl">숨길 버튼 직접 지정<div class="note">자동 감지되지 않는 번개·선물 버튼을 선택해요.</div></div><button type="button" class="cmu-action-btn" data-action="model-hider-pick">직접 지정</button></div>
+        <div class="subrow"><div class="lbl">직접 지정 초기화<div class="note">자동 감지는 유지해요. 단독판은 끄고 사용해 주세요.</div></div><button type="button" class="cmu-action-btn" data-action="model-hider-reset">초기화</button></div>
+      `)}
       <div class="sec">순정 모델 메뉴</div>
       ${qCard(qSwitch('nativeModelFilter', '안 쓰는 모델 숨기기', '체크 해제한 모델은 순정 메뉴에서 숨김', { group: 'g-nmf' }))}
 
@@ -11450,6 +11460,17 @@ function cmuMain() {
             if (action === 'addon-sorter' || action === 'addon-pinset') {
                 toggleSettingsPanel(false);
                 cmuOpenAddon(action === 'addon-pinset' ? 'pinset' : 'sorter');
+                return true;
+            }
+            if (action === 'model-hider-pick') {
+                toggleSettingsPanel(false);
+                closeCompactModelPicker({ closeNative: true });
+                CMU_ADDONS.modelHider?.startPicker();
+                return true;
+            }
+            if (action === 'model-hider-reset') {
+                CMU_ADDONS.modelHider?.resetManual();
+                showToast('직접 지정 초기화됨 · 자동 감지 유지');
                 return true;
             }
             if (action === 'wrapper-settings') {
@@ -14053,7 +14074,385 @@ function cmuMain() {
         return false;
     }
 
-    function compactModelTriggerScore(button, composer = null) {
+    function createCmuInputModelHider() {
+  const PREFIX = 'cmu-himb';
+  const MARK = 'data-cmu-himb-target';
+  const INPUT = [
+    '.__chat_input_textarea',
+    'textarea[placeholder*="메시지"]',
+    'textarea[placeholder*="message" i]',
+    '[contenteditable="true"][data-placeholder*="메시지"]',
+    '.ProseMirror[contenteditable="true"]:has([data-placeholder*="메시지"])',
+    '.ProseMirror[contenteditable="true"]:has([data-placeholder*="message" i])'
+  ].join(',');
+  const BUTTON = 'button,[role="button"],[aria-haspopup="menu"],[aria-haspopup="listbox"]';
+  const EXCLUDE = [
+    '[role="dialog"]', '[aria-modal="true"]', '[role="menu"]', '[role="listbox"]',
+    '[data-message-group-id]', '.wrtn-markdown', 'header', 'nav',
+    '#chud-sidebar', '#chud-side-content', '#chud-infobar', '[data-side-key]',
+    '[id^="chud-"]', '[id^="cmu-"]', '[id^="wrp-"]', '[id^="wrmc-"]',
+    '[id^="wish-"]', '[id^="crack-himb-"]'
+  ].join(',');
+  const ICON = 'img[src*="model-icon"],img[srcset*="model-icon"],svg use[href*="model-icon"]';
+  const MODEL_LABEL = /(?:모델\s*(?:선택|변경|전환)|^(?:AI\s*)?모델$|\bmodel[-_\s]*(?:select|switch|picker)|\b(?:select|switch|change)[-_\s]*(?:ai[-_\s]*)?model\b)/i;
+  const FREE_CHAT_LABEL = /(?:무료\s*(?:채팅|대화)(?:\s*권)?|(?:채팅|대화)\s*권|\bfree[-_\s]*(?:chat|conversation)(?:[-_\s]*(?:ticket|pass))?\b|\bchat[-_\s]*(?:ticket|pass)\b)/i;
+  const GIFT_ICON_LABEL = /(?:선물|(?:^|[^a-z0-9])(?:gift|present)(?=$|[^a-z0-9]))/i;
+  const NON_MODEL = /(?:전송|보내기|답변\s*길이|생각\s*조절|이미지\s*생성|선물함|보관함|출석|보상|충전|구매|\b(?:send|submit|reward|attendance|inventory|purchase)\b)/i;
+  const EDITOR = 'textarea,input,[contenteditable="true"],.__chat_input_textarea,#chud-model-btn';
+  const ROOM_HEADER = '.h-12.justify-between.bg-bg_screen,.h-12.justify-between.border-b';
+  let enabled = false;
+  let destroyed = false;
+  let manual = settings.inputModelButtonFingerprint;
+  let roots = [];
+  let neighborhoods = [];
+  let pending = 0;
+  let picking = false;
+  let banner = null;
+  const marked = new Map();
+
+  const style = document.createElement('style');
+  style.id = `${PREFIX}-style`;
+  style.textContent = `
+    /* Keep a nonzero box for existing model-launcher scripts. Clipping prevents hit testing. */
+    [${MARK}="1"] {
+      position: absolute !important;
+      width: 28px !important; height: 28px !important;
+      min-width: 28px !important; min-height: 28px !important;
+      max-width: 28px !important; max-height: 28px !important;
+      margin: 0 !important;
+      clip-path: inset(100%) !important;
+      clip: rect(0, 0, 0, 0) !important;
+      overflow: hidden !important;
+    }
+    #${PREFIX}-banner {
+      position: fixed !important; z-index: 2147483647 !important;
+      top: max(12px, env(safe-area-inset-top)) !important;
+      left: 12px !important; right: 12px !important;
+      box-sizing: border-box !important; max-width: 520px !important;
+      margin: 0 auto !important; padding: 12px 14px !important;
+      border: 1px solid #6371a0 !important; border-radius: 12px !important;
+      background: #202533 !important; color: #fff !important;
+      font: 14px/1.6 system-ui, sans-serif !important;
+      box-shadow: 0 4px 20px #0007 !important;
+    }
+    #${PREFIX}-banner button {
+      margin-left: 10px !important; padding: 5px 12px !important;
+      color: #fff !important; background: #424e70 !important;
+      border: 0 !important; border-radius: 7px !important;
+      font: inherit !important; cursor: pointer !important;
+    }
+  `;
+  (document.head || document.documentElement).appendChild(style);
+  CMU_RESOURCES.styles.add(style);
+
+  function blocked(el) {
+    return !(el instanceof Element) || !!el.closest(EXCLUDE);
+  }
+
+  function discoverRoots({ forPicker = false } = {}) {
+    const result = new Set();
+    const nearby = new Set();
+    for (const input of document.querySelectorAll(INPUT)) {
+      if (blocked(input) || !input.getClientRects().length) continue;
+      // Find the smallest common container that actually contains a matching
+      // control. An earlier utility row with two unrelated buttons is not enough.
+      let node = input.parentElement;
+      let candidateRoot = null;
+      let pickerRoot = null;
+      let neighborhood = null;
+      for (let depth = 0; node && depth < 7; depth++, node = node.parentElement) {
+        if (node.matches(`main,body,html,${ROOM_HEADER}`) || blocked(node) ||
+            node.querySelector(`[data-message-group-id],.wrtn-markdown,header,nav,[data-cmu-global-header="1"],[data-crack-ui-header="1"],#wrtn-custom-global-header,${ROOM_HEADER}`)) break;
+        neighborhood = node;
+        const buttons = [...node.querySelectorAll(BUTTON)].filter(eligible);
+        if (!candidateRoot && buttons.some(el => automatic(el) || matchesManual(el))) candidateRoot = node;
+        // Explicit picking must remain available for an unlabelled icon. Only
+        // that user-driven mode uses the bounded safe editor neighborhood.
+        if (forPicker && buttons.length) pickerRoot = node;
+        if (node.tagName === 'FORM') break;
+      }
+      if (neighborhood) nearby.add(neighborhood);
+      if (candidateRoot) result.add(candidateRoot);
+      else if (forPicker && pickerRoot) result.add(pickerRoot);
+    }
+    neighborhoods = [...nearby];
+    return [...result];
+  }
+
+  function label(el) {
+    return ['aria-label', 'title', 'data-testid', 'data-tooltip']
+      .map(name => el.getAttribute(name) || '').filter(Boolean).join(' ');
+  }
+
+  function eligible(el) {
+    return el instanceof HTMLElement && !blocked(el) &&
+      !el.matches('input,[type="submit"],[type="reset"]') &&
+      !el.querySelector(`${EDITOR},${BUTTON}`) &&
+      !NON_MODEL.test(label(el));
+  }
+
+  function freeChatSignal(el) {
+    // Identity only: callers must restrict this to the editor's native controls.
+    // Do not infer gifts from arbitrary SVG paths, color, or button position.
+    if (!(el instanceof Element) || !el.matches(BUTTON) || el.querySelector(`${EDITOR},${BUTTON}`)) return false;
+    const accessibleLabel = label(el);
+    if (FREE_CHAT_LABEL.test(accessibleLabel) || /🎁/.test(accessibleLabel)) return true;
+    const text = String(el.textContent || '').trim();
+    if (text.length <= 80 && (FREE_CHAT_LABEL.test(text) || /🎁/.test(text))) return true;
+    const icons = [...el.querySelectorAll('img,svg,use,[style*="url("]')];
+    if (/url\(/i.test(el.getAttribute('style') || '')) icons.push(el);
+    return icons.some(icon => {
+      if (icon.closest(BUTTON) !== el) return false;
+      const identity = ['src', 'srcset', 'alt', 'aria-label', 'title', 'data-icon', 'data-testid', 'class', 'href', 'xlink:href', 'style']
+        .map(name => {
+          const raw = icon.getAttribute(name) || '';
+          try { return decodeURIComponent(raw); } catch { return raw; }
+        }).join(' ').replace(/([a-z])([A-Z])/g, '$1 $2');
+      return GIFT_ICON_LABEL.test(identity) || FREE_CHAT_LABEL.test(identity) || /🎁/.test(identity);
+    });
+  }
+
+  function automatic(el) {
+    return eligible(el) && (compactModelComposerRowTrigger(el) || !!compactModelKnownMatch(el) || [...el.querySelectorAll(ICON)].some(icon => icon.closest(BUTTON) === el) ||
+      MODEL_LABEL.test(label(el)) || freeChatSignal(el));
+  }
+
+  function imageKey(image) {
+    const raw = image.getAttribute('src');
+    if (!raw || raw.length > 2000) return '';
+    // Persist only the selected icon reference, never editor contents or chat text.
+    try {
+      const url = new URL(raw, location.origin);
+      if (!/^https?:$/.test(url.protocol)) return '';
+      return url.origin + url.pathname + url.search;
+    } catch { return ''; }
+  }
+
+  function fingerprint(el) {
+    for (const name of ['data-testid', 'aria-label', 'title']) {
+      const value = el.getAttribute(name);
+      if (value && value.length < 160 && (MODEL_LABEL.test(value) || FREE_CHAT_LABEL.test(value))) {
+        return { kind: 'attribute', name, value };
+      }
+    }
+    const paths = [...el.querySelectorAll('svg path')].map(p => p.getAttribute('d') || '');
+    if (paths.length && paths.join('').length < 6000 && paths.every(Boolean)) {
+      return { kind: 'paths', value: paths };
+    }
+    const use = el.querySelector('svg use');
+    const href = use?.getAttribute('href') || use?.getAttribute('xlink:href');
+    if (href && href.length < 1000) return { kind: 'use', value: href };
+    const img = el.querySelector('img');
+    const key = img && imageKey(img);
+    return key ? { kind: 'image', value: key } : null;
+  }
+
+  function matchesManual(el, saved = manual) {
+    if (!saved || typeof saved !== 'object') return false;
+    if (saved.kind === 'attribute' && ['data-testid', 'aria-label', 'title'].includes(saved.name)) {
+      return el.getAttribute(saved.name) === saved.value;
+    }
+    if (saved.kind === 'image') return [...el.querySelectorAll('img')].some(img => imageKey(img) === saved.value);
+    if (saved.kind === 'paths' && Array.isArray(saved.value)) {
+      const paths = [...el.querySelectorAll('svg path')].map(p => p.getAttribute('d') || '');
+      return paths.length === saved.value.length && paths.every((d, i) => d === saved.value[i]);
+    }
+    if (saved.kind === 'use') {
+      return [...el.querySelectorAll('svg use')].some(use =>
+        (use.getAttribute('href') || use.getAttribute('xlink:href')) === saved.value);
+    }
+    return false;
+  }
+
+  function hide(el) {
+    let saved = marked.get(el);
+    if (!saved) {
+      saved = { tab: el.getAttribute('tabindex'), aria: el.getAttribute('aria-hidden') };
+      marked.set(el, saved);
+    }
+    // React may reuse the button when its icon changes. Reapply only missing
+    // values, and remember newer site attributes for the eventual restore.
+    if (el.getAttribute(MARK) !== '1') el.setAttribute(MARK, '1');
+    if (el.getAttribute('tabindex') !== '-1') {
+      saved.tab = el.getAttribute('tabindex');
+      el.setAttribute('tabindex', '-1');
+    }
+    if (el.getAttribute('aria-hidden') !== 'true') {
+      saved.aria = el.getAttribute('aria-hidden');
+      el.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  function restore(el) {
+    const saved = marked.get(el);
+    if (!saved) return;
+    if (el.getAttribute(MARK) === '1') el.removeAttribute(MARK);
+    for (const [name, value, ours] of [['tabindex', saved.tab, '-1'], ['aria-hidden', saved.aria, 'true']]) {
+      if (el.getAttribute(name) !== ours) continue;
+      if (value === null) el.removeAttribute(name); else el.setAttribute(name, value);
+    }
+    marked.delete(el);
+  }
+
+  function scan() {
+    pending = 0;
+    if (document.hidden || destroyed) return;
+    roots = discoverRoots();
+    const wanted = new Set();
+    if (enabled && !picking) {
+      for (const root of roots) {
+        const buttons = [...root.querySelectorAll(BUTTON)].filter(eligible);
+        // Never guess between several controls sharing the same icon.
+        const custom = buttons.filter(el => matchesManual(el));
+        if (custom.length === 1) {
+          wanted.add(custom[0]);
+        } else {
+          const native = buttons.filter(automatic);
+          native.forEach(el => wanted.add(el));
+        }
+      }
+    }
+    for (const el of marked.keys()) if (!wanted.has(el)) restore(el);
+    for (const el of wanted) hide(el);
+  }
+
+  function schedule() {
+    if (!pending && !document.hidden && enabled && !picking) pending = setTimeout(scan, 120);
+  }
+
+  function handleMutations(records) {
+    if (!enabled || picking || document.hidden) return;
+    if (roots.some(root => !root.isConnected) || neighborhoods.some(root => !root.isConnected)) { schedule(); return; }
+    for (const record of records) {
+      const target = record.target instanceof Element ? record.target : record.target.parentElement;
+      if (!target) continue;
+      // A reused hidden node may have become a send control or popup. Recheck
+      // it even if the new role would now exclude it from normal discovery.
+      if ([...marked.keys()].some(el => el === target || el.contains(target) || target.contains(el))) { schedule(); return; }
+      if (blocked(target) || (target.closest(INPUT) && record.type !== 'attributes')) continue;
+      // These scopes exist even before the first matching icon arrives.
+      if (neighborhoods.some(root => root.contains(target))) { schedule(); return; }
+      if (record.type === 'childList') {
+        for (const node of record.addedNodes) {
+          if (node instanceof Element && !blocked(node) &&
+              (node.matches(INPUT) || node.querySelector(INPUT))) { schedule(); return; }
+        }
+      }
+      if (record.type === 'attributes' && (target.matches(INPUT) || target.querySelector(INPUT))) { schedule(); return; }
+    }
+  }
+
+  function watch() {
+    clearTimeout(pending); pending = 0;
+    if (!enabled || document.hidden || picking || destroyed) return;
+    scan();
+  }
+  function sync() {
+    if (destroyed) return;
+    enabled = shouldRun() && isChatRoomPath() && settings.hideInputModelButton !== false;
+    manual = settings.inputModelButtonFingerprint;
+    if (!enabled) {
+      stopPicker();
+      clearTimeout(pending); pending = 0;
+      for (const el of marked.keys()) restore(el);
+    } else watch();
+  }
+  function resetManual() {
+    stopPicker(); manual = null; settings.inputModelButtonFingerprint = null; saveSettings(); sync();
+  }
+
+  function pickerButton(event) {
+    const target = event.target instanceof Element ? event.target : null;
+    const button = target?.closest(BUTTON);
+    return button && eligible(button) && roots.some(root => root.contains(button)) ? button : null;
+  }
+
+  function blockPress(event) {
+    if (picking && pickerButton(event)) event.stopImmediatePropagation();
+  }
+
+  function choose(event) {
+    if (!picking) return;
+    const button = pickerButton(event);
+    if (!button) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    const saved = fingerprint(button);
+    const root = roots.find(root => root.contains(button));
+    const same = saved && [...root.querySelectorAll(BUTTON)].filter(eligible).filter(el => matchesManual(el, saved));
+    if (!saved || same.length !== 1) {
+      banner.firstChild.textContent = '이 버튼을 고유하게 구분할 수 없어요. 다른 부분을 누르거나 취소해 주세요.';
+      return;
+    }
+    manual = saved; enabled = true;
+    settings.inputModelButtonFingerprint = manual; settings.hideInputModelButton = true; saveSettings();
+    stopPicker(); sync(); cmuSyncModelMoved();
+  }
+
+  function cancelKey(event) { if (event.key === 'Escape') stopPicker(); }
+
+  function stopPicker() {
+    if (!picking) return;
+    picking = false;
+    document.documentElement.removeAttribute('data-cmu-model-picking');
+    for (const name of ['pointerdown', 'mousedown', 'touchstart']) window.removeEventListener(name, blockPress, true);
+    window.removeEventListener('click', choose, true);
+    window.removeEventListener('keydown', cancelKey, true);
+    banner?.remove(); banner = null;
+    watch();
+    cmuSyncModelMoved();
+  }
+
+  function startPicker() {
+    stopPicker();
+    roots = discoverRoots({ forPicker: true });
+    if (!roots.length) {
+      showToast('채팅 입력창을 찾지 못했어요. 채팅방을 연 뒤 다시 눌러 주세요.');
+      return;
+    }
+    picking = true; clearTimeout(pending); pending = 0;
+    document.documentElement.setAttribute('data-cmu-model-picking', '1');
+    cmuModelMovedNative?.removeAttribute('data-cmu-model-relocated');
+    cmuModelMovedNative = null;
+    for (const el of marked.keys()) restore(el);
+    banner = document.createElement('div'); banner.id = `${PREFIX}-banner`;
+    banner.setAttribute('role', 'status'); banner.setAttribute('data-cmu-addon-ui', '1');
+    banner.append(document.createTextNode('숨길 번개·선물 모델 버튼을 한 번 눌러 주세요.'));
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '취소';
+    cancel.addEventListener('click', stopPicker); banner.append(cancel); document.body.append(banner);
+    for (const name of ['pointerdown', 'mousedown', 'touchstart']) window.addEventListener(name, blockPress, true);
+    window.addEventListener('click', choose, true); window.addEventListener('keydown', cancelKey, true);
+  }
+
+  const visibility = () => { if (document.hidden) stopPicker(); sync(); };
+  const pageHide = () => { stopPicker(); clearTimeout(pending); pending = 0; };
+  document.addEventListener('visibilitychange', visibility);
+  window.addEventListener('pageshow', sync);
+  window.addEventListener('pagehide', pageHide);
+  function destroy() {
+    destroyed = true; enabled = false; stopPicker(); clearTimeout(pending);
+    for (const el of marked.keys()) restore(el);
+    document.removeEventListener('visibilitychange', visibility);
+    window.removeEventListener('pageshow', sync); window.removeEventListener('pagehide', pageHide);
+    style.remove();
+  }
+  return { sync, schedule, handleMutations, startPicker, resetManual, matchesManual,
+    freeChatSignal, isPicking: () => picking, cancel: stopPicker, destroy };
+    }
+    function compactModelFreeChatSignal(button) {
+        return !!CMU_ADDONS.modelHider?.freeChatSignal(button);
+    }
+    function compactModelNeedsNativeUi(button) {
+        // An unlabelled SVG in the verified native slot has no model identity.
+        // Mirror/open that control rather than inventing a model or redeeming a ticket.
+        return !!button && (compactModelFreeChatSignal(button) ||
+            (!compactModelButtonToken(button) && (compactModelComposerRowTrigger(button) || CMU_ADDONS.modelHider?.matchesManual(button))));
+    }
+    function compactModelComposerRowTrigger(button) {
+        const selector = 'main .flex.items-center.justify-between > .flex.min-w-0 > button[aria-haspopup="dialog"]';
+        return button.matches(selector) && Array.from(button.parentElement.children)
+            .filter(el => el.matches('button[aria-haspopup="dialog"]')).length === 1;
+    }
+    function compactModelTriggerScore(button, composer = null, known = compactModelKnownEntries()) {
         if (!(button instanceof HTMLElement) || !button.isConnected || isOwnElement(button) ||
             button.matches(':disabled, [aria-disabled="true"], [type="submit"], [type="reset"]') ||
             button.closest('[data-message-group-id], .wrtn-markdown, [role="dialog"], [role="menu"], [role="listbox"], [data-radix-menu-content], [data-radix-popper-content-wrapper]'))
@@ -14071,18 +14470,23 @@ function cmuMain() {
         const hasModelLabel = /모델\s*(?:선택|변경|전환)|(?:model[-_\s]*(?:select|switch|picker)|(?:select|switch|change)[-_\s]*(?:ai[-_\s]*)?model)/i.test(label);
         // A companion hider clips the native button but intentionally retains its DOM/click handler.
         const relocated = button.getAttribute('data-cmu-model-relocated') === '1';
-        const hiddenModel = button.getAttribute('data-crack-himb-target') === '1' || relocated;
+        const hiddenModel = button.getAttribute('data-crack-himb-target') === '1' || button.getAttribute('data-cmu-himb-target') === '1' || relocated;
         // Continue-generation controls can also contain a model icon. Keep the
         // custom icon-only fallback for legacy triggers without aria-haspopup.
         if (/이어서\s*(?:생성|쓰기)|계속\s*생성|continue\s*(?:generat|writ)|regenerat/i.test(label + ' ' + (button.textContent || '')))
             return -1;
-        if (!hasIcon && !hasModelLabel && !hiddenModel)
+        const knownModel = compactModelKnownMatch(button, known);
+        const nativeRow = compactModelComposerRowTrigger(button);
+        const inComposer = !!composer?.contains(button);
+        const freeChat = (inComposer || nativeRow) && compactModelFreeChatSignal(button);
+        const manual = inComposer && CMU_ADDONS.modelHider?.matchesManual(button);
+        if (!hasIcon && !hasModelLabel && !knownModel && !freeChat && !manual && !nativeRow)
             return -1;
         const style = getComputedStyle(button);
         const rect = button.getBoundingClientRect();
-        if (style.display === 'none' || style.visibility === 'hidden' || (!relocated && rect.width <= 0) || rect.height <= 0)
+        if (style.display === 'none' || style.visibility === 'hidden' || (!hiddenModel && (rect.width <= 0 || rect.height <= 0)))
             return -1;
-        let score = hasIcon ? 100 : 60;
+        let score = hasIcon || knownModel ? 100 : (freeChat || manual ? 90 : 60);
         if (hiddenModel) score += 20;
         if (composer?.contains(button)) score += 200;
         if (button.hasAttribute('aria-haspopup')) score += 10;
@@ -14094,20 +14498,39 @@ function cmuMain() {
         const input = findChatInput();
         const composer = input ? findComposerShell(input) : null;
         // Prefer the exact 10/13 composer row, preserving the custom safe fallback.
+        const known = compactModelKnownEntries();
         const rowButtons = document.querySelectorAll('main .flex.items-center.justify-between > .flex.min-w-0 > button[aria-haspopup="dialog"]');
         for (const button of rowButtons) {
-            if (compactModelTriggerScore(button, composer) >= 0) return button;
+            if (compactModelTriggerScore(button, composer, known) >= 0) return button;
         }
         let best = null;
         let bestScore = -1;
         for (const button of document.querySelectorAll('button, [role="button"]')) {
-            const score = compactModelTriggerScore(button, composer);
+            const score = compactModelTriggerScore(button, composer, known);
             if (score > bestScore) {
                 best = button;
                 bestScore = score;
             }
         }
         return best;
+    }
+    function compactModelLiveButton(previous = null) {
+        const current = getNativeModelMenuButton();
+        return current || (previous?.isConnected && compactModelTriggerScore(previous) >= 0 ? previous : null);
+    }
+    function compactModelNativeContent(shell) {
+        const selector = '[data-radix-menu-content], [role="dialog"], [role="menu"], [role="listbox"]';
+        return shell?.matches?.(selector) ? shell : shell?.querySelector?.(selector) || shell;
+    }
+    function compactModelNativeNodeActive(node, shell = node?.closest?.('[data-radix-popper-content-wrapper]')) {
+        if (!(node instanceof HTMLElement) || !node.isConnected) return false;
+        for (let current = node; current instanceof HTMLElement; current = current.parentElement) {
+            if (current.hidden || current.hasAttribute('inert') || current.getAttribute('data-state') === 'closed' ||
+                getComputedStyle(current).display === 'none') return false;
+            if (current === shell) break;
+        }
+        // CMU hides the menu with opacity while reading it, never display:none.
+        return true;
     }
     function compactModelImageSource(item, flatToken) {
         if (!(item instanceof Element))
@@ -14204,9 +14627,9 @@ function cmuMain() {
         const hay = parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
         return /제작자\s*(?:권장|추천)|(?:권장|추천)\s*(?:모델)?|\brecommended\b/i.test(hay);
     }
-    function compactModelSnapshot(known = compactModelKnownEntries()) {
-        const roots = nmfNativeModelRoots().filter(root => {
-            if (!root?.isConnected || root.getAttribute?.('data-state') === 'closed')
+    function compactModelSnapshot(known = compactModelKnownEntries(), scope = null) {
+        const roots = (scope ? [scope] : nmfNativeModelRoots()).filter(root => {
+            if (!compactModelNativeNodeActive(compactModelNativeContent(root)))
                 return false;
             const shell = root.closest?.('[data-radix-popper-content-wrapper]') || root;
             if (shell?.getAttribute?.('data-state') === 'closed')
@@ -14225,7 +14648,7 @@ function cmuMain() {
         const entries = [];
         const used = new Set();
         for (const item of nmfNativeModelItemCandidates()) {
-            if (!(item instanceof HTMLElement) || !item.isConnected || !shell.contains(item))
+            if (!(item instanceof HTMLElement) || !shell.contains(item) || !compactModelNativeNodeActive(item, shell))
                 continue;
             const tokenPairs = new Map();
             for (const flat of nmfFlatTokensFromElement(item)) {
@@ -14316,14 +14739,14 @@ function cmuMain() {
         /*
          * 중요: 원본 Radix 메뉴에 pointermove/mousemove를 인위적으로 보내면
          * hover 서브메뉴/강조행이 바뀌면서 다른 모델 행으로 대상이 이동할 수 있다.
-         * 따라서 좌표/hover를 전혀 만들지 않고, 요청한 모델 아이콘의 실제 DOM에서
-         * click을 버블링시켜 그 아이콘을 소유한 원본 행만 동작시킨다.
+         * 따라서 좌표/hover를 만들지 않고 요청한 모델의 실제 버튼/행을 한 번 누른다.
+         * 장식용 이미지에 걸린 이벤트 차단 때문에 선택이 누락되지 않게 한다.
          */
         let sourceItem = item;
         if (!(sourceItem instanceof HTMLElement) || !sourceItem.isConnected) {
-            sourceItem = compactModelFastSnapshot()?.entries?.find(entry => entry.token === token)?.item || null;
+            sourceItem = compactModelFastSnapshot(compactModelLiveButton())?.entries?.find(entry => entry.token === token)?.item || null;
         }
-        if (!(sourceItem instanceof HTMLElement) || !sourceItem.isConnected)
+        if (!compactModelNativeNodeActive(sourceItem) || sourceItem.matches(':disabled, [aria-disabled="true"]'))
             return false;
 
         const expectedToken = String(token || '');
@@ -14337,8 +14760,8 @@ function cmuMain() {
             return false;
 
         const exactIcon = compactModelExactIcon(sourceItem, expectedToken);
-        const target = exactIcon || (sourceItem.matches('button, [role="button"], [role^="menuitem"], [role="option"]')
-            ? sourceItem : compactModelNativeActionTarget(sourceItem, expectedToken)) || sourceItem;
+        const target = (sourceItem.matches('button, [role="button"], [role^="menuitem"], [role="option"]')
+            ? sourceItem : compactModelNativeActionTarget(sourceItem, expectedToken)) || exactIcon || sourceItem;
         if (!(target instanceof HTMLElement) || !target.isConnected)
             return false;
 
@@ -14382,6 +14805,8 @@ function cmuMain() {
             .replace(/[·|()[\]{}:]/g, '');
     }
     function compactModelSelectionMatches(nativeButton, entry) {
+        nativeButton = compactModelLiveButton(nativeButton);
+        if (!nativeButton) return false;
         const buttonToken = compactModelButtonToken(nativeButton);
         if (buttonToken)
             return buttonToken === entry.token;
@@ -14390,29 +14815,15 @@ function cmuMain() {
         return wantedLabel.length >= 2 && currentLabel.includes(wantedLabel);
     }
     function compactModelNativeIsOpen(nativeButton, nativeShell) {
-        const expanded = nativeButton?.getAttribute?.('aria-expanded');
-        if (expanded === 'true')
-            return true;
-        if (expanded === 'false')
-            return false;
-        if (!(nativeShell instanceof HTMLElement) || !nativeShell.isConnected)
-            return false;
-        const root = nativeShell.matches?.('[data-radix-menu-content]')
-            ? nativeShell
-            : nativeShell.querySelector?.('[data-radix-menu-content]');
-        if (nativeShell.getAttribute('data-state') === 'closed' || root?.getAttribute?.('data-state') === 'closed')
-            return false;
-        try {
-            return getComputedStyle(nativeShell).display !== 'none';
-        }
-        catch (_) {
-            return true;
-        }
+        const live = compactModelLiveButton(nativeButton);
+        const expanded = live?.getAttribute('aria-expanded');
+        if (expanded === 'false') return false;
+        const content = compactModelNativeContent(nativeShell);
+        if (content?.isConnected) return compactModelNativeNodeActive(content);
+        return expanded === 'true';
     }
     function compactModelDispatchEscape(nativeShell) {
-        const root = nativeShell?.matches?.('[data-radix-menu-content]')
-            ? nativeShell
-            : nativeShell?.querySelector?.('[data-radix-menu-content]');
+        const root = compactModelNativeContent(nativeShell);
         const target = root || nativeShell || document;
         try {
             target.dispatchEvent(new KeyboardEvent('keydown', {
@@ -14428,13 +14839,15 @@ function cmuMain() {
             return false;
         }
     }
-    async function compactModelWaitForSelection(nativeButton, entry) {
+    async function compactModelWaitForSelection(nativeButton, entry, room = getChatId()) {
         for (const delay of [0, 45, 90, 160, 260, 420, 650]) {
             if (delay)
                 await new Promise(resolve => setTimeout(resolve, delay));
+            if (room !== getChatId()) return false;
+            nativeButton = compactModelLiveButton(nativeButton);
             if (compactModelSelectionMatches(nativeButton, entry))
                 return true;
-            const selected = compactModelFastSnapshot()?.entries?.find(candidate => candidate.selected);
+            const selected = compactModelFastSnapshot(nativeButton)?.entries?.find(candidate => candidate.selected);
             if (selected?.token === entry.token)
                 return true;
         }
@@ -14443,8 +14856,10 @@ function cmuMain() {
     async function compactModelDismissNativeMenu(nativeButton, initialShell) {
         const shells = new Set();
         let shell = initialShell;
+        const room = getChatId();
         const refresh = () => {
-            const current = compactModelFastSnapshot()?.shell;
+            nativeButton = compactModelLiveButton(nativeButton);
+            const current = compactModelFastSnapshot(nativeButton)?.shell;
             if (current) shell = current;
             if (shell instanceof HTMLElement) {
                 shell.setAttribute('data-cmu-compact-model-native', '1');
@@ -14455,6 +14870,7 @@ function cmuMain() {
         if (compactModelNativeIsOpen(nativeButton, shell)) compactModelDispatchEscape(shell);
         for (const delay of [35, 65, 100, 140]) {
             await new Promise(resolve => setTimeout(resolve, delay));
+            if (room !== getChatId()) break;
             refresh();
             if (!compactModelNativeIsOpen(nativeButton, shell)) break;
             // Await every fallback before another picker operation can start.
@@ -14468,7 +14884,7 @@ function cmuMain() {
         document.documentElement.classList.remove('cmu-compact-model-selecting', 'cmu-compact-model-probing');
         shells.forEach(el => {
             compactModelClearNativeLiveMarks(el);
-            const root = el.matches('[data-radix-menu-content]') ? el : el.querySelector('[data-radix-menu-content]');
+            const root = compactModelNativeContent(el);
             // React/Radix may keep an exiting menu mounted. Hide only its closed state;
             // an intentional native reopen is visible immediately without timers/observers.
             if (closed && el.isConnected && (el.getAttribute('data-state') === 'closed' || root?.getAttribute('data-state') === 'closed'))
@@ -14745,7 +15161,7 @@ function cmuMain() {
         // Only the old header trigger needs this workaround. Moving a composer
         // control (or a clipped trigger) changes its flex/transform context and
         // can make the input box jump out of view while the native menu is open.
-        if (nativeButton.getAttribute('data-crack-himb-target') === '1' ||
+        if ((nativeButton.getAttribute('data-crack-himb-target') === '1' || nativeButton.getAttribute('data-cmu-himb-target') === '1') ||
             nativeButton.getAttribute('data-cmu-model-relocated') === '1' ||
             nativeButton.querySelector('textarea, input, [contenteditable="true"], .__chat_input_textarea, #chud-model-btn') ||
             isButtonInsideChatComposer(nativeButton))
@@ -14824,19 +15240,13 @@ function cmuMain() {
         return release;
     }
     async function compactModelHiddenSnapshotForSelection(nativeButton) {
-        if (!(nativeButton instanceof HTMLElement) || !nativeButton.isConnected)
-            return null;
+        nativeButton = compactModelLiveButton(nativeButton);
+        if (!nativeButton) return null;
         document.documentElement.classList.add('cmu-compact-model-selecting');
-
-        let snapshot = compactModelFastSnapshot();
-        if (!snapshot?.entries?.length) {
-            if (nativeButton.getAttribute('aria-expanded') !== 'true')
-                compactModelClickOnce(nativeButton);
-            snapshot = await waitForCompactModelSnapshot(COMPACT_MODEL.seq, nativeButton);
-        }
-
-        if (snapshot?.shell instanceof HTMLElement)
-            snapshot.shell.setAttribute('data-cmu-compact-model-native', '1');
+        const previous = compactModelFastSnapshot(nativeButton);
+        if (!compactModelNativeIsOpen(nativeButton, previous?.shell) && !compactModelClickOnce(nativeButton)) return null;
+        const snapshot = await waitForCompactModelSnapshot(COMPACT_MODEL.seq, nativeButton);
+        if (snapshot?.shell instanceof HTMLElement) snapshot.shell.setAttribute('data-cmu-compact-model-native', '1');
         return snapshot;
     }
     function compactModelParkNativeMenu(nativeButton, shell) {
@@ -14903,7 +15313,8 @@ function cmuMain() {
         menu.setAttribute('role', 'listbox');
         menu.setAttribute('aria-label', '모델 빠른 선택');
         menu.style.visibility = 'hidden';
-        const currentToken = compactModelCurrentToken(nativeButton, snapshot.entries);
+        const pickerRoom = getChatId();
+        const currentToken = compactModelCurrentToken(compactModelLiveButton(nativeButton), snapshot.entries);
         for (const entry of snapshot.entries) {
             const option = document.createElement('button');
             option.type = 'button';
@@ -14945,7 +15356,9 @@ function cmuMain() {
                     return;
                 // Use the live trigger, not the opening snapshot: another UI may
                 // have changed the model while this list was visible.
-                if (nativeButton.isConnected && compactModelButtonToken(nativeButton) === entry.token) {
+                if (pickerRoom !== getChatId()) { closeCompactModelPicker({ closeNative: false }); return; }
+                nativeButton = compactModelLiveButton(nativeButton);
+                if (nativeButton && compactModelButtonToken(nativeButton) === entry.token) {
                     closeCompactModelPicker({ closeNative: true });
                     return;
                 }
@@ -14961,28 +15374,32 @@ function cmuMain() {
                 try {
                     const freshSnapshot = await compactModelHiddenSnapshotForSelection(nativeButton);
                     const nativeShell = freshSnapshot?.shell || snapshot.shell;
+                    if (pickerRoom !== getChatId()) return;
+                    nativeButton = compactModelLiveButton(nativeButton);
                     if (selectionSeq !== COMPACT_MODEL.seq) {
                         await compactModelDismissNativeMenu(nativeButton, nativeShell);
                         return;
                     }
-                    const target = freshSnapshot?.entries?.find(candidate => candidate.token === entry.token)?.item ||
-                        (entry.item?.isConnected ? entry.item : null);
+                    const target = freshSnapshot?.entries?.find(candidate => candidate.token === entry.token && !candidate.disabled)?.item || null;
 
-                    const changed = await compactModelActivateNativeItem(target, entry.token);
+                    const changed = !!target && await compactModelActivateNativeItem(target, entry.token);
                     closeCompactModelPicker({ closeNative: false, preserveNativeHidden: true });
                     if (!changed) {
                         await compactModelDismissNativeMenu(nativeButton, nativeShell);
                         showToast('모델 항목이 갱신됨 · 다시 눌러 주세요');
                         return;
                     }
-                    const confirmed = await compactModelWaitForSelection(nativeButton, entry);
+                    const confirmed = await compactModelWaitForSelection(nativeButton, entry, pickerRoom);
+                    if (pickerRoom !== getChatId()) return;
+                    nativeButton = compactModelLiveButton(nativeButton);
                     await compactModelDismissNativeMenu(nativeButton, nativeShell);
                     if (!confirmed) {
                         const actualToken = compactModelButtonToken(nativeButton);
                         showToast(actualToken && actualToken !== entry.token
                             ? '선택 모델 불일치 · 다시 눌러 주세요'
-                            : '모델 선택 확인이 늦어짐 · 상단 모델명을 확인해 주세요');
+                            : '모델 선택 확인이 늦어짐 · 입력창 모델을 확인해 주세요');
                     }
+                    cmuSyncModelMoved();
                     scheduleNmfScan([120, 320, 700]);
                     setTimeout(() => {
                         scheduleDashboardUpdate(true);
@@ -14990,9 +15407,10 @@ function cmuMain() {
                     }, 180);
                 }
                 catch (_) {
+                    if (pickerRoom !== getChatId()) return;
                     closeCompactModelPicker({ closeNative: false, preserveNativeHidden: true });
                     await compactModelDismissNativeMenu(nativeButton, compactModelFastSnapshot()?.shell || snapshot.shell);
-                    showToast('모델 선택을 완료하지 못했어요 · 다시 눌러 주세요');
+                    if (pickerRoom === getChatId()) showToast('모델 선택을 완료하지 못했어요 · 다시 눌러 주세요');
                 }
                 finally {
                     releaseNativeButtonFreeze();
@@ -15277,7 +15695,7 @@ function cmuMain() {
         // 새 Popover는 menu-content 대신 wrapper > dialog 구조다.
         // 합본이 원본 메뉴를 가린 동안에도 DOM의 모델 행을 읽는다.
         const roots = (scope ? [scope.root] : Array.from(document.querySelectorAll(nmfNativeModelRootSelector()))).filter(root => {
-            if (!(root instanceof HTMLElement) || !root.isConnected || isOwnElement(root) || root.getAttribute('data-state') === 'closed')
+            if (!(root instanceof HTMLElement) || isOwnElement(root) || !compactModelNativeNodeActive(compactModelNativeContent(root)))
                 return false;
             const shell = root.closest('[data-radix-popper-content-wrapper]') || root;
             if (shell?.getAttribute?.('data-state') === 'closed')
@@ -15297,7 +15715,7 @@ function cmuMain() {
             const used = new Set();
             const rows = Array.from(root.querySelectorAll('[role^="menuitem"], [data-radix-collection-item], [role="option"], [role="button"], button, li, a'));
             for (const row of rows) {
-                if (!(row instanceof HTMLElement) || !row.isConnected || isOwnElement(row))
+                if (!(row instanceof HTMLElement) || isOwnElement(row) || !compactModelNativeNodeActive(row, shell))
                     continue;
                 const match = compactModelKnownMatch(row, known);
                 if (!match || used.has(match.token) || visibility[match.token] === false)
@@ -15334,11 +15752,15 @@ function cmuMain() {
         }
         return best;
     }
-    function compactModelFastSnapshot() {
+    function compactModelFastSnapshot(nativeButton = null) {
         const known = compactModelKnownEntries();
-        const icons = compactModelSnapshot(known);
+        const controls = nativeButton?.getAttribute('aria-controls')?.trim();
+        const content = controls ? controls.split(/\s+/).map(id => document.getElementById(id)).find(Boolean) : null;
+        if (controls && !content) return null;
+        const scope = content ? content.closest('[data-radix-popper-content-wrapper]') || content : null;
+        const icons = compactModelSnapshot(known, scope);
         // 일부 아이콘만 인식했어도 같은 메뉴의 알려진 이름으로 누락 항목을 보충한다.
-        const labels = compactModelSnapshotFromKnownLabels(icons, known);
+        const labels = compactModelSnapshotFromKnownLabels(icons || (scope ? { root: scope } : null), known);
         if (!icons) return labels;
         if (!labels) return icons;
         const entries = icons.entries.filter(entry => !labels.entries.some(match =>
@@ -15355,7 +15777,14 @@ function cmuMain() {
          * 모델 행이 생기는 바로 그 프레임에 잡는다. 보통 수십 ms 안에 완료된다.
          * 원본 메뉴를 사용자에게 폴백으로 노출하지 않기 때문에 오래 기다리지 않는다.
          */
-        const immediate = compactModelFastSnapshot();
+        const room = getChatId();
+        const readSnapshot = () => {
+            if (seq !== COMPACT_MODEL.seq || room !== getChatId()) return null;
+            const live = nativeButton ? compactModelLiveButton(nativeButton) : null;
+            const snapshot = compactModelFastSnapshot(live);
+            return !nativeButton || compactModelNativeIsOpen(live, snapshot?.shell) ? snapshot : null;
+        };
+        const immediate = readSnapshot();
         if (immediate?.entries?.length)
             return immediate;
         return await new Promise(resolve => {
@@ -15378,11 +15807,11 @@ function cmuMain() {
             const check = () => {
                 if (finished)
                     return;
-                if (seq !== COMPACT_MODEL.seq) {
+                if (seq !== COMPACT_MODEL.seq || room !== getChatId()) {
                     finish(null);
                     return;
                 }
-                const snapshot = compactModelFastSnapshot();
+                const snapshot = readSnapshot();
                 if (snapshot?.entries?.length) {
                     finish(snapshot);
                     return;
@@ -15391,7 +15820,7 @@ function cmuMain() {
                     finish(null);
                     return;
                 }
-                raf = requestAnimationFrame(check);
+                if (!raf) raf = requestAnimationFrame(() => { raf = 0; check(); });
             };
             try {
                 observer = new MutationObserver(check);
@@ -15403,13 +15832,13 @@ function cmuMain() {
                 });
             }
             catch (_) { }
-            raf = requestAnimationFrame(check);
+            raf = requestAnimationFrame(() => { raf = 0; check(); });
             timeout = setTimeout(() => finish(null), 1300);
         });
     }
     async function openCompactModelPicker() {
         const anchor = document.getElementById('chud-model-btn');
-        const nativeButton = getNativeModelMenuButton();
+        let nativeButton = getNativeModelMenuButton();
         if (!(anchor instanceof HTMLElement) || !(nativeButton instanceof HTMLElement)) {
             showToast('모델 버튼을 찾지 못함');
             return false;
@@ -15438,6 +15867,14 @@ function cmuMain() {
             return true;
         }
 
+        if (compactModelNeedsNativeUi(nativeButton)) {
+            compactModelClearNativeLiveMarks();
+            document.querySelectorAll('[data-cmu-compact-model-native]').forEach(el => el.removeAttribute('data-cmu-compact-model-native'));
+            document.documentElement.classList.remove('cmu-compact-model-probing', 'cmu-compact-model-selecting');
+            COMPACT_MODEL.toggleLockUntil = now + 250;
+            return compactModelClickOnce(nativeButton);
+        }
+        const openingRoom = getChatId();
         const openingGeometry = compactModelMeasurePickerGeometry(anchor);
         COMPACT_MODEL.opening = true;
         const focusGuard = compactModelHoldFocus(anchor, nativeButton);
@@ -15453,11 +15890,11 @@ function cmuMain() {
             COMPACT_MODEL.anchor = anchor;
             COMPACT_MODEL.anchorGeometry = openingGeometry;
             COMPACT_MODEL.nativeButton = nativeButton;
-            let snapshot = compactModelFastSnapshot();
-            if (!snapshot) {
+            let snapshot = compactModelFastSnapshot(nativeButton);
+            if (!snapshot || !compactModelNativeIsOpen(nativeButton, snapshot.shell)) {
                 document.documentElement.classList.add('cmu-compact-model-probing');
                 releaseOpenButtonFreeze = compactModelFreezeNativeButton(nativeButton);
-                if (!compactModelClickOnce(nativeButton)) {
+                if (nativeButton.getAttribute('aria-expanded') !== 'true' && !compactModelClickOnce(nativeButton)) {
                     document.documentElement.classList.remove('cmu-compact-model-probing');
                     COMPACT_MODEL.nativeButton = COMPACT_MODEL.anchor = null;
                     showToast('모델 메뉴를 열지 못함');
@@ -15466,7 +15903,7 @@ function cmuMain() {
                 scheduleNmfScan([40, 100, 220, 450, 900]);
                 snapshot = await waitForCompactModelSnapshot(seq, nativeButton);
             }
-            if (seq !== COMPACT_MODEL.seq)
+            if (seq !== COMPACT_MODEL.seq || openingRoom !== getChatId())
                 return true;
             if (!snapshot?.entries?.length) {
                 /* 4.3.0.17: 원본 모델 메뉴는 폴백으로 노출하지 않는다.
@@ -15493,7 +15930,7 @@ function cmuMain() {
                 compactModelClearNativeLiveMarks(snapshot.shell);
                 snapshot.shell?.setAttribute?.('data-cmu-compact-model-native', '1');
                 const parked = await compactModelDismissNativeMenu(nativeButton, snapshot.shell);
-                if (seq !== COMPACT_MODEL.seq) return true;
+                if (seq !== COMPACT_MODEL.seq || openingRoom !== getChatId()) return true;
                 if (!parked) {
                     showToast('모델 메뉴가 남아 있어요 · 목록 밖을 눌러 닫아 주세요');
                     return false;
@@ -15505,6 +15942,7 @@ function cmuMain() {
                 }
                 const currentAnchor = document.getElementById('chud-model-btn') || anchor;
                 if (!currentAnchor.isConnected) return false;
+                nativeButton = compactModelLiveButton(nativeButton);
                 renderCompactModelPicker(snapshot, currentAnchor, nativeButton);
                 COMPACT_MODEL.nativeShell = snapshot.shell;
                 COMPACT_MODEL.nativeButton = nativeButton;
@@ -15959,53 +16397,56 @@ function cmuMain() {
     }
     function cmuSyncModelMoved() {
         const mb = DASH_SIDE.btns?.modelButton;
-        const moved = shouldRun() && settings.enabled !== false && settings.dashboardSidebar && isChatRoomPath() &&
+        const active = shouldRun() && settings.enabled !== false && settings.dashboardSidebar && isChatRoomPath() &&
             !!(DASH_SIDE.el?.isConnected && mb?.isConnected && mb.style.display !== 'none');
-        if (!moved) {
-            cmuResetSideModelTracking();
-            return;
-        }
+        if (!active) { cmuResetSideModelTracking(); return; }
         const native = getNativeModelMenuButton();
-        if (cmuModelMovedNative !== native) {
+        const moved = settings.hideInputModelButton !== false && !CMU_ADDONS.modelHider?.isPicking();
+        if (cmuModelMovedNative !== native || !moved) {
             cmuModelMovedNative?.removeAttribute('data-cmu-model-relocated');
-            cmuModelMovedNative = native;
+            cmuModelMovedNative = moved ? native : null;
         }
-        if (native && native.getAttribute('data-cmu-model-relocated') !== '1')
-            native.setAttribute('data-cmu-model-relocated', '1');
-        if (!document.documentElement.hasAttribute('data-cmu-model-moved'))
-            document.documentElement.setAttribute('data-cmu-model-moved', '');
+        if (moved && native && native.getAttribute('data-cmu-model-relocated') !== '1') native.setAttribute('data-cmu-model-relocated', '1');
+        document.documentElement.toggleAttribute('data-cmu-model-moved', moved);
         cmuSyncSideModelIcon(native);
     }
     function cmuSyncSideModelIcon(native = cmuSideModelNative) {
         const mb = DASH_SIDE.btns?.modelButton;
         if (!mb?.isConnected) return;
-        const img = native?.querySelector('img[src*="model-icon"], img[srcset*="model-icon"]');
-        // currentSrc can still point at the previous image when a src mutation fires.
-        const src = img ? ((img.getAttribute('srcset') || '').split(',')[0].trim().split(/\s+/)[0] ||
-            img.getAttribute('src') || img.currentSrc || '') : '';
-        const name = native ? String(native.textContent || native.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim() : '';
-        const sig = src + '|' + name;
+        if (!native?.isConnected) native = getNativeModelMenuButton();
+        const known = compactModelKnownMatch(native);
+        const gift = native && compactModelFreeChatSignal(native);
+        const nativeUi = compactModelNeedsNativeUi(native);
+        const nativeSvg = nativeUi && native?.querySelector('svg');
+        const img = native?.querySelector(known || nativeUi ? 'img' : 'img[src*="model-icon"], img[srcset*="model-icon"]');
+        const src = (nativeUi ? '' : known?.icon) || (img ? ((img.getAttribute('srcset') || '').split(',')[0].trim().split(/\s+/)[0] ||
+            img.getAttribute('src') || img.currentSrc || '') : '');
+        const name = gift ? '무료 채팅권' : nativeUi ? '모델·무료 채팅권' : known?.label || (native ? String(native.textContent || native.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim() : '');
+        const room = getChatId();
+        const sig = room + '|' + src + '|' + name + '|' + (nativeSvg?.outerHTML || '');
         if (mb.dataset.modelSig !== sig) {
             mb.dataset.modelSig = sig;
             if (src) {
                 const im = document.createElement('img');
-                im.className = 'chud-btn-icon chud-model-img';
-                im.alt = '';
-                im.src = src;
+                im.className = 'chud-btn-icon chud-model-img'; im.alt = ''; im.src = src;
                 mb.replaceChildren(im);
+            } else if (nativeSvg) {
+                const icon = nativeSvg.cloneNode(true);
+                icon.classList.add('chud-btn-icon'); icon.setAttribute('aria-hidden', 'true');
+                mb.replaceChildren(icon);
+            } else if (gift) {
+                const icon = document.createElement('span'); icon.className = 'chud-btn-icon'; icon.textContent = '🎁';
+                mb.replaceChildren(icon);
             } else mb.innerHTML = SIDE_ICON.model;
-            const title = name ? name + ' · 모델 변경' : '모델 변경';
-            mb.title = title;
-            mb.setAttribute('aria-label', title);
+            const title = nativeUi ? name + ' 열기' : name ? name + ' · 모델 변경' : '모델 변경';
+            mb.title = title; mb.setAttribute('aria-label', title);
         }
         if (cmuSideModelNative !== native) {
-            cmuSideModelMo?.disconnect();
-            cmuSideModelMo = null;
-            cmuSideModelNative = native;
+            cmuSideModelMo?.disconnect(); cmuSideModelMo = null; cmuSideModelNative = native;
             if (native) {
-                cmuSideModelMo = new MutationObserver(() => cmuSyncSideModelIcon(native));
+                cmuSideModelMo = new MutationObserver(() => { cmuSyncSideModelIcon(native); CMU_ADDONS.modelHider?.schedule(); });
                 cmuSideModelMo.observe(native, { subtree: true, childList: true, characterData: true,
-                    attributes: true, attributeFilter: ['src', 'srcset', 'aria-label'] });
+                    attributes: true, attributeFilter: ['src', 'srcset', 'aria-label', 'alt', 'title', 'data-icon'] });
             }
         }
     }
@@ -21350,7 +21791,7 @@ function cmuMain() {
         if (inlineDirty)
             ensureInlineBlocks(input || findChatInput());
         // A native trigger can be replaced within the composer's 900ms heal cooldown.
-        if (composerDirty || headerDirty) cmuSyncModelMoved();
+        if (composerDirty || headerDirty) { CMU_ADDONS.modelHider?.sync(); cmuSyncModelMoved(); }
         if (headerDirty) {
             markGlobalHeader();
             ensureLoreEntryButtonInRoomTopBar();
@@ -21507,8 +21948,8 @@ function cmuMain() {
         if (!bootObserver || !shouldRun() || !document.body)
             return;
         const attributeFilter = ['aria-checked', 'data-state', 'aria-hidden', 'hidden', 'placeholder', 'aria-label'];
-        if (settings.pauseAnimatedThumbs || settings.nativeModelFilter)
-            attributeFilter.push('src', 'srcset');
+        if (settings.pauseAnimatedThumbs || settings.nativeModelFilter || settings.hideInputModelButton || settings.dashboardSidebar)
+            attributeFilter.push('src', 'srcset', 'alt', 'title', 'data-testid', 'data-icon', 'data-tooltip', 'type', 'role', 'aria-haspopup', 'href', 'xlink:href', 'd');
         const key = attributeFilter.join(',') + ':' + String(cmuMessageTextWorkWanted());
         if (CMU_DOM_WATCH.attributeKey === key)
             return;
@@ -21539,6 +21980,7 @@ function cmuMain() {
         if (!document.body)
             return;
         bootObserver = new MutationObserver(mutations => {
+            CMU_ADDONS.modelHider?.handleMutations(mutations);
             if (document.hidden) {
                 CMU_DOM_ROUTER.fullResume = true;
                 CMU_DOM_WATCH.ownedRecords = new WeakMap();
@@ -22525,10 +22967,13 @@ function cmuMain() {
         if (routeKey === location.href)
             return;
         routeKey = location.href;
+        closeCompactModelPicker({ closeNative: false });
         CMU_SHORTCUT_EDITOR.sync();
         CMU_KEYBOARD_COMPOSER.reset();
         CMU_KEYBOARD_COMPOSER.schedule();
         CMU_TEXT_TOOLS.reset(); CMU_TEXT_TOOLS.sync();
+        CMU_ADDONS.modelHider?.cancel();
+        CMU_ADDONS.modelHider?.sync();
         CMU_ADDONS.sorter?.close?.();
         CMU_ADDONS.pinset?.refresh();
         cmuSyncAddons();
@@ -31410,6 +31855,8 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
   return { start, stop, open, close: () => { hideToolbar(); closePop(); }, refresh, captureRequest, observeMessage, isRunning: () => running, destroy: stop, diag: diagnostics.diag };
 }
 
+    CMU_ADDONS.modelHider = createCmuInputModelHider();
+    CMU_RESOURCES.cleanups.push(() => CMU_ADDONS.modelHider?.destroy());
     CMU_ADDONS.sorter = CMU_EARLY_SORTER;
     CMU_EARLY_BRIDGE.isEnabled = () => shouldRun() && !!settings.shortcutSorterEnabled;
     CMU_EARLY_BRIDGE.notify = showToast;
@@ -31517,7 +31964,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
 }
 
     function startCmuOnce() {
-        delete page.__CMU_4633_BOOT_PENDING__;
+        delete page.__CMU_4634_BOOT_PENDING__;
         try { cmuMain(); }
         catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
     }
