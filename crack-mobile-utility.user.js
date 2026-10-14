@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.3.5
-// @description  4.6.3.5: 무료 대화권 선물 상태도 소형 모델 선택창 사용. 입력창 바깥 형제 도구줄의 원본 버튼 탐색·숨김·재연결 수정, 선물 상태 선택 확인 보완. 기존 울트라챗 수정·숨기기 설정·합본 기능 보존.
+// @version      4.6.3.6
+// @description  4.6.3.6: 울트라챗 선택 시 모델 항목 갱신 안내 수정. 모델 식별값 통일·갱신된 행 자동 재연결로 한 번 탭 선택. 기존 선물 버튼·모델 숨기기 설정·답변 아이콘·합본 기능 보존.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -45,8 +45,8 @@
     'use strict';
     if (window.top !== window.self) return;
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.3.5' || page.__CMU_4635_BOOT_PENDING__) return;
-    page.__CMU_4635_BOOT_PENDING__ = true;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.3.6' || page.__CMU_4636_BOOT_PENDING__) return;
+    page.__CMU_4636_BOOT_PENDING__ = true;
     function earlySorterEnabled() {
         for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
             try {
@@ -1070,7 +1070,7 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
 
 function cmuMain() {
     'use strict';
-    const VERSION = '4.6.3.5';
+    const VERSION = '4.6.3.6';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -15303,15 +15303,50 @@ function cmuMain() {
         CMU_RESOURCES.cleanups.push(release);
         return release;
     }
-    async function compactModelHiddenSnapshotForSelection(nativeButton) {
+    function compactModelEntryForSelection(snapshot, wanted) {
+        if (!snapshot?.entries?.length || !wanted) return null;
+        // Keep the user's choice across catalogue/DOM refreshes. A filename-
+        // derived token may change; the exact displayed name/version must not.
+        const exact = snapshot.entries.filter(candidate => candidate.token === wanted.token);
+        const label = compactModelNormalizeLabel(wanted.label);
+        const matches = exact.length ? exact : label.length >= 2
+            ? snapshot.entries.filter(candidate => compactModelNormalizeLabel(candidate.label) === label) : [];
+        if (matches.length !== 1) return null;
+        const entry = matches[0];
+        return !entry.disabled && compactModelNativeNodeActive(entry.item, snapshot.shell) &&
+            !entry.item.matches(':disabled, [aria-disabled="true"]') ? entry : null;
+    }
+    async function compactModelHiddenSnapshotForSelection(nativeButton, wanted = null) {
         nativeButton = compactModelLiveButton(nativeButton);
         if (!nativeButton) return null;
         document.documentElement.classList.add('cmu-compact-model-selecting');
         const previous = compactModelFastSnapshot(nativeButton);
         if (!compactModelNativeIsOpen(nativeButton, previous?.shell) && !compactModelClickOnce(nativeButton)) return null;
-        const snapshot = await waitForCompactModelSnapshot(COMPACT_MODEL.seq, nativeButton);
+        const snapshot = await waitForCompactModelSnapshot(COMPACT_MODEL.seq, nativeButton, wanted);
         if (snapshot?.shell instanceof HTMLElement) snapshot.shell.setAttribute('data-cmu-compact-model-native', '1');
         return snapshot;
+    }
+    async function compactModelSelectNativeEntry(nativeButton, wanted, seq, room) {
+        let snapshot = await compactModelHiddenSnapshotForSelection(nativeButton, wanted);
+        for (let attempt = 0; snapshot && attempt < 2; attempt += 1) {
+            if (seq !== COMPACT_MODEL.seq || room !== getChatId()) return null;
+            nativeButton = compactModelLiveButton(nativeButton);
+            // Re-read immediately before dispatch: React may have replaced the
+            // row between the awaited snapshot and this continuation.
+            const current = compactModelFastSnapshot(nativeButton);
+            const entry = compactModelEntryForSelection(current, wanted);
+            if (entry && compactModelNativeIsOpen(nativeButton, current.shell) &&
+                await compactModelActivateNativeItem(entry.item, entry.token)) {
+                return { snapshot: current, entry };
+            }
+            if (attempt === 0) {
+                // Retry lookup only, never a click that was already dispatched.
+                // The user's single tap remains pending while this row refreshes.
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                snapshot = await waitForCompactModelSnapshot(seq, nativeButton, wanted);
+            }
+        }
+        return null;
     }
     function compactModelParkNativeMenu(nativeButton, shell) {
         if (!(nativeButton instanceof HTMLElement))
@@ -15436,30 +15471,27 @@ function cmuMain() {
                 // composer controls keep their native DOM and layout untouched.
                 const releaseNativeButtonFreeze = compactModelFreezeNativeButton(nativeButton);
                 try {
-                    const freshSnapshot = await compactModelHiddenSnapshotForSelection(nativeButton);
-                    const nativeShell = freshSnapshot?.shell || snapshot.shell;
+                    const selection = await compactModelSelectNativeEntry(nativeButton, entry, selectionSeq, pickerRoom);
+                    const nativeShell = selection?.snapshot?.shell || compactModelFastSnapshot(compactModelLiveButton(nativeButton))?.shell || snapshot.shell;
                     if (pickerRoom !== getChatId()) return;
                     nativeButton = compactModelLiveButton(nativeButton);
                     if (selectionSeq !== COMPACT_MODEL.seq) {
                         await compactModelDismissNativeMenu(nativeButton, nativeShell);
                         return;
                     }
-                    const target = freshSnapshot?.entries?.find(candidate => candidate.token === entry.token && !candidate.disabled)?.item || null;
-
-                    const changed = !!target && await compactModelActivateNativeItem(target, entry.token);
                     closeCompactModelPicker({ closeNative: false, preserveNativeHidden: true });
-                    if (!changed) {
+                    if (!selection) {
                         await compactModelDismissNativeMenu(nativeButton, nativeShell);
-                        showToast('모델 항목이 갱신됨 · 다시 눌러 주세요');
+                        if (pickerRoom === getChatId()) showToast('선택한 모델을 현재 목록에서 찾지 못했어요 · 모델 목록을 확인해 주세요');
                         return;
                     }
-                    const confirmed = await compactModelWaitForSelection(nativeButton, entry, pickerRoom);
+                    const confirmed = await compactModelWaitForSelection(nativeButton, selection.entry, pickerRoom);
                     if (pickerRoom !== getChatId()) return;
                     nativeButton = compactModelLiveButton(nativeButton);
                     await compactModelDismissNativeMenu(nativeButton, nativeShell);
                     if (!confirmed) {
                         const actualToken = compactModelButtonToken(nativeButton);
-                        showToast(actualToken && actualToken !== entry.token
+                        showToast(actualToken && actualToken !== selection.entry.token
                             ? '선택 모델 불일치 · 다시 눌러 주세요'
                             : '모델 선택 확인이 늦어짐 · 입력창 모델을 확인해 주세요');
                     }
@@ -15726,13 +15758,23 @@ function cmuMain() {
             const labels = [meta[token]?.label, nmfSeenLabelOf(seen, token), registry?.[token]?.label].filter(Boolean);
             const label = labels[0] || cmiAutoLabel(token) || token;
             const names = Array.from(new Set([label, ...labels].map(compactModelNormalizeLabel))).filter(name => name.length >= 2);
-            entries.push({ token, label, names, icon: cmuCleanModelIconUrl(meta[token]?.icon) });
+            entries.push({ token, label, names, icon: cmuCleanModelIconUrl(meta[token]?.icon), catalogued: !!meta[token]?.id });
         }
         return entries;
     }
     function compactModelKnownMatch(el, known = compactModelKnownEntries()) {
         if (!(el instanceof Element))
             return null;
+        const unique = matches => {
+            if (matches.length === 1) return matches[0];
+            // Older scans may have saved the same model under its icon filename.
+            // Prefer the API identity only when every match names that exact
+            // model/version; a parent containing several models stays ambiguous.
+            const catalogued = matches.filter(entry => entry.catalogued);
+            return catalogued.length === 1 && matches.every(entry =>
+                compactModelNormalizeLabel(entry.label) === compactModelNormalizeLabel(catalogued[0].label))
+                ? catalogued[0] : null;
+        };
         const texts = [el.textContent, el.getAttribute('aria-label'), el.getAttribute('title'),
             ...Array.from(el.querySelectorAll('img[alt]'), image => image.getAttribute('alt'))]
             .filter(Boolean).map(compactModelNormalizeLabel);
@@ -15744,13 +15786,13 @@ function cmuMain() {
             return !/\d$/.test(name) || !/[\d.]/.test(text.charAt(index + name.length));
         })));
         if (matches.length)
-            return matches.length === 1 ? matches[0] : null;
+            return unique(matches);
         const images = Array.from(el.querySelectorAll('img, source, [style*="url("]'));
         if (el.matches('img, source, [style*="url("]')) images.unshift(el);
         const imageText = nmfDecodeLoose(images.map(image =>
             `${image.currentSrc || ''} ${nmfElementSearchText(image)}`).join(' '));
         const iconMatches = known.filter(entry => entry.icon && imageText.includes(nmfDecodeLoose(entry.icon).split(/[?#]/)[0]));
-        return iconMatches.length === 1 ? iconMatches[0] : null;
+        return unique(iconMatches);
     }
     function compactModelSnapshotFromKnownLabels(scope = null, known = compactModelKnownEntries()) {
         if (!known.length)
@@ -15834,13 +15876,14 @@ function cmuMain() {
             a.item.compareDocumentPosition(b.item) & Node.DOCUMENT_POSITION_PRECEDING ? 1 : -1);
         return { root: icons.root, shell: icons.shell, entries };
     }
-    async function waitForCompactModelSnapshot(seq, nativeButton = null) {
+    async function waitForCompactModelSnapshot(seq, nativeButton = null, wanted = null) {
         /*
          * 4.3.0.17: 고정 sleep 누적 대신 DOM Mutation + 짧은 rAF 폴링으로
          * 모델 행이 생기는 바로 그 프레임에 잡는다. 보통 수십 ms 안에 완료된다.
          * 원본 메뉴를 사용자에게 폴백으로 노출하지 않기 때문에 오래 기다리지 않는다.
          */
         const room = getChatId();
+        const ready = snapshot => wanted ? !!compactModelEntryForSelection(snapshot, wanted) : !!snapshot?.entries?.length;
         const readSnapshot = () => {
             if (seq !== COMPACT_MODEL.seq || room !== getChatId()) return null;
             const live = nativeButton ? compactModelLiveButton(nativeButton) : null;
@@ -15848,7 +15891,7 @@ function cmuMain() {
             return !nativeButton || compactModelNativeIsOpen(live, snapshot?.shell) ? snapshot : null;
         };
         const immediate = readSnapshot();
-        if (immediate?.entries?.length)
+        if (ready(immediate))
             return immediate;
         return await new Promise(resolve => {
             let finished = false;
@@ -15875,7 +15918,7 @@ function cmuMain() {
                     return;
                 }
                 const snapshot = readSnapshot();
-                if (snapshot?.entries?.length) {
+                if (ready(snapshot)) {
                     finish(snapshot);
                     return;
                 }
@@ -15890,8 +15933,10 @@ function cmuMain() {
                 observer.observe(document.body || document.documentElement, {
                     childList: true,
                     subtree: true,
+                    characterData: true,
                     attributes: true,
-                    attributeFilter: ['src', 'srcset', 'style', 'data-state', 'aria-expanded', 'aria-selected', 'aria-checked']
+                    attributeFilter: ['src', 'srcset', 'style', 'class', 'hidden', 'disabled', 'aria-disabled',
+                        'aria-label', 'title', 'aria-controls', 'data-state', 'aria-expanded', 'aria-selected', 'aria-checked']
                 });
             }
             catch (_) { }
@@ -20038,16 +20083,28 @@ function cmuMain() {
             return;
         const prevSeen = nmfLoadSeen();
         const nextSeen = {};
+        const known = compactModelKnownEntries();
         items.forEach(item => {
+            const match = compactModelKnownMatch(item, known);
+            if (match) {
+                // Use the same catalogue identity as the compact picker. Treating
+                // a new icon filename as a second token invalidated Ultra's row
+                // between displaying the picker and the user's first selection.
+                nextSeen[match.token] = match.label;
+                const iconUrl = match.icon || compactModelImageSource(item, nmfIconFlatToken(match.token));
+                if (iconUrl) cmuRememberModelMetaFromUi(match.label, iconUrl, match.token);
+                return;
+            }
             nmfFlatTokensFromElement(item).forEach(flat => {
-                const token = nmfTokenFromFlatIconToken(flat);
+                const iconEl = nmfNativeModelIconElements(item).find(el => nmfFlatTokensFromElement(el).includes(flat));
+                const iconMatch = compactModelKnownMatch(iconEl, known);
+                const token = iconMatch?.token || nmfTokenFromFlatIconToken(flat);
                 if (!token)
                     return;
-                const label = nmfNativeModelLabelFromItem(item, flat, token);
+                const label = iconMatch?.label || nmfNativeModelLabelFromItem(item, flat, token);
                 const finalLabel = label || cmiAutoLabel(token) || token;
                 nextSeen[token] = finalLabel;
-                const iconEl = nmfNativeModelIconElements(item).find(el => nmfFlatTokensFromElement(el).includes(flat)) || nmfNativeModelIconElements(item)[0];
-                const iconUrl = iconEl?.currentSrc || iconEl?.getAttribute?.('src') || iconEl?.getAttribute?.('srcset')?.split?.(',')?.[0]?.trim?.()?.split?.(/\s+/)?.[0] || '';
+                const iconUrl = iconMatch?.icon || iconEl?.currentSrc || iconEl?.getAttribute?.('src') || iconEl?.getAttribute?.('srcset')?.split?.(',')?.[0]?.trim?.()?.split?.(/\s+/)?.[0] || '';
                 if (iconUrl)
                     cmuRememberModelMetaFromUi(finalLabel, iconUrl, token);
             });
@@ -32023,7 +32080,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
 }
 
     function startCmuOnce() {
-        delete page.__CMU_4635_BOOT_PENDING__;
+        delete page.__CMU_4636_BOOT_PENDING__;
         try { cmuMain(); }
         catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
     }

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.3.5
-// @description  4.6.3.5: 무료 대화권 선물 상태도 소형 모델 선택창 사용. 입력창 바깥 형제 도구줄의 원본 버튼 탐색·숨김·재연결 수정, 선물 상태 선택 확인 보완. 기존 울트라챗 수정·숨기기 설정·합본 기능 보존.
+// @version      4.6.3.6
+// @description  4.6.3.6: 울트라챗 선택 시 모델 항목 갱신 안내 수정. 모델 식별값 통일·갱신된 행 자동 재연결로 한 번 탭 선택. 기존 선물 버튼·모델 숨기기 설정·답변 아이콘·합본 기능 보존.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
