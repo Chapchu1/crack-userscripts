@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.67
+// @version      0.5.68
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,13 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.68 · 새 채팅방 주입 자동 시작 (기본 ON)
+ * USER 대화가 없는 새 방에서만 기존 주입 유지 세션을 자동으로 시작합니다.
+ * 자료·이전 AI 답변이 없으면 대기하고 준비되는 대로 기존 검증·주입 경로로 전달합니다.
+ * 수동 해제와 기존 방 OFF를 유지하며, 설정 > 새 채팅방에서 자동 시작을 끌 수 있습니다.
+ * 첫 전송·방 전환·복원·중복 실행을 보호하고 기존 순찰과 저장소를 재사용합니다.
+ */
 
 /* 0.5.67 · 승인된 관계 이력 압축 결과의 실제 반영 경로 복구
  * stageBundle에서 applyObserve로 독립 검토를 통과한 기록을 전달합니다.
@@ -647,7 +654,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.67'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.68'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -1243,7 +1250,7 @@ function createWishLoreStorage(options) {
   // Every bundled reader of these namespaces uses this adapter. Site storage
   // and the legacy cross-tab lease remain native; never migrate unknown keys.
   const group = key => /^(?:lore-|speech-refiner-)/.test(key) ? 'lore' :
-    /^(?:RPCM_|WISH_RP_|Wish-RP-Manager-Core-|wish-rp-core-|wish-usage-ledger-v1:)/.test(key) || ['wish-suite-show-monitor','wish-usage-rates-v1'].includes(key) ? 'wish' :
+    /^(?:RPCM_|WISH_RP_|Wish-RP-Manager-Core-|wish-rp-core-|wish-usage-ledger-v1:)/.test(key) || ['wish-suite-show-monitor','wish-suite-auto-start-new-chats','wish-usage-rates-v1'].includes(key) ? 'wish' :
     /^crack_ext_/.test(key) && !key.startsWith('crack_ext_auto_memory_lock_v1:') ? 'summary' : null;
   const owned = key => group(key) !== null;
   const listeners = new Set();
@@ -49485,7 +49492,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.67-suite';
+  const SCRIPT_VERSION = '0.5.68-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -61056,6 +61063,36 @@ function openDb() {
 
 
   // Visit-only rooms stay in memory until a send or an explicit Wish save.
+  // Only rooms first encountered without USER history can opt into automatic start.
+  // The durable per-room decision keeps manual OFF, imports and existing rooms intact.
+  const WishNewChatInjection=(()=>{
+    const key='wish-suite-auto-start-new-chats',running=new WeakMap(),retryAt=new WeakMap();
+    const enabled=()=>{try{return localStorage.getItem(key)!=='0';}catch(_){return true;}};
+    const wanted=room=>!!room&&room.newChatAutoInjection==='waiting'&&!room.pending&&enabled();
+    function cancel(room){if(room&&['waiting','started'].includes(room.newChatAutoInjection))room.newChatAutoInjection='stopped';}
+    async function setEnabled(value){
+      localStorage.setItem(key,value?'1':'0');
+      const room=state.currentRoom;
+      if(!value&&room?.newChatAutoInjection==='waiting'){room.newChatAutoInjection='off';await saveRoom(room);}
+      WUI?.paint();
+    }
+    function start(room,control=null){
+      if(running.has(room))return running.get(room);
+      if(!wanted(room)||(!control&&Date.now()<(retryAt.get(room)||0)))return Promise.resolve();
+      const route=state.routeEpoch,restore=localRestoreEpoch;
+      const assertActive=()=>{
+        control?.assertActive?.();
+        if(room!==state.currentRoom||room.chatId!==state.currentChatId||getRoomScopeKey(getChatIdFromPath(),location.href)!==room.chatId||route!==state.routeEpoch||restore!==localRestoreEpoch||
+          !['waiting','started'].includes(room.newChatAutoInjection)||(room.newChatAutoInjection==='waiting'&&!enabled()))
+          throw Object.assign(Error('새 방 자동 주입 준비가 취소되었습니다.'),{code:'WISH_AUTO_START_CANCELLED'});
+      };
+      const task=withCarrierOperation(room,()=>{assertActive();return armInjectionUnlocked(room,{automatic:true,assertActive});},{signal:control?.signal})
+        .catch(error=>{if(error?.code==='WISH_AUTO_START_CANCELLED')return;retryAt.set(room,Date.now()+30000);throw error;})
+        .finally(()=>{if(running.get(room)===task)running.delete(room);});
+      running.set(room,task);return task;
+    }
+    return {enabled,wanted,start,cancel,setEnabled};
+  })();
   const unstartedRooms=new WeakSet();
   async function getRoom(chatId, apiChatId = null) {
     const room = await new Promise((resolve, reject) => {
@@ -61085,6 +61122,7 @@ function openDb() {
       maxChars: APP.defaultMaxChars,
       slots: cloneSlots(),
       pending: null,
+      newChatAutoInjection: WishNewChatInjection.enabled() ? 'waiting' : 'off',
       sessionSetup: null,
       autoCharacterDetection: false,
       autoCharacterIncludeUnchecked: false,
@@ -68445,10 +68483,11 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
     p.nextCadenceTurn=pendingCadenceTurn(p,frame,true);
     const actuallyRemaining=activePendingItems(p);
     let active=filterItemsByInjectionCadence(room,safeMemoryItems(room,activePendingItems(projected)),cadenceTurn);
+    if(p.awaitingItems&&active.length)p.awaitingItems=false;
     if(!newId || !active.length){
       carrierWriteAttempted=true;await restorePendingCarriers(room,p);
       p.messageId='';p.verified=false;p.verifiedAt=0;p.observedHead='';p.awaitingCarrier=!newId;p.contextBlock='';delete p.previousCarrierCleanup;delete p.reroll;
-      const completed=!!newId&&!actuallyRemaining.length&&reason!=='before-send'&&reason!=='before-reroll';
+      const completed=!!newId&&!actuallyRemaining.length&&!p.awaitingItems&&reason!=='before-send'&&reason!=='before-reroll';
       if(completed)room.pending=null;
       await saveRoom(room);clearPendingBackup(room.chatId);
       scheduleMessageInjectionMagnifier(0);
@@ -68547,24 +68586,49 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
     const task=withCarrierOperation(room,()=>armInjectionUnlocked(room));void task.then(()=>RecallWarm.schedule(room),()=>{});return task;
   }
 
-  async function armInjectionUnlocked(room) {
-    if(room.pending)throw new Error('이미 주입 유지가 활성화되어 있습니다.');
-    if(generationPending(apiChatIdOf(room)))throw new Error('AI 생성이 끝난 뒤 주입을 시작해 주세요.');
-    const all=await fetchAllRoomMessages(apiChatIdOf(room)),frame=stableFrame([...all].reverse());
-    await validateMemoryBranch(room,frame);
+  async function armInjectionUnlocked(room, control = null) {
+    const automatic=control?.automatic===true;
+    control?.assertActive?.();
+    if(room.pending){if(automatic)return;throw new Error('이미 주입 유지가 활성화되어 있습니다.');}
+    if(generationPending(apiChatIdOf(room))||automatic&&ExternalReplay.pending(apiChatIdOf(room))){
+      if(automatic)return {deferred:true};
+      throw new Error('AI 생성이 끝난 뒤 주입을 시작해 주세요.');
+    }
+    // A bounded recent read is enough to reject an old room; never load its whole history just to opt in.
+    const frame=automatic?stableFrame(await fetchRecentMessages(apiChatIdOf(room),50)):
+      stableFrame([...(await fetchAllRoomMessages(apiChatIdOf(room)))].reverse());
+    control?.assertActive?.();
+    if(automatic){
+      if(frame.messages.some(m=>messageRoleOf(m)==='user')||frame.messages.filter(m=>messageRoleOf(m)==='assistant').length>1){
+        room.newChatAutoInjection='existing';
+        if(!unstartedRooms.has(room))await saveRoom(room);
+        return;
+      }
+      if(generationPending(apiChatIdOf(room))||isAssistantGenerationPending(frame.latest))return {deferred:true};
+    }
+    await validateMemoryBranch(room,frame);control?.assertActive?.();
     const text=[...frame.stable].reverse().map(m=>stripAutomationNoise(messageTextOf(m))).join('\n');
     room.autoRecallContextText=recentSceneText(frame);state.nameSceneByChatId.delete(String(room.chatId));
     const items=safeMemoryItems(room,snapshotSelectedItems(room,text));
-    if(!items.length||!filterItemsByInjectionCadence(room,items,0).length)throw new Error('현재 주입 설정에서 켜진 항목이 없습니다. 주입 설정 또는 선택 항목을 확인해 주세요.');
-    room.pending={messageId:'',originalText:'',contextBlock:'',items,policy:'stable-user-v1',baselineAssistantId:String(messageIdOf(frame.latest)||''),
-      sessionStartedAt:Date.now(),armedAt:Date.now(),turnStartUserId:frame.latestUserId,cadenceStartUserId:frame.latestUserId,cadenceTurn:0,nextCadenceTurn:0,verified:false,carrierRole:'assistant',cognitionOverrides:{include:[],exclude:[],changedAt:0,usedAt:0}};
+    const hasItems=items.length>0&&filterItemsByInjectionCadence(room,items,0).length>0;
+    if(!automatic&&!hasItems)throw new Error('현재 주입 설정에서 켜진 항목이 없습니다. 주입 설정 또는 선택 항목을 확인해 주세요.');
+    const decision=room.newChatAutoInjection;
+    const pending={messageId:'',originalText:'',contextBlock:'',items,policy:'stable-user-v1',baselineAssistantId:String(messageIdOf(frame.latest)||''),
+      sessionStartedAt:Date.now(),armedAt:Date.now(),turnStartUserId:frame.latestUserId,cadenceStartUserId:frame.latestUserId,cadenceTurn:0,nextCadenceTurn:0,verified:false,carrierRole:'assistant',cognitionOverrides:{include:[],exclude:[],changedAt:0,usedAt:0},
+      ...(automatic?{awaitingItems:!hasItems,awaitingCarrier:!frame.carrier}:{})};
+    room.pending=pending;
+    if(decision==='waiting')room.newChatAutoInjection='started';
     for(const item of items){item.turnStartUserId=frame.latestUserId;item.usedTurns=0;}
-    await saveRoom(room);
-    await reconcileStableCarrier(room,'start',frame);
-    scheduleRecovery(APP.activePollMs);
+    try{await saveRoom(room,control?.assertActive);}
+    catch(error){if(room.pending===pending)room.pending=null;if(room.newChatAutoInjection==='started')room.newChatAutoInjection=decision;throw error;}
+    // A new room has no stable older AI yet. Arm now; the existing send/recovery path
+    // will attach real context as soon as both material and a carrier are available.
+    if(!automatic)await reconcileStableCarrier(room,'start',frame);
+    scheduleRecovery(automatic?APP.idlePollMs:APP.activePollMs);
   }
 
   function restorePending(room, reason = 'manual') {
+    if(reason==='manual')WishNewChatInjection.cancel(room);
     const execute=()=>withCarrierOperation(room,async()=>{
       try{return await restorePendingUnlocked(room,reason);}
       catch(error){if(room.pending){recordPendingSyncError(room,error);room.pending.lastSyncError=`주입 해제 실패: ${String(error?.message||error)}`;await saveRoom(room).catch(()=>{});renderModalIfOpen();}throw error;}
@@ -68574,7 +68638,7 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
 
   async function restorePendingUnlocked(room, reason = 'manual') {
     const p = room.pending;
-    if (!p) return { restored: false, reason: 'none' };
+    if (!p) {if(reason==='manual'&&room.newChatAutoInjection==='stopped')await saveRoom(room);return { restored: false, reason: 'none' };}
     if(reason==='manual'&&generationPending(apiChatIdOf(room)))throw new Error('AI 응답 완료 후 주입을 해제해 주세요.');
 
     // 네트워크/PATCH 오류 때 finally에서 백업을 지우면 서버에는 숨김 블록이 남고
@@ -68621,8 +68685,10 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
         normalizeRoomSlots(room);refreshCrackAuthCookie();U3.wake(room);
         const rid=String(apiChatIdOf(room)||''),gate=generationGates.get(rid);
         if(gate)await recoverGenerationGate(rid,gate);
-        if(ExternalReplay.pending(rid)||WishDisplayDrain.pending(rid)||unstartedRooms.has(room))return;
+        if(ExternalReplay.pending(rid)||WishDisplayDrain.pending(rid))return;
         if(!gate&&Date.now()<crackAuthState.retryAt)return;
+        await WishNewChatInjection.start(room);
+        if(state.currentRoom!==room||unstartedRooms.has(room))return;
         if(!room.pending)void WUIRefreshTurnCount(room);
         // 자동 캐릭터 감지는 주입 전에도 현재 방에서 동작해 다음 주입 준비를 해둡니다.
         if (!room.pending && (room.autoCharacterDetection || room.autoLogRecallEnabled)) {
@@ -68655,7 +68721,7 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
     if(crackAuthState.retryAt>Date.now())return Math.max(APP.idlePollMs,crackAuthState.retryAt-Date.now());
     if (document.hidden) return APP.backgroundPollMs;
     if (/^WISH_CARRIER_/.test(String(state.currentRoom?.pending?.lastSyncErrorCode||''))) return APP.idlePollMs;
-    if (state.currentRoom?.pending) return state.currentRoom.pending.verified ? APP.idlePollMs : APP.activePollMs;
+    if (state.currentRoom?.pending) return state.currentRoom.pending.verified||state.currentRoom.pending.awaitingItems ? APP.idlePollMs : APP.activePollMs;
     if (state.currentRoom?.autoCharacterDetection || state.currentRoom?.autoLogRecallEnabled) return APP.idleAutoScanMs;
     return APP.idlePollMs;
   }
@@ -69581,6 +69647,7 @@ function v2EvidenceQuote(r){
     if (epoch !== state.routeEpoch || getRoomScopeKey(getChatIdFromPath(), location.href) !== roomKey) return;
     state.currentRoom = room;
     WSUITE.suite?.adopt(room,state.db);
+    void WishNewChatInjection.start(room).catch(e=>console.warn('[Wish] 새 방 자동 주입 시작을 다음 확인 때 재시도합니다.',e));
     void U3.resumeDraft(room,'room-entered').catch(e=>console.warn('[Wish] 임시 정리 이어가기 확인 실패',e));
     // 예약 대기 중 다른 분기로 이동했다가 돌아오면 수동 강제 재시도를 우선 복원합니다.
     // 일반 자동 예약은 기존처럼 이 방의 자동 갱신이 켜진 경우에만 다시 잡습니다.
@@ -70576,7 +70643,7 @@ async reanalyzeLatest(rid){
   function sendNeedsPreparation(room,rid){
     try{
       if(!room||String(apiChatIdOf(room))!==rid)return true;
-      if(room.pending||generationGates.has(rid)||ExternalReplay.pending(rid))return true;
+      if(room.pending||WishNewChatInjection.wanted(room)||generationGates.has(rid)||ExternalReplay.pending(rid))return true;
       const auto=U3.view(room);
       return auto.enabled!==false&&(auto.memoryEnabled!==false||auto.observeEnabled!==false)&&isAiAutomationReady(loadAiSettings());
     }catch(e){console.warn('[Wish] 전송 준비 필요 여부 확인 실패 · 기존 절차 사용',e);return true;}
@@ -70605,7 +70672,8 @@ async reanalyzeLatest(rid){
       // 실제로 전송될 USER 문장을 먼저 넣어야 스마트 인지 선택이 오래된 draft가 아니라 이 메시지를 기준으로 합니다.
       if(typeof text==='string'){contextInput.set(rid,text.slice(-12000));state.recallDraftByApiChatId.set(rid,text.slice(-12000));}
       WSUITE.onLoreTurn?.();
-      await WSUITE.suite?.prepare(currentRoom);assertActive();
+      if(!replay&&parsed.event==='send')await waitForWishOperation(WishNewChatInjection.start(currentRoom,{assertActive,signal:controller.signal}),controller.signal);
+      assertActive();await WSUITE.suite?.prepare(currentRoom);assertActive();
       WishDisplayDrain.cancel(rid);
       let preparedCarrier=null;
       if(!replay&&currentRoom?.pending){
@@ -72862,7 +72930,7 @@ function vSettings(){
     if(S.settingsPage==='history')S.settingsPage='rebuild';
     if(S.settingsPage==='backup')S.settingsPage='transfer';
     if(!pages.some(([k])=>k===S.settingsPage))S.settingsPage='general';
-    let body=S.settingsPage==='general'?`<section class="m3-panel"><b>화면 표시</b>${tog('입력창 상태 버튼 표시','display.monitor',WishDisplay.visible(),'OFF·남은 턴 숫자 버튼')}<p class="m3-muted">모바일 합본의 위시 RP 버튼을 사용하면 숨겨도 됩니다. 변경 즉시 모든 방에 적용됩니다.</p></section>${themeSettingsHtml()}${rpMemoSettingsHtml()}<section class="m3-panel"><b>설정을 찾고 있나요?</b><div class="m3-card-actions">${btn('API 연결','unifiedRoute',{arg:'ai:connection',cls:'mini',icon:'key'})}${btn('자동 정리','unifiedRoute',{arg:'ai:automation',cls:'mini'})}${btn('응답 교정','unifiedRoute',{arg:'ai:refiner',cls:'mini'})}${btn('진행 규칙·프리셋','unifiedRoute',{arg:'memory:extra',cls:'mini',icon:'book'})}${btn('실패·주의 기록','errorLogs',{cls:'mini',icon:'doc'})}${btn('저장 공간 관리','storageManage',{cls:'mini',icon:'database'})}</div></section>`:vTools(S.settingsPage);
+    let body=S.settingsPage==='general'?`<section class="m3-panel"><b>새 채팅방</b>${tog('주입 자동 시작','injection.autoStartNewChats',WishNewChatInjection.enabled(),'새 방에서 자동으로 켜기 · 기본 ON')}<p class="m3-muted">자료와 주입할 이전 AI 답변이 준비되면 자동으로 적용합니다. 기존 방과 직접 주입을 해제한 방은 유지합니다.</p></section><section class="m3-panel"><b>화면 표시</b>${tog('입력창 상태 버튼 표시','display.monitor',WishDisplay.visible(),'OFF·남은 턴 숫자 버튼')}<p class="m3-muted">모바일 합본의 위시 RP 버튼을 사용하면 숨겨도 됩니다. 변경 즉시 모든 방에 적용됩니다.</p></section>${themeSettingsHtml()}${rpMemoSettingsHtml()}<section class="m3-panel"><b>설정을 찾고 있나요?</b><div class="m3-card-actions">${btn('API 연결','unifiedRoute',{arg:'ai:connection',cls:'mini',icon:'key'})}${btn('자동 정리','unifiedRoute',{arg:'ai:automation',cls:'mini'})}${btn('응답 교정','unifiedRoute',{arg:'ai:refiner',cls:'mini'})}${btn('진행 규칙·프리셋','unifiedRoute',{arg:'memory:extra',cls:'mini',icon:'book'})}${btn('실패·주의 기록','errorLogs',{cls:'mini',icon:'doc'})}${btn('저장 공간 관리','storageManage',{cls:'mini',icon:'database'})}</div></section>`:vTools(S.settingsPage);
     if(S.settingsPage==='rebuild')body+=fold('legacy-all-tools','고급 · 기존 상세 편집기 (위시 RP 매니저)',`<p class="m3-muted">통합본에 포함된 위시 RP 매니저의 상세 화면입니다. 기존 인물·물품의 세부 편집, 수동 업데이트·자료 압축 등 전문 도구를 엽니다. 일반 기억·자료·인물 편집은 각각의 메뉴에서 가능합니다.</p>${btn('위시 RP 매니저 상세 편집기 열기','suiteLegacy',{cls:'mini',icon:'edit'})}`);
     return pageHead('설정')+unifiedTabs(pages,S.settingsPage,'settingsSub')+`<div class="m3-sub" data-key="settings-${S.settingsPage}">${body}</div>`;
   }
@@ -74086,7 +74154,7 @@ guide(d) {
   function jobLabel() { if (V.job) return V.job.label || '결과 확인 중'; if (S.jobs.length) return S.jobs[S.jobs.length - 1].label; return ''; }
   function vFoot() {
     const a = V.inj.armed, v = V.inj.verified, busy=!!V.job&&!V.job.quiet;
-    return `<button type="button" class="m3-inject ${a ? 'on' : ''}" data-act="${a ? 'release' : 'arm'}"${busy?' disabled':''}><span class="m3-dot"></span>${a ? '주입 해제' : '주입 시작'}</button>${btn('미리보기', 'preview', { cls: 'mini', icon: 'eye' })}${a ? btn('서버 재검증', 'reverify', { cls: 'quiet mini', icon: 'refresh', feat: 'reverify', dis:busy }) : ''}<span class="m3-state">${a ? (V.inj.authWaiting ? '로그인 확인 대기 · 저장된 기억 유지' : v ? `서버 저장 확인됨 · ${fmt(V.inj.total)}자` : V.inj.error ? '주입 확인 실패 · 재검증 필요' : `서버 저장 확인 중${dots}`) : '주입 꺼짐 · 기억은 그대로'}</span>`;
+    return `<button type="button" class="m3-inject ${a ? 'on' : ''}" data-act="${a ? 'release' : 'arm'}"${busy?' disabled':''}><span class="m3-dot"></span>${a ? '주입 해제' : '주입 시작'}</button>${btn('미리보기', 'preview', { cls: 'mini', icon: 'eye' })}${a ? btn('서버 재검증', 'reverify', { cls: 'quiet mini', icon: 'refresh', feat: 'reverify', dis:busy }) : ''}<span class="m3-state">${a ? (V.inj.authWaiting ? '로그인 확인 대기 · 저장된 기억 유지' : v ? `서버 저장 확인됨 · ${fmt(V.inj.total)}자` : V.inj.error ? '주입 확인 실패 · 재검증 필요' : V.inj.awaitingItems ? '자동 주입 켜짐 · 자료 대기' : V.inj.awaitingCarrier ? '주입 켜짐 · 이전 AI 답변 대기' : `서버 저장 확인 중${dots}`) : '주입 꺼짐 · 기억은 그대로'}</span>`;
   }
   function vOverlay() {
     const nl = navList(), idx = Math.max(0, nl.findIndex(t => t[0] === S.tab)), badge = { check: V.reviews.length, cognition: V.reviews.length };
@@ -74929,7 +74997,7 @@ function WUIInjectionView(room, candidates) {
  const hasOriginal=!!pending?.messageId&&!!original;
  const matchesSaved=hasOriginal&&!!block&&block===pending?.contextBlock;
  const verified=matchesSaved&&pending?.verified===true&&!pending?.lastSyncError&&carrierText.length<=allFitLimit(room)&&coreCarrierPayloadBytes(carrierText,pending?.carrierEncoding||'utf-8')<=APP.safeCarrierPayloadBytes;
- return {legacyExclusions:Number(pending?.quickLegacyRemovedItems?.length||0),bytes:coreCarrierPayloadBytes(carrierText,verified?(pending?.carrierEncoding||'utf-8'):''),encoding:carrierBody(carrierText,verified?(pending?.carrierEncoding||'utf-8'):'').encoding,armed:!!pending,verified,total,max:allFitLimit(room),groups,items:plan,hasCarrier:!!pending?.messageId,hasOriginal,matchesSaved,selection:matchesSaved?pending.selection||null:null,review:room.lastLoreSearch?{method:room.lastLoreSearch.reviewMethod,reason:room.lastLoreSearch.reviewReason,total:room.lastLoreSearch.reviewBaseTotal,limit:room.lastLoreSearch.reviewLimit,at:room.lastLoreSearch.at}:null,...pendingSyncIssue(pending)};
+ return {legacyExclusions:Number(pending?.quickLegacyRemovedItems?.length||0),bytes:coreCarrierPayloadBytes(carrierText,verified?(pending?.carrierEncoding||'utf-8'):''),encoding:carrierBody(carrierText,verified?(pending?.carrierEncoding||'utf-8'):'').encoding,armed:!!pending,verified,awaitingItems:!!pending?.awaitingItems,awaitingCarrier:!!pending?.awaitingCarrier,total,max:allFitLimit(room),groups,items:plan,hasCarrier:!!pending?.messageId,hasOriginal,matchesSaved,selection:matchesSaved?pending.selection||null:null,review:room.lastLoreSearch?{method:room.lastLoreSearch.reviewMethod,reason:room.lastLoreSearch.reviewReason,total:room.lastLoreSearch.reviewBaseTotal,limit:room.lastLoreSearch.reviewLimit,at:room.lastLoreSearch.at}:null,...pendingSyncIssue(pending)};
 }
 
 function WUIReadMonitor(){
@@ -75611,6 +75679,7 @@ async function manualApplyFrom(room,text,dlgId,confirmed=''){
 }
 
 WUI_ADAPTER.bind['display.monitor']=value=>WishDisplay.setVisible(value);
+WUI_ADAPTER.bind['injection.autoStartNewChats']=value=>WishNewChatInjection.setEnabled(value);
 for(const kind of ['accent','surface'])WUI_ADAPTER.bind['theme.'+kind]=value=>{WSUITE.host.setTheme(kind,value);WUI.paint(false);};
 WUI_ADAPTER.act.themeReset=kind=>{WSUITE.host.setTheme(kind,'');WUI.paint(false);};
 WUI_ADAPTER.bind['theme.intensity']=value=>{WSUITE.host.setThemeIntensity(value);WUI.paint(false);};
