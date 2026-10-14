@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.59
+// @version      0.5.60
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,13 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.60 · WRMC 2.0.0 재확인 · 비용 표시와 고정 관계 우선순위 보완
+ * 다시 받은 원작자 파일은 기존 2.0.0과 동일하며, 0.5.59의 누락된 연결만 보완합니다.
+ * 아르곤 예상 비용을 Core·Suite·로어 비용 화면에 연결하고 원작자 단가표의 날짜 전환을 반영합니다.
+ * 고정 관계 후보는 최근 로그 다음에 우선 선택하며 AI 선별·저장 순위에서도 누락되지 않도록 합니다.
+ * 주입 OFF·해제·용량 한도와 기존 원문 보호, 참고 자료 앞/뒤 문구 및 Suite 기능을 유지합니다.
+ */
 
 /* 0.5.59 · WRMC 2.0.0 변경분 통합 · 참고 자료 경계 보강
  * 요청한 앞/뒤 문구를 전체 주입 블록 안에 한 번씩 넣고 실제 PATCH 본문으로 전달합니다.
@@ -590,7 +597,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.59'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.60'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -1170,6 +1177,11 @@ function createWishSuiteCore() {
   return {KINDS,str,list,hash,clean,matches,normalize,content,context,triggerHits,scoreCard,select,toItem,digest,parseJson,validatePatch,applyPatch,identity,remember,duplicateGroups,stateDelta};
 }
 
+// Argon estimate table from the user-supplied WRMC 2.0.0 source. No paid requests.
+function wishSuiteArgonRates(at=Date.now()) {
+  const later=Number(at)>=Date.UTC(2026,11,1);
+  return {input:later?4:2,output:later?20:10,cached:later ? 0.2 : 0.1};
+}
 const WSUITE={integrated:true,core:createWishSuiteCore(),beforeSend:null,open:null,reportError:null};
 
 // BEGIN WISH LORE STORAGE 0.5.52
@@ -3918,6 +3930,9 @@ async function fetchRecentMessages(limit) {
         var catalogProvider = (provider === 'firebase' || provider === 'vertex') ? 'google' : provider;
         var catalog = MODEL_PRICING_USD_PER_M[catalogProvider] || {};
         var price = catalog[String(model || '').toLowerCase()] || null;
+        if(catalogProvider==='google'&&String(model||'').toLowerCase()==='gemini-4-argon'){
+            var argon=wishSuiteArgonRates();price={input:argon.input,cachedInput:argon.cached,output:argon.output,estimated:true};
+        }
         if (!price) return null;
         var useLong = price.threshold && Number(inputTokens || 0) > price.threshold;
         return {
@@ -14187,6 +14202,9 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
       if (/^(?:gpt-5\.6|gpt-5\.6-sol)(?:$|-)/.test(name)) {
         return { inputPerMillion:4.00, outputPerMillion:20.00, source:'OpenAI 공식 기본 단가' };
       }
+    }
+    if (google && name==='gemini-4-argon') {
+      const r=wishSuiteArgonRates();return {inputPerMillion:r.input,outputPerMillion:r.output,source:'원작자 WRMC 2.0.0 단가표 기준 예상치'};
     }
     if (google && /^gemini-3\.8-flash(?:$|-)/.test(name)) {
       return { inputPerMillion:0.75, outputPerMillion:3.75, source:'Google 공식 Standard 단가 · 2026-12-31까지' };
@@ -49084,7 +49102,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.59-suite';
+  const SCRIPT_VERSION = '0.5.60-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -51155,13 +51173,14 @@ const WishUsage=(()=>{
     const CN_HOLIDAYS=new Set(['2026-09-25','2026-10-01','2026-10-02','2026-10-05','2026-10-06','2026-10-07']); // 2026 weekday holidays (Beijing date); 2027 not yet announced
     function official(meta,t,at=Date.now()){
       const m=meta.model,p=meta.provider;let r;
-      if(p==='ai-studio'||p==='firebase'){
+      if(p==='ai-studio'||p==='firebase'||p==='vertex'){
         if(/^gemini-3\.[678]-flash$/.test(m))r=at<Date.UTC(2027,0,1)?[.75,3.75,.075]:[1.5,7.5,.15];
         else if(m==='gemini-3.5-flash')r=[1.5,9,.15];
         else if(m==='gemini-3.5-flash-lite')r=[.3,2.5,.03];
         else if(m==='gemini-3.1-flash-lite')r=[.25,1.5,.025];
         else if(m==='gemini-3.1-pro-preview'||m==='gemini-3.1-pro')r=t.input>200000?[4,18,.4]:[2,12,.2];
-        if(r&&p==='firebase'&&meta.location&&meta.location!=='global'){
+        else if(m==='gemini-4-argon'){const q=wishSuiteArgonRates(at);r=[q.input,q.output,q.cached];}
+        if(r&&(p==='firebase'||p==='vertex')&&meta.location&&meta.location!=='global'){
           if(/^gemini-3\.1-pro/.test(m))return null;
           r=r.map(n=>n*1.1);
         }
@@ -62743,6 +62762,11 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     }
     if(!options.forceLocal){rank.at=Date.now();allFitRankCache.set(key,rank);}while(allFitRankCache.size>8)allFitRankCache.delete(allFitRankCache.keys().next().value);
   }
+  // User-pinned relationship candidates keep their place even when a saved/AI
+  // ranking omits them. They are priority candidates, not mandatory payload:
+  // the exact character and byte fit below still decides what can be sent.
+  const pinnedRelationshipSlots=new Set(WishRelationships.normalize(room.relationships||[]).filter(r=>r.enabled!==false&&r.pinned).map(r=>'relationship:'+r.id));
+  const pinnedRelationshipIds=optional.map((item,id)=>({item,id})).filter(({item})=>injectionCadenceKind(item)==='relationship'&&(pinnedRelationshipSlots.has(item.slotId)||(item.quickChoice?.version===2&&item.quickChoice.action==='include'))).map(({id})=>id);
   let seatOff=false,seatBranches=null;
   if(!options.selective&&recent.length)rank={...rank,ids:hoist(rank.ids)};
   if(options.seat&&!options.selective&&!options.preferredKeys&&!options.totalLength&&!options.messageText){
@@ -62752,6 +62776,9 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       if(plan&&RecallSeat.validSeatOrder(plan.ids,rank.ids,recent)){rank={...rank,ids:plan.ids};seatBranches=plan.branches;}else seatOff=true;
     }catch(error){console.debug('[Wish] recall seat skipped',error);seatOff=true;}
   }
+  // Run after every planner, including cached/preferred and selective AI paths.
+  // Recent logs stay first; pins precede the timeline and other optional rows.
+  if(pinnedRelationshipIds.length){const priority=[...new Set([...recent,...pinnedRelationshipIds])],held=new Set(priority);rank={...rank,ids:[...priority,...rank.ids.filter(id=>!held.has(id))]};}
   const fit=(length,bytes)=>{const chosen=[...required];for(const id of rank.ids){const item=optional[id],trial=item?[...chosen,item]:null;if(trial&&length(trial)<=limit&&bytes(trial)<=byteBudget)chosen.push(item);}const keep=new Set(chosen);return items.filter(item=>keep.has(item));};
   let selected=fit(size,payloadMeasure),selectedTotal=exactSize(selected),selectedPayload=coreCarrierPayloadBytes(wire(selected));
   if(size(selected)!==selectedTotal||payloadMeasure(selected)!==selectedPayload||selectedTotal>limit||selectedPayload>byteBudget){selected=fit(exactSize,xs=>coreCarrierPayloadBytes(wire(xs)));selectedTotal=exactSize(selected);selectedPayload=coreCarrierPayloadBytes(wire(selected));}
