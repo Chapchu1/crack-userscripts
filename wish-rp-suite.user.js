@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.62
+// @version      0.5.63
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,14 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.63 · 관계 요약의 작성 목표와 허용 상한 분리
+ * 작성 목표 700/250/400자는 유지하고 검증 상한을 1000/400/600자로 분리합니다.
+ * 720자 현재 관계처럼 목표를 조금 넘은 결과는 자르거나 재생성하지 않고 검증합니다.
+ * 신규 요청·교정에 간결한 작성 목표와 실측 길이를 전달합니다.
+ * 기본 지침의 저장된 비교값과 임시 후보를 유지해 기존 결과부터 이어갑니다.
+ * 원문 근거·수동 보호·인물·쟁점·전체 주입 용량 검사를 유지합니다.
+ */
 
 /* 0.5.62 · 임시 정리 설정 기준 오류의 재시작 반복 수정
  * 연표를 포함한 9개 지침 기준을 정상 생성하고, 기존 7·8개 기준을 호환합니다.
@@ -613,7 +621,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.62'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.63'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49118,7 +49126,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.62-suite';
+  const SCRIPT_VERSION = '0.5.63-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -53176,8 +53184,24 @@ function wishHeldCommitNotice(staged,parts){
   }
 
 const WishRelationships = (() => {
+    // Writing goals and acceptance ceilings are distinct. Keep modestly longer
+    // verified text intact instead of paying to rewrite it solely for length.
+    const fieldLimits=Object.freeze({
+      current:Object.freeze({target:700,hard:1000,soft:520}),
+      milestone:Object.freeze({target:250,hard:400,soft:160}),
+      unresolved:Object.freeze({target:400,hard:600,soft:280})
+    });
+    const fieldSchema=field=>({type:'string',description:`앞뒤 공백 제외 UTF-16 길이. 새 작성은 ${fieldLimits[field].soft}자 안팎을 권장하고 ${fieldLimits[field].target}자 이내를 목표로 한다. 의미 보존에 필요한 여유는 ${fieldLimits[field].hard}자까지 허용한다. 사실·조건·부정·불확실성을 삭제하거나 뒤를 자르지 않는다.`});
+    // Separate runtime contract: do not alter persisted default-guide stamps.
+    const lengthGuide=`
+[관계 텍스트 길이 — 현재 실행 계약]
+- 앞 지침의 current 700자·milestone 250자·unresolved 400자는 작성 목표다. 길이에 관해서는 이 절의 실제 허용 상한을 적용한다. current는 1~${fieldLimits.current.hard}자, milestone은 0~${fieldLimits.milestone.hard}자, unresolved는 0~${fieldLimits.unresolved.hard}자의 문자열을 허용한다.
+- 새 작성·교정은 current ${fieldLimits.current.soft}자·milestone ${fieldLimits.milestone.soft}자·unresolved ${fieldLimits.unresolved.soft}자 안팎으로 간결하게 쓰되, 독립적인 사실·변화·조건·부정·불확실성을 보존한다. 작성 목표를 조금 넘었다는 이유만으로 의미를 삭제하거나 전체를 다시 쓰지 않는다.
+- 길이는 앞뒤 공백을 뺀 JavaScript UTF-16 기준이다. 공백·문장부호도 센다. 일반 한글 음절은 1, 이모지 등 일부 문자는 2다. evidence 원문은 이 제한의 대상이 아니며 그대로 인용한다.
+- 실제 허용 상한도 넘으면 중복 표현만 줄인다. 뒤를 자르거나 실제 변화를 빈 값으로 바꾸지 않는다. 현재 요청의 응답 스키마를 따르고 새 필드를 만들지 않는다. 교정 요청에서 status="blocked"가 허용될 때만 의미를 보존할 수 없는 경우 그 값을 사용한다. 기존 원문 근거·인물 방향·수동 보호·쟁점 처리 규칙은 그대로 적용한다.
+`;
     const str={type:'string'}, object=properties=>({type:'object',additionalProperties:false,required:Object.keys(properties),properties});
-    const schema={type:'array',items:object({speaker_ref:str,target_ref:str,current:str,milestone:str,unresolved:str,unresolved_action:{type:'string',enum:['keep','replace','clear']},evidence:str})};
+    const schema={type:'array',items:object({speaker_ref:str,target_ref:str,current:fieldSchema('current'),milestone:fieldSchema('milestone'),unresolved:fieldSchema('unresolved'),unresolved_action:{type:'string',enum:['keep','replace','clear']},evidence:str})};
     const fullSchema={type:'array',items:object({speaker:str,target:str,current:str,trajectory:str,unresolved:str,evidence:{type:'array',items:object({role:{type:'string',enum:['user','assistant']},quote:str})}})};
     const commonGuide=`
 [관계·감정선 공통 규칙 — 이 영역에만 적용]
@@ -53491,7 +53515,7 @@ const WishRelationships = (() => {
         const old=rows.find(r=>(r.speakerActorId===from.id&&r.targetActorId===to.id)||key(r.speaker,r.target)===pair);
         if(old?.manual)throw Error('수동 보호 관계는 자동 수정할 수 없습니다.');
         if(options.allowedPairs&&old&&!options.allowedPairs.has(pair)&&!options.allowedPairs.has(key(old.speaker,old.target)))throw Error('이번 요청에 기존 관계 전문이 없어 덮어쓰지 않았습니다. 관계 대상을 확인한 뒤 재시도해 주세요.');
-        const fieldIssues=Object.entries({current:700,milestone:250,unresolved:400}).flatMap(([field,max])=>{
+        const fieldIssues=Object.entries(fieldLimits).flatMap(([field,{hard:max}])=>{
           const value=x[field],length=typeof value==='string'?value.length:null;
           return typeof value!=='string'||length>max||field==='current'&&!length?[{field,max,length,type:value===null?'null':Array.isArray(value)?'array':typeof value}]:[];
         });
@@ -53606,8 +53630,8 @@ const WishRelationships = (() => {
       for(const entry of record.entries){
         if(!entry||!Number.isInteger(entry.index)||entry.index<0||seen.has(entry.index)||!['speaker_ref','target_ref','relationId','speaker','target','cutoff'].every(k=>typeof entry[k]==='string'&&entry[k])||entry.speaker_ref===entry.target_ref||typeof entry.speakerPC!=='boolean')fail();seen.add(entry.index);
         const before=entry.previous,change=entry.change;
-        if(!before||!['current','trajectory','unresolved'].every(k=>typeof before[k]==='string')||before.trajectory.length>6000||!change||change.speaker_ref!==entry.speaker_ref||change.target_ref!==entry.target_ref||!['current','milestone','unresolved','unresolved_action','evidence'].every(k=>typeof change[k]==='string')||!['keep','replace','clear'].includes(change.unresolved_action)||change.current.length>700||change.milestone.length>250||change.unresolved.length>400)fail();
-        if(!change.milestone.trim()||entry.combined!==[before.trajectory,change.milestone.trim()].filter(Boolean).join('\n')||entry.combined.length<=6000||entry.combined.length>6251||!Array.isArray(entry.proof))fail();
+        if(!before||!['current','trajectory','unresolved'].every(k=>typeof before[k]==='string')||before.trajectory.length>6000||!change||change.speaker_ref!==entry.speaker_ref||change.target_ref!==entry.target_ref||!['current','milestone','unresolved','unresolved_action','evidence'].every(k=>typeof change[k]==='string')||!['keep','replace','clear'].includes(change.unresolved_action)||change.current.length>fieldLimits.current.hard||change.milestone.length>fieldLimits.milestone.hard||change.unresolved.length>fieldLimits.unresolved.hard)fail();
+        if(!change.milestone.trim()||entry.combined!==[before.trajectory,change.milestone.trim()].filter(Boolean).join('\n')||entry.combined.length<=6000||entry.combined.length>6000+fieldLimits.milestone.hard+1||!Array.isArray(entry.proof))fail();
         let checked;try{checked=checkedEvidence(change.evidence,record.sourceRows,entry.speakerPC,'관계 이력');}catch{fail();}
         if(JSON.stringify(checked)!==JSON.stringify(entry.proof))fail();
         if(record.phase!=='compress'&&(typeof entry.compact!=='string'||!entry.compact.trim()||entry.compact!==entry.compact.trim()||entry.compact.length>5000||entry.compact.length>=entry.combined.length))fail();
@@ -53760,7 +53784,7 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
 
 function evidenceCutoff(r,evidence){const sig=list=>JSON.stringify((list||[]).map(e=>[e?.role||'',e?.quote||''])),want=sig(evidence);return String([...(r?.evidenceHistory||[])].reverse().find(e=>Array.isArray(e?.evidence)&&sig(e.evidence)===want)?.cutoff||'');}
 
-return {schema,fullSchema,commonGuide,fieldGuide,guide,fullGuide,key,semantic,normalize,apply,rebuild,body,displayBody,messages,checkedEvidence,bind,pendingItem,items,current,contextRows,updateRange,continuityText,replacePending,mutate,open,save,diff,checkTrajectoryRecovery,shownEvidence,evidenceCutoff,heldRow,heldResolved,settleHeld,mergeHeld,normalizeHeld,openHeld};
+return {schema,fullSchema,commonGuide,fieldGuide,guide,fullGuide,fieldLimits,fieldSchema,lengthGuide,key,semantic,normalize,apply,rebuild,body,displayBody,messages,checkedEvidence,bind,pendingItem,items,current,contextRows,updateRange,continuityText,replacePending,mutate,open,save,diff,checkTrajectoryRecovery,shownEvidence,evidenceCutoff,heldRow,heldResolved,settleHeld,mergeHeld,normalizeHeld,openHeld};
   })();
 
 
@@ -56151,6 +56175,7 @@ const deltaNotices=[];
     guide+='\nreadOnlySuite는 별도 저장 카드이며 읽기 전용이다. 변경은 해당 카드 갱신에서만 하고 신규 근거는 현재 작업의 RP에서만 찾는다.';
     const factCorrections=WishMemorySafety.factCorrectionScope(db,!options.rebuild&&p.observe?p.obs:[]);
     if(factCorrections.lines.length)guide+='\n[이번 인지 정정 보류]\n아래 ref의 정정은 사용자 인지 편집에서 확인한다. 해당 ref의 본문·앎·은폐를 바꾸거나 새 fact로 우회 등록하지 않는다. 별개의 사실은 신규 RP의 직접 근거가 있을 때만 갱신·추가한다. all_existing=true이면 정정 대상이 불명확하므로 이번 facts_upsert와 concealment_changes를 모두 []로 둔다. 무관한 인물·호칭·관계 작업은 계속한다. '+JSON.stringify({all_existing:factCorrections.all,refs:factCorrections.refs})+'\n';
+    if(p.observe)guide+=WishRelationships.lengthGuide;
     const check=wishOutputCheck('live',{memory:p.memory,observe:p.observe,timeline:tl,stateDelta,references:options.references!==false,text:isManualAiProvider()});
     let selection=null;
     if(p.memory){
@@ -57001,7 +57026,7 @@ function stage(room,cog,packs,p,req,data,options={}) {
       const str={type:'string'},schema={type:'object',additionalProperties:false,required:['status','fixes'],properties:{
         status:{type:'string',enum:['fixed','blocked']},blocked_reason:{type:'string'},
         fixes:{type:'array',items:{type:'object',additionalProperties:false,required:['index','current','milestone','unresolved_action','unresolved','evidence_ref'],properties:{
-          index:{type:'number'},current:str,milestone:str,unresolved_action:{type:'string',enum:['keep','replace','clear']},unresolved:str,evidence_ref:{type:'string',enum:[...catalog.byRef.keys()]}
+          index:{type:'number'},current:WishRelationships.fieldSchema('current'),milestone:WishRelationships.fieldSchema('milestone'),unresolved_action:{type:'string',enum:['keep','replace','clear']},unresolved:WishRelationships.fieldSchema('unresolved'),evidence_ref:{type:'string',enum:[...catalog.byRef.keys()]}
         }}}
       }};
       if(allowNoChange)schema.properties.no_changes={type:'array',items:{type:'object',additionalProperties:false,required:['index','reason'],properties:{index:{type:'number'},reason:str}}};
@@ -57030,8 +57055,9 @@ function stage(room,cog,packs,p,req,data,options={}) {
 `+noChangeGuide+`
 - status="blocked"일 때 blocked_reason에 왜 변경 교정과 미확인 제안 철회 모두 확정할 수 없는지 원문에 근거한 구체적인 한국어 이유를 400자 이내로 쓴다. 원문 밖 사실이나 원인을 지어내지 않는다.
 JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
-      const prompt=JSON.stringify({targets:issues.map(issue=>({index:issue.index,speaker:issue.speaker,target:issue.target,speakerPC:issue.speakerPC,no_supported_change_allowed:allowNoChange&&issue.speakerPC===true&&issue.evidenceFailed===true,reason:issue.reason,previous:issue.previous,rejected:rows[issue.index]})),original_messages:catalog.messages});
-      const system=guide+'\n[응답 스키마]\n'+JSON.stringify(schema);
+      const prompt=JSON.stringify({targets:issues.map(issue=>({index:issue.index,speaker:issue.speaker,target:issue.target,speakerPC:issue.speakerPC,no_supported_change_allowed:allowNoChange&&issue.speakerPC===true&&issue.evidenceFailed===true,reason:issue.reason,previous:issue.previous,rejected:rows[issue.index],
+        measured_fields:Object.entries(WishRelationships.fieldLimits).map(([field,limits])=>({field,...limits,length:typeof rows[issue.index]?.[field]==='string'?rows[issue.index][field].trim().length:null,type:typeof rows[issue.index]?.[field]}))})),original_messages:catalog.messages});
+      const system=guide+WishRelationships.lengthGuide+'\n[응답 스키마]\n'+JSON.stringify(schema);
       WishMemorySafety.wire(system,prompt);
       unifiedStage='관계 근거·내용 자동 복구 · '+issues.length+'건 · 1/1';renderModalIfIdle();
       try{await options.beforeRepair?.('relationship');}catch(error){repairCheckpointRejected=true;throw error;}
