@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.68
+// @version      0.5.69
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.69 · 관계 이력 통신 실패 후 자동 정리 재개
+ * 요청 시작·통신 실패·응답 수신을 단계별로 저장하고 실패한 요청만 재시도합니다.
+ * 받은 압축·검토 응답은 재사용하고 실제 거절·근거·원문 검증 제한을 유지합니다.
+ * 이전 버전의 응답 없는 첫 요청은 한 번 복구하며 기존 자동 재시도 간격을 유지합니다.
+ */
 
 /* 0.5.68 · 새 채팅방 주입 자동 시작 (기본 ON)
  * USER 대화가 없는 새 방에서만 기존 주입 유지 세션을 자동으로 시작합니다.
@@ -654,7 +660,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.68'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.69'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49492,7 +49498,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.68-suite';
+  const SCRIPT_VERSION = '0.5.69-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -56089,6 +56095,8 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       // Binding waits for fresh history/cognition and source checks in that run.
       if(u.lastErrorCode==='WISH_DRAFT_CHANGED'&&u.draft.blockedBy==='저장된 AI 설정 기준'&&emptyDraftSettingsRecoverable(d)&&draftAllowed(room,d))return await run(room,'retry');
       if(u.lastErrorCode==='WISH_DRAFT_CHANGED'||flags.restartRequired)return false;
+      await resumeLegacyTrajectoryRequest(room,d);
+      if(room!==state.currentRoom||u.userPaused||!automationEnabled(room))return false;
       if(u.lastError&&!hasPartialFailure(u)){wake(room,reason);return false;}
       checked.delete(room);schedule(room,100);return true;
     })();
@@ -56228,6 +56236,42 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     const chatId=String(d.chatId||d.baseRoom?.chatId||d.room.chatId);
     return {id:'wish-current-state-repair-audit:'+chatId,kind:'wish-current-state-repair-audit',version:1,chatId,draftCreatedAt:d.createdAt,updatedAt:Date.now(),attempts:record.attempts,records:copy(records),reviewSignature:d.reviewSignature,reviewedPackets:d.reviewIndex};
   }
+  // A started request, a transport failure and an actual AI response are different
+  // durable states. Only a received response spends the semantic retry allowance.
+  function trajectoryRequestState(pending){
+    const saved=pending?.trajectoryRequests;if(saved===undefined)return null;
+    const a=pending.trajectoryAttempts,r=pending.trajectoryRecovery;
+    const invalid=()=>{throw draftChangedError(['관계 이력 통신 단계 기록']);};
+    if(!saved||saved.version!==1||!r||!a||!(/^[0-9a-f]{64}$/).test(saved.fingerprint||'')||saved.fingerprint!==r.fingerprint||a.fingerprint!==r.fingerprint||!saved.calls||typeof saved.calls!=='object'||Array.isArray(saved.calls))invalid();
+    for(const [phase,c] of Object.entries(saved.calls)){
+      if(!['compress','repair','review'].includes(phase)||!c||!Number.isInteger(c.attempt)||c.attempt<1||c.attempt!==a[phase]||
+        !['started','transport','response','failed','legacy'].includes(c.state)||!Number.isInteger(c.interruptions)||c.interruptions<0||c.interruptions>1||
+        (c.state==='legacy'?c.requestKey!=='':!(/^[0-9a-f]{64}$/).test(c.requestKey||'')))invalid();
+      if(c.state==='transport'&&(typeof c.code!=='string'||typeof c.message!=='string'))invalid();
+      if(c.state==='response'&&(!c.response||typeof c.response.text!=='string')||c.state!=='response'&&c.response!==undefined)invalid();
+    }
+    return saved;
+  }
+  function incompleteTrajectoryPhase(pending){
+    const r=pending?.trajectoryRecovery;if(!r)return '';
+    validateTrajectoryRecoveryRecord(r);
+    if(r.phase==='review'&&!r.review)return 'review';
+    if(r.phase!=='compress'||r.review||r.lastFailure)return '';
+    if(!r.compressionAttempt)return 'compress';
+    if(!r.compressionRepairRejected&&inspectTrajectoryCompression(r.compressionAttempt.response,r.entries).issues.length)return 'repair';
+    return '';
+  }
+  async function resumeLegacyTrajectoryRequest(room,d){
+    if(room.unified?.lastErrorCode!=='WISH_TRAJECTORY_BUDGET'||room.unified.userPaused||!draftAllowed(room,d))return false;
+    const p=d.pendingBatch;if(!p||trajectoryRequestState(p))return false;
+    const phase=incompleteTrajectoryPhase(p),a=p.trajectoryAttempts;
+    // Old releases did not record whether a reply arrived. Permit one recovery
+    // only for an unfinished first request, never a stored rejected verdict.
+    if(!phase||a?.fingerprint!==p.trajectoryRecovery.fingerprint||a[phase]!==1)return false;
+    p.trajectoryRequests={version:1,fingerprint:a.fingerprint,calls:{[phase]:{attempt:1,state:'legacy',requestKey:'',interruptions:0}}};
+    await persistDraft(room,d);return true;
+  }
+
   async function runDraftCycle(room,cog,frame,list,d,force=''){
     const epoch=localRestoreEpoch,replay=ExternalReplay.revision(apiChatIdOf(room)),settingStamp=draftSettingsStamp();
     const livePacks=()=>visibleLorePacksForRoom(room).filter(p=>(room.activeLorePackIds||[]).includes(p.scopeId));
@@ -56323,6 +56367,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
         pendingDurable=false;await savePending();assertBasis(cog,frame);
       };
       const trajectoryRenewed=new Set();
+      trajectoryRequestState(pending);
       const onTrajectoryState=async record=>{
         assertBasis(cog,frame);validateTrajectoryRecoveryRecord(record);
         if(pending.trajectoryRecovery&&pending.trajectoryRecovery.fingerprint!==record.fingerprint)throw draftChangedError(['저장된 관계 이력 압축 기준']);
@@ -56332,19 +56377,44 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
         if(a.fingerprint!==record.fingerprint||!['compress','review'].every(k=>Number.isInteger(a[k])&&a[k]>=0)||a.repair!==undefined&&(!Number.isInteger(a.repair)||a.repair<0))throw draftChangedError(['관계 이력 압축 호출 기록']);
         pendingDurable=false;await savePending();assertBasis(cog,frame);
       };
-      const beforeTrajectoryCall=async(phase,fingerprint)=>{
+      const getTrajectoryResponse=(phase,fingerprint,requestKey)=>{
+        assertBasis(cog,frame);
+        const saved=trajectoryRequestState(pending),c=saved?.calls[phase];
+        // A crash after receipt but before parsing must not buy the answer twice.
+        return force!=='retry'&&saved?.fingerprint===fingerprint&&c?.state==='response'&&c.requestKey===requestKey&&c.response?copy(c.response):null;
+      };
+      const beforeTrajectoryCall=async(phase,fingerprint,requestKey)=>{
         assertBasis(cog,frame);
         const record=pending.trajectoryRecovery,a=pending.trajectoryAttempts;
-        if(!['compress','review','repair'].includes(phase)||!record||record.fingerprint!==fingerprint||!a||a.fingerprint!==fingerprint||!['compress','review'].every(k=>Number.isInteger(a[k])&&a[k]>=0)||a.repair!==undefined&&(!Number.isInteger(a.repair)||a.repair<0))throw draftChangedError(['관계 이력 압축 호출 기준']);
+        if(!['compress','review','repair'].includes(phase)||!record||record.fingerprint!==fingerprint||!a||a.fingerprint!==fingerprint||!['compress','review'].every(k=>Number.isInteger(a[k])&&a[k]>=0)||a.repair!==undefined&&(!Number.isInteger(a.repair)||a.repair<0)||!(/^[0-9a-f]{64}$/).test(requestKey||''))throw draftChangedError(['관계 이력 압축 호출 기준']);
         validateTrajectoryRecoveryRecord(record);
-        if(a[phase]>0&&(force!=='retry'||trajectoryRenewed.has(phase)))throw Object.assign(Error('관계 이력 자동 압축·검토를 보류했습니다. 원본과 완료한 단계는 보관했어요. 이어서 정리·검증을 누르면 보류한 단계만 다시 시도합니다.'),{code:'WISH_TRAJECTORY_BUDGET'});
+        const saved=trajectoryRequestState(pending),c=saved?.calls[phase];
+        const same=c?.requestKey===requestKey;
+        const transport=same&&c?.state==='transport'&&transientError({code:c.code,message:c.message});
+        const interrupted=same&&c?.state==='started'&&c.interruptions<1;
+        const legacy=c?.state==='legacy'&&c.interruptions<1&&incompleteTrajectoryPhase(pending)===phase;
+        const oldTransport=!saved&&savedTransportFailure&&a[phase]===1&&incompleteTrajectoryPhase(pending)===phase;
+        if(trajectoryRenewed.has(phase)||a[phase]>0&&force!=='retry'&&!transport&&!interrupted&&!legacy&&!oldTransport)throw Object.assign(Error('관계 이력 자동 압축·검토를 보류했습니다. 원본과 완료한 단계는 보관했어요. 이어서 정리·검증을 누르면 보류한 단계만 다시 시도합니다.'),{code:'WISH_TRAJECTORY_BUDGET'});
         trajectoryRenewed.add(phase);a[phase]=Math.min(1000000,Number(a[phase]||0)+1);
+        const requests=saved||{version:1,fingerprint,calls:{}};
+        requests.calls[phase]={attempt:a[phase],state:'started',requestKey,interruptions:force==='retry'?0:interrupted||legacy||oldTransport?1:c?.interruptions||0};
+        pending.trajectoryRequests=requests;
+        pendingDurable=false;await savePending();assertBasis(cog,frame);
+      };
+      const onTrajectoryCallOutcome=async(phase,fingerprint,requestKey,outcome)=>{
+        assertBasis(cog,frame);
+        const saved=trajectoryRequestState(pending),c=saved?.calls[phase];
+        if(!c||saved.fingerprint!==fingerprint||c.requestKey!==requestKey||c.state!=='started')throw draftChangedError(['관계 이력 요청 결과 기준']);
+        if(outcome.error){
+          c.state=transientError(outcome.error)?'transport':'failed';
+          c.code=String(outcome.error.code||'');c.message=WLOG.clean(String(outcome.error.message||outcome.error)).slice(0,2000);
+        }else{c.state='response';c.response={text:String(outcome.result?.text??'')};}
         pendingDurable=false;await savePending();assertBasis(cog,frame);
       };
       unifiedStage='저장된 정리 후보 근거·참조 검증 중';renderModalIfIdle();
       let staged;
       try{
-        staged=await stageWithTrajectoryRecovery(d.room,d.cog,d.packs,p,pending.request,pending.data,{beforeRepair,onRepairCandidate,allowRelationshipNoChange:true,getCandidate:()=>pending.data,getTrajectoryState:()=>pending.trajectoryRecovery?copy(pending.trajectoryRecovery):null,onTrajectoryState,beforeTrajectoryCall});
+        staged=await stageWithTrajectoryRecovery(d.room,d.cog,d.packs,p,pending.request,pending.data,{beforeRepair,onRepairCandidate,allowRelationshipNoChange:true,getCandidate:()=>pending.data,getTrajectoryState:()=>pending.trajectoryRecovery?copy(pending.trajectoryRecovery):null,onTrajectoryState,beforeTrajectoryCall,getTrajectoryResponse,onTrajectoryCallOutcome});
         if(pending.relationshipRejections)staged.relationshipRejections=copy(pending.relationshipRejections);
       }
       catch(error){
@@ -57276,6 +57346,17 @@ function stage(room,cog,packs,p,req,data,options={}) {
       recovery={version:1,fingerprint,phase:'compress',sourceRows,sourceKey,entries};
       validateTrajectoryRecoveryRecord(recovery);await options.onTrajectoryState(copy(recovery));
     }
+    const trajectoryRequest=async(phase,system,prompt,schema)=>{
+      const requestKey=await sha256Hex(new TextEncoder().encode(JSON.stringify([phase,system,prompt])));
+      const cached=options.getTrajectoryResponse?.(phase,fingerprint,requestKey);if(cached)return cached;
+      await options.beforeTrajectoryCall(phase,fingerprint,requestKey);
+      let result;
+      try{result=await callAiProvider(loadAiSettings(),system,prompt,{taskKind:'extract',responseMimeType:'application/json',responseJsonSchema:schema,operationLabel:unifiedStage});}
+      catch(error){await options.onTrajectoryCallOutcome?.(phase,fingerprint,requestKey,{error});throw error;}
+      // Receipt is checkpointed before parsing; malformed JSON is a received
+      // answer, not a network failure that may renew the semantic budget.
+      await options.onTrajectoryCallOutcome?.(phase,fingerprint,requestKey,{result});return result;
+    };
     const str={type:'string'},indexSchema={type:'number'},clean=value=>WLOG.clean(String(value||'')).replace(/\s+/g,' ').trim().slice(0,500);
     if(recovery.phase==='compress'||recovery.review?.status==='blocked'){
       const blockedReview=recovery.review?.status==='blocked';
@@ -57302,8 +57383,7 @@ function stage(room,cog,packs,p,req,data,options={}) {
         const prompt=JSON.stringify({targets:entries,allowed_current_source:sourceRows,...(blockedReview?{previous_review:recovery.review}:{}),measured_lengths:entries.map(entry=>({index:entry.index,original:entry.combined.length,maximum:WishRelationships.trajectoryLimits.hard,target:WishRelationships.trajectoryLimits.target,preferred:WishRelationships.trajectoryLimits.preferred,reserve:WishRelationships.trajectoryLimits.reserve}))});
         WishMemorySafety.wire(system,prompt);
         unifiedStage='길어진 관계 이력 정리 · 원문 별도 보관 준비';renderModalIfIdle();
-        await options.beforeTrajectoryCall('compress',fingerprint);
-        const result=await callAiProvider(loadAiSettings(),system,prompt,{taskKind:'extract',responseMimeType:'application/json',responseJsonSchema:schema,operationLabel:unifiedStage});
+        const result=await trajectoryRequest('compress',system,prompt,schema);
         compressed=WLOG.parseJson(result.text,'관계 이력 길이 정리',result.diagnostic);
         // Persist the paid answer before inspecting its identifiers/lengths.
         await remember(compressed,'compress');
@@ -57334,8 +57414,7 @@ preserved_results에 있는 index가 교정 대상에 포함되어 있으면 tra
         const prompt=JSON.stringify({repair_targets:targets,preserved_results:[...valid.values()],rejected_response:compressed,previous_rejected_repair:recovery.compressionRepairRejected?.response,validation_issues:inspection.issues,allowed_current_source:sourceRows});
         WishMemorySafety.wire(repairSystem,prompt);
         unifiedStage='관계 이력 대상·분량 자동 교정 1회 · 정상 방향 보존';renderModalIfIdle();
-        await options.beforeTrajectoryCall('repair',fingerprint);
-        const result=await callAiProvider(loadAiSettings(),repairSystem,prompt,{taskKind:'extract',responseMimeType:'application/json',responseJsonSchema:repairSchema,operationLabel:unifiedStage});
+        const result=await trajectoryRequest('repair',repairSystem,prompt,repairSchema);
         const repaired=WLOG.parseJson(result.text,'관계 이력 대상·분량 교정',result.diagnostic);
         const corrected=inspectTrajectoryCompression(repaired,targets);
         if(!corrected.issues.length){
@@ -57383,8 +57462,7 @@ preserved_results에 있는 index가 교정 대상에 포함되어 있으면 tra
       const prompt=JSON.stringify({targets:recovery.entries,allowed_current_source:recovery.sourceRows});
       WishMemorySafety.wire(system,prompt);
       unifiedStage='관계 이력 원문·축약본 독립 검증 중';renderModalIfIdle();
-      await options.beforeTrajectoryCall('review',fingerprint);
-      const result=await callAiProvider(loadAiSettings(),system,prompt,{taskKind:'extract',responseMimeType:'application/json',responseJsonSchema:schema,operationLabel:unifiedStage});
+      const result=await trajectoryRequest('review',system,prompt,schema);
       const reply=WLOG.parseJson(result.text,'관계 이력 독립 검토',result.diagnostic);validateShape(reply,schema);
       const review={...reply,basisKey:JSON.stringify(recovery.entries),sourceKey:recovery.sourceKey};
       recovery={...recovery,phase:review.status==='pass'?'approved':'review',review};
