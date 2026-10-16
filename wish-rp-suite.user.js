@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.74
+// @version      0.5.75
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,11 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.75 · 정상 주입에 남는 노란 경고 수정
+ * 빈 오류 객체를 [object Object]로 표시하던 변환을 바로잡습니다.
+ * 실제 실패 기록·서버 검증·자동 정리·주입 동작은 유지합니다.
+ */
 
 /* 0.5.74 · Firebase App Check 오류 진단 보존
  * 서버 원문을 비밀값 없이 보존하고, 모델 인증 필수·토큰 거절·할당량·장애를 구분합니다.
@@ -689,7 +694,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.74'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.75'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -1353,8 +1358,10 @@ const WSUITE={integrated:true,core:createWishSuiteCore(),beforeSend:null,open:nu
 WSUITE.crackTransport=(()=>{
   const states=new Map(),delays=[30000,60000,120000,300000];let sequence=0;
   const transient=status=>[429,500,502,503,504,529].includes(Number(status));
+  // An empty error.message is an explicit 'no error', not the object itself.
+  const textOf=error=>typeof error==='string'?error:typeof error?.message==='string'?error.message:'';
   function statusOf(error){
-    const message=String(error?.message||error||''),code=String(error?.code||'');
+    const message=textOf(error),code=String(error?.code||'');
     if(!/^CRACK_HTTP(?:_BACKOFF)?$/.test(code)&&error?.diagnostic?.service!=='크랙'&&!/^(?:서버 재검증 실패:\s*)?API 오류\s*\d{3}\b/.test(message))return 0;
     return Number(error?.diagnostic?.httpStatus)||Number(message.match(/(?:HTTP|API 오류)\s*[:=]?\s*(\d{3})\b/i)?.[1])||0;
   }
@@ -1362,7 +1369,7 @@ WSUITE.crackTransport=(()=>{
   // Keep the established status prefix: legacy fallback/413 guards parse it.
   const message=status=>status===429?'API 오류 429: 크랙 서버의 요청 제한으로 대기 중입니다.':`API 오류 ${status}: 크랙 서버가 일시적으로 응답하지 않습니다.`;
   function display(error){
-    const status=statusOf(error),text=String(error?.message||error||'');
+    const status=statusOf(error),text=textOf(error);
     if(transient(status))return message(status)+' 저장된 기억은 유지되며, 서버 응답 후 다시 확인합니다.';
     if(status&&/<\s*(?:!doctype|html|head|body|script)\b/i.test(text))return `크랙 API 오류 (HTTP ${status}) · 서버의 HTML 오류 응답을 받았습니다.`;
     return text;
@@ -49689,7 +49696,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.74-suite';
+  const SCRIPT_VERSION = '0.5.75-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -62170,7 +62177,7 @@ function roomCopyMergeCognition(targetRaw,sourceRaw,targetRid) {
   }
   function pendingSyncIssue(pending){
     const rawError=String(pending?.lastSyncError||''),issue={message:rawError,code:pending?.lastSyncErrorCode};
-    const error=WSUITE.crackTransport.display(issue),serverWaiting=!!rawError&&WSUITE.crackTransport.temporary(issue);
+    const error=rawError.trim()?WSUITE.crackTransport.display(issue):'',serverWaiting=!!error&&WSUITE.crackTransport.temporary(issue);
     return {error,serverWaiting,authWaiting:!!error&&(isCrackAuthError({code:pending?.lastSyncErrorCode})||error.includes('로그인 토큰을 찾지 못했습니다')),lastCheckedAt:Number(pending?.verifiedAt||0)};
   }
   function recordPendingSyncError(room,error){
