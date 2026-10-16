@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.71
+// @version      0.5.72
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.72 · 크랙 서버 일시 오류 대기·복구 표시
+ * 503 HTML 오류를 짧게 표시하고 서버 조회의 재시도 대기 시간을 공유합니다.
+ * Retry-After와 점진적 대기를 적용하며 기존 저장·쓰기·주입 검증을 유지합니다.
+ * 서버 확인 대기와 정리 오류를 구분하고 조회 실패 시 턴수 안내를 보완합니다.
+ */
 
 /* 0.5.71 · 응답교정 1.3.26 선별 통합
  * 생성 전 주입자료와 문단별 관련 기억·의미검색을 Suite 자료 구조에 연결합니다.
@@ -672,7 +678,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.71'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.72'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -1258,6 +1264,75 @@ function wishSuiteArgonRates(at=Date.now()) {
   return {input:later?4:2,output:later?20:10,cached:later ? 0.2 : 0.1};
 }
 const WSUITE={integrated:true,core:createWishSuiteCore(),beforeSend:null,open:null,reportError:null};
+
+// Shared read backoff only: no timers, response cache, or replay of writes.
+WSUITE.crackTransport=(()=>{
+  const states=new Map(),delays=[30000,60000,120000,300000];let sequence=0;
+  const transient=status=>[429,500,502,503,504,529].includes(Number(status));
+  function statusOf(error){
+    const message=String(error?.message||error||''),code=String(error?.code||'');
+    if(!/^CRACK_HTTP(?:_BACKOFF)?$/.test(code)&&error?.diagnostic?.service!=='크랙'&&!/^(?:서버 재검증 실패:\s*)?API 오류\s*\d{3}\b/.test(message))return 0;
+    return Number(error?.diagnostic?.httpStatus)||Number(message.match(/(?:HTTP|API 오류)\s*[:=]?\s*(\d{3})\b/i)?.[1])||0;
+  }
+  const temporary=error=>transient(statusOf(error));
+  // Keep the established status prefix: legacy fallback/413 guards parse it.
+  const message=status=>status===429?'API 오류 429: 크랙 서버의 요청 제한으로 대기 중입니다.':`API 오류 ${status}: 크랙 서버가 일시적으로 응답하지 않습니다.`;
+  function display(error){
+    const status=statusOf(error),text=String(error?.message||error||'');
+    if(transient(status))return message(status)+' 저장된 기억은 유지되며, 서버 응답 후 다시 확인합니다.';
+    if(status&&/<\s*(?:!doctype|html|head|body|script)\b/i.test(text))return `크랙 API 오류 (HTTP ${status}) · 서버의 HTML 오류 응답을 받았습니다.`;
+    return text;
+  }
+  function retryAfter(headers){
+    const value=String(headers||'').match(/^retry-after\s*:\s*([^\r\n]+)/im)?.[1]?.trim();
+    if(!value)return 0;
+    const wait=/^\d+(?:\.\d+)?$/.test(value)?Number(value)*1000:Date.parse(value)-Date.now();
+    return Number.isFinite(wait)?Math.min(2147480000,Math.max(0,wait)):0;
+  }
+  function keyOf(url){try{return new URL(url).origin;}catch{return '';}}
+  function waitingError(entry,method){
+    const retryAfterMs=Math.max(1000,entry.until-Date.now());
+    return Object.assign(new Error(message(entry.status)+` 약 ${Math.ceil(retryAfterMs/1000)}초 후 다시 확인합니다.`),{
+      code:'CRACK_HTTP_BACKOFF',retryAfterMs,
+      diagnostic:{service:'크랙',method,httpStatus:entry.status,retryAfterMs}
+    });
+  }
+  function begin(method,url){
+    method=String(method).toUpperCase();const key=keyOf(url),entry=states.get(key);
+    if(method==='GET'&&entry?.until>Date.now())throw waitingError(entry,method);
+    return {key,method,id:++sequence};
+  }
+  function success(ticket){
+    const entry=states.get(ticket.key);
+    if(ticket.method==='GET'&&entry&&ticket.id>=entry.lastFailure)states.delete(ticket.key);
+  }
+  function failure(ticket,res,parsed){
+    const status=Number(res.status)||0,now=Date.now(),hint=retryAfter(res.responseHeaders);
+    let wait=hint;
+    if(transient(status)){
+      wait=Math.max(delays[0],hint);
+      if(ticket.method==='GET'&&ticket.key){
+        const prior=states.get(ticket.key),overlap=prior?.until>now;
+        const count=overlap?prior.count:Math.min(delays.length,(prior?.count||0)+1);
+        const until=Math.max(prior?.until||0,now+(overlap?0:delays[count-1]),now+hint);
+        states.set(ticket.key,{status,count,until,lastFailure:Math.max(ticket.id,prior?.lastFailure||0)});
+        wait=Math.max(1000,until-now);
+      }
+    }
+    const raw=String(res.responseText||''),html=/<\s*(?:!doctype|html|head|body|script)\b/i.test(raw);
+    const candidate=parsed?.message||parsed?.error?.message||(typeof parsed?.error==='string'?parsed.error:'');
+    const detail=html?'':String(candidate||raw).replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,180);
+    const text=transient(status)?message(status):`API 오류 ${status}${detail?': '+detail:html?' · 서버의 HTML 오류 응답을 받았습니다.':''}`;
+    return Object.assign(new Error(text),{code:'CRACK_HTTP',retryAfterMs:wait,
+      diagnostic:{service:'크랙',method:ticket.method,httpStatus:status,retryAfterMs:wait,responseChars:raw.length}
+    });
+  }
+  function remaining(url='https://crack-api.wrtn.ai/'){
+    return Math.max(0,(states.get(keyOf(url))?.until||0)-Date.now());
+  }
+  return {begin,success,failure,remaining,statusOf,temporary,display};
+})();
+
 
 // BEGIN WISH LORE STORAGE 0.5.52
 function createWishLoreStorage(options) {
@@ -24972,6 +25047,7 @@ ${dialogueText}`;
     for(let attempt=0;!token&&attempt<4;attempt++){await sleep(250);token=getCookie('access_token');}
     if(!token){const error=new Error('Crack 로그인 정보를 읽지 못했습니다. 채팅 페이지를 새로고침하고, 계속 뜨면 Crack에 다시 로그인한 뒤 검수해 주세요. AI 요청은 보내지 않았습니다.');error.code='CRACK_AUTH_REQUIRED';throw error;}
 
+    const transportTicket=WSUITE.crackTransport.begin(method,url);
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method,
@@ -24989,10 +25065,9 @@ ${dialogueText}`;
           let parsed = null;
           try { parsed = res.responseText ? JSON.parse(res.responseText) : null; } catch (_) {}
           if (res.status >= 200 && res.status < 300) {
-            resolve(parsed ?? { ok: true });
+            WSUITE.crackTransport.success(transportTicket);resolve(parsed ?? { ok: true });
           } else {
-            const detail = parsed?.message || parsed?.error || res.responseText?.slice(0, 250) || '';
-            reject(new Error(`API 오류 ${res.status}${detail ? `: ${detail}` : ''}`));
+            reject(WSUITE.crackTransport.failure(transportTicket,res,parsed));
           }
         },
         ontimeout: () => reject(new Error('API 요청 시간 초과')),
@@ -49512,7 +49587,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.71-suite';
+  const SCRIPT_VERSION = '0.5.72-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -58136,7 +58211,7 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
   function transientError(error){
     if(error?.noAutoRetry)return false;
     if(['WISH_RESPONSE_SHAPE','WISH_RESPONSE_SHAPE_REPAIR','WISH_RELATION_EVIDENCE','WISH_RELATION_ACTION','WISH_RELATION_FIELDS','WISH_RELATION_REPAIR','WISH_REPAIR_BUDGET','WISH_RELATION_TRAJECTORY','WISH_TRAJECTORY_REPAIR','WISH_TRAJECTORY_REVIEW','WISH_TRAJECTORY_CHANGED','WISH_TRAJECTORY_BUDGET','WISH_SEMANTIC_REVIEW','WISH_STATE_REPAIR','WISH_STATE_REPAIR_BUDGET','WISH_USER_ABORT','WISH_STALE','WISH_DRAFT_CHANGED'].includes(error?.code))return false;
-    if(['AI_COOLDOWN','AI_QUEUE_FULL','AI_TIMEOUT'].includes(error?.code))return true;
+    if(['AI_COOLDOWN','AI_QUEUE_FULL','AI_TIMEOUT','CRACK_HTTP_BACKOFF'].includes(error?.code))return true;
     if(isCrackAuthError(error)||isHistoryReadChanged(error)||patchedHistoryError(error))return true;
     const text=String(error?.message||error||'');
     return /\b(?:429|500|502|503|504|529)\b|resource\s*exhausted|too\s*many\s*requests|overload|try\s*again\s*later|failed to fetch|network(?:error| error| request failed)|fetch failed|load failed|네트워크 오류|응답 시간 초과|timeout|timed out/i.test(text);
@@ -58163,7 +58238,7 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     if(error?.noAutoRetry)return 0;
     const hinted=Number(error?.retryAfterMs||error?.diagnostic?.retryAfterMs)||0;
     const wait=Number.isFinite(hinted)?Math.max(0,hinted):0;
-    if(error?.code==='AI_COOLDOWN')return Math.max(1000,wait);
+    if(error?.code==='AI_COOLDOWN'||error?.code==='CRACK_HTTP_BACKOFF')return Math.max(1000,wait);
     if(error?.code==='AI_QUEUE_FULL')return Math.max(15000,wait);
     if(isHistoryReadChanged(error))return [1500,3000,5000,10000,15000][Math.min(4,Math.max(0,Number(count)||0))];
     if(isCrackAuthError(error))return Math.max(authIntervals[Math.min(5,Math.max(0,Number(count)||0))],Number(error?.authRetryAt||crackAuthState.retryAt)-Date.now());
@@ -58213,10 +58288,10 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     if(r.at>0)queue(Math.max(0,r.at-Date.now()));
   }
   function retryState(room){
-    const u=room.unified||{},r=u.retry||{},authWaiting=authError(u),temporary=transientError({code:u.lastErrorCode,message:u.lastError}),on=automationEnabled(room);
-    const retryAt=on&&temporary?Number(r.at)||0:0,seconds=Math.max(0,Math.ceil((retryAt-Date.now())/1000));
-    return {historyWaiting:!!u.lastError&&isHistoryReadChanged({code:u.lastErrorCode,message:u.lastError}),temporaryError:!!u.lastError&&temporary,authWaiting,retryAt,retryCount:Number(r.count)||0,
-      retryStatus:u.draft?draftStatus(room):!on?'자동 정리 꺼짐':u.lastError?(isHistoryReadChanged({code:u.lastErrorCode,message:u.lastError})?'대화 갱신 감지 · '+(retryAt?seconds+'초 후 최신 기준 확인':'최신 기준 확인 대기'):temporary?(navigator.onLine===false?'인터넷 연결 대기 · 연결되면 재개':authWaiting?'로그인 확인 대기 · '+(retryAt?seconds+'초 후 다시 확인':'자동 재개 준비')+' · 미처리 대화 유지':retryAt?'일시 오류 · '+seconds+'초 후 자동 재시도':'반복 오류 · 새 대화 또는 화면 복귀 시 자동 재개'):hasPartialFailure(u)?(u.partialFailure.kind==='memory'?'기억':'인물')+' 검증 보류 · 다른 묶음은 자동 정리 중':'확인 필요 · 실패 기록을 확인해 주세요.'):'자동 정리 켜짐 · 새 확정 대화 감지 중',
+    const u=room.unified||{},r=u.retry||{},authWaiting=authError(u),issue={code:u.lastErrorCode,message:u.lastError},serverWaiting=!!u.lastError&&WSUITE.crackTransport.temporary(issue),temporary=transientError(issue),on=automationEnabled(room);
+    const retryAt=on&&temporary&&Number(r.at)>0?Math.max(Number(r.at),serverWaiting?Date.now()+WSUITE.crackTransport.remaining():0):0,seconds=Math.max(0,Math.ceil((retryAt-Date.now())/1000));
+    return {historyWaiting:!!u.lastError&&isHistoryReadChanged({code:u.lastErrorCode,message:u.lastError}),temporaryError:!!u.lastError&&temporary,authWaiting,serverWaiting,retryAt,retryCount:Number(r.count)||0,
+      retryStatus:u.draft?draftStatus(room):!on?'자동 정리 꺼짐':u.lastError?(isHistoryReadChanged({code:u.lastErrorCode,message:u.lastError})?'대화 갱신 감지 · '+(retryAt?seconds+'초 후 최신 기준 확인':'최신 기준 확인 대기'):temporary?(navigator.onLine===false?'인터넷 연결 대기 · 연결되면 재개':authWaiting?'로그인 확인 대기 · '+(retryAt?seconds+'초 후 다시 확인':'자동 재개 준비')+' · 미처리 대화 유지':serverWaiting?'크랙 서버 확인 대기 · '+(retryAt?seconds+'초 후 다시 확인':'새 대화 또는 화면 복귀 시 다시 확인'):retryAt?'일시 오류 · '+seconds+'초 후 자동 재시도':'반복 오류 · 새 대화 또는 화면 복귀 시 자동 재개'):hasPartialFailure(u)?(u.partialFailure.kind==='memory'?'기억':'인물')+' 검증 보류 · 다른 묶음은 자동 정리 중':'확인 필요 · 실패 기록을 확인해 주세요.'):'자동 정리 켜짐 · 새 확정 대화 감지 중',
       lastRunAt:Number(u.lastRunAt)||0};
   }
   const UNIFIED_CHUNK_CHARS=80000,UNIFIED_TIMEOUT_MS=240000;
@@ -58424,8 +58499,8 @@ async function run(room,force='') {
         if(state.currentRoom!==room)return false;
         if(await handleCancelledAttempt(room,e)){cancelledByUser=e?.code==='WISH_USER_ABORT';return false;}
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch)&&!isHistoryReadChanged(e))return false;
-        const queueWaiting=['AI_COOLDOWN','AI_QUEUE_FULL'].includes(e?.code);
-        if(!isHistoryReadChanged(e))WLOG.fail('기억·인물 통합 정리',e,{stage:e?.diagnostic?.stage||unifiedStage||'확정 대화 확인',level:queueWaiting?'warn':'error'});
+        const serverWait=e?.code==='CRACK_HTTP_BACKOFF',queueWaiting=['AI_COOLDOWN','AI_QUEUE_FULL'].includes(e?.code)||serverWait;
+        if(!isHistoryReadChanged(e)&&!serverWait)WLOG.fail('기억·인물 통합 정리',e,{stage:e?.diagnostic?.stage||unifiedStage||'확정 대화 확인',level:queueWaiting?'warn':'error'});
         if(state.currentRoom===room&&room.unified&&!localRestoreInProgress()){
           delete room.unified.partialFailure;
           room.unified.lastError=String(e.message||e);room.unified.lastErrorCode=String(e.code||'');room.unified.failedKind=jobKind;
@@ -58440,7 +58515,7 @@ async function run(room,force='') {
         }
         if(isHistoryReadChanged(e)){if(force)notify('대화가 갱신됐어요. 잠시 뒤 최신 기준으로 다시 확인합니다.','success',3500,{logged:true});}
         else if(isCrackAuthError(e)){if(force||Number(room.unified?.retry?.count)<=1)notify('크랙 로그인 확인 대기 · 확인되면 자동 정리를 이어갑니다.','warn',3500,{logged:true});}
-        else if(queueWaiting){if(force)notify('AI 작업 대기 · '+String(e.message||e),'warn',3500,{logged:true});}
+        else if(queueWaiting){if(force)notify((serverWait?'서버 확인 대기 · ':'AI 작업 대기 · ')+String(e.message||e),'warn',3500,{logged:true});}
         else if(force||!transientError(e)||Number(room.unified?.retry?.count)<=1)notify('통합 정리 보류: '+String(e.message||e)+(e.relationshipEvidencePreview?' · 실패한 인용: '+e.relationshipEvidencePreview:''),'error',8000,{logged:true});return false;
       }finally{quietCheck=false;unifiedStage='';active.delete(room.chatId);aiUpdateRunning=false;}
     });running.set(room.chatId,job);
@@ -61919,12 +61994,13 @@ function roomCopyMergeCognition(targetRaw,sourceRaw,targetRid) {
     try{return await work;}finally{if(crackAuthState.waiting===work)crackAuthState.waiting=null;}
   }
   function pendingSyncIssue(pending){
-    const error=String(pending?.lastSyncError||'');
-    return {error,authWaiting:!!error&&(isCrackAuthError({code:pending?.lastSyncErrorCode})||error.includes('로그인 토큰을 찾지 못했습니다')),lastCheckedAt:Number(pending?.verifiedAt||0)};
+    const rawError=String(pending?.lastSyncError||''),issue={message:rawError,code:pending?.lastSyncErrorCode};
+    const error=WSUITE.crackTransport.display(issue),serverWaiting=!!rawError&&WSUITE.crackTransport.temporary(issue);
+    return {error,serverWaiting,authWaiting:!!error&&(isCrackAuthError({code:pending?.lastSyncErrorCode})||error.includes('로그인 토큰을 찾지 못했습니다')),lastCheckedAt:Number(pending?.verifiedAt||0)};
   }
   function recordPendingSyncError(room,error){
     if(!room?.pending)return;
-    WLOG.fail('기억 주입 동기화',error,{service:'크랙'});
+    if(error?.code!=='CRACK_HTTP_BACKOFF')WLOG.fail('기억 주입 동기화',error,{service:'크랙'});
     room.pending.lastSyncError=String(error?.message||error);
     room.pending.lastSyncErrorCode=String(error?.code||'');
     room.pending.lastSyncErrorAt=Date.now();
@@ -61934,6 +62010,7 @@ function roomCopyMergeCognition(targetRaw,sourceRaw,targetRid) {
 
   async function apiRequest(method, url, body = undefined, options = {}) {
     const token=await waitForCrackToken(),stamp=aiHashTiny(token);
+    const transportTicket=WSUITE.crackTransport.begin(method,url);
     const utf16=options.encoding==='utf-16le'&&method==='PATCH'&&typeof body?.message==='string';
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
@@ -61943,10 +62020,10 @@ function roomCopyMergeCognition(targetRaw,sourceRaw,targetRid) {
         timeout:Math.max(1000,Math.min(120000,Number(options.timeoutMs)||20000)),
         onload:res=>{
           let parsed=null;try{parsed=res.responseText?JSON.parse(res.responseText):null;}catch{}
-          if(res.status>=200&&res.status<300){crackAuthSuccess(stamp);resolve(parsed??{ok:true});}
+          if(res.status>=200&&res.status<300){WSUITE.crackTransport.success(transportTicket);crackAuthSuccess(stamp);resolve(parsed??{ok:true});}
           // Never silently replay a PATCH/POST after an auth error.
           else if(res.status===401)reject(crackAuthError('CRACK_AUTH_REJECTED',{stamp}));
-          else{const detail=parsed?.message||parsed?.error||res.responseText?.slice(0,250)||'';reject(Object.assign(new Error(`API 오류 ${res.status}${detail?`: ${detail}`:''}`),{code:'CRACK_HTTP',diagnostic:{service:'크랙',method,httpStatus:res.status}}));}
+          else reject(WSUITE.crackTransport.failure(transportTicket,res,parsed));
         },
         ontimeout:()=>reject(Object.assign(new Error('API 요청 시간 초과'),{code:'CRACK_TIMEOUT'})),
         onerror:()=>reject(Object.assign(new Error('네트워크 오류'),{code:'CRACK_NETWORK'})),
@@ -68711,7 +68788,7 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
         const rid=String(apiChatIdOf(room)||''),gate=generationGates.get(rid);
         if(gate)await recoverGenerationGate(rid,gate);
         if(ExternalReplay.pending(rid)||WishDisplayDrain.pending(rid))return;
-        if(!gate&&Date.now()<crackAuthState.retryAt)return;
+        if(!gate&&(Date.now()<crackAuthState.retryAt||WSUITE.crackTransport.remaining()>0))return;
         await WishNewChatInjection.start(room);
         if(state.currentRoom!==room||unstartedRooms.has(room))return;
         if(!room.pending)void WUIRefreshTurnCount(room);
@@ -68741,6 +68818,8 @@ async function reconcileStableCarrier(room,reason='update',knownFrame=null,contr
   }
 
   function nextRecoveryDelay() {
+    const serverWait=WSUITE.crackTransport.remaining();
+    if(serverWait>0)return Math.max(APP.idlePollMs,serverWait);
     if (generationGates.has(String(apiChatIdOf(state.currentRoom)||''))) return APP.activePollMs;
     refreshCrackAuthCookie();
     if(crackAuthState.retryAt>Date.now())return Math.max(APP.idlePollMs,crackAuthState.retryAt-Date.now());
@@ -72291,16 +72370,16 @@ const ta = (k, v, ph = '', h = '', x = '') => `<textarea data-bind="${esc(k)}" p
     else if(!ready){label='API 연결하기';action='api';icon='key';}
     else if(restartRequired){label='임시 정리 다시 시작';action='draftRestart';}
     else if(!isSuite&&u.draft){label='이어서 정리·검증';action='unifiedRetry';}
-    else if(!isSuite&&u.error){label='다시 정리';action='unifiedRetry';}
+    else if(!isSuite&&u.error){label=u.serverWaiting?'서버 확인 후 정리':'다시 정리';action='unifiedRetry';}
     const status=isSuite?(modeMismatch?'⚠️ 이전 방식의 임시 정리가 남아 있어요. 정리 방식을 확인해 이어가세요.':busy?'카드별 기억 정리 진행 중':autoOn?'자동 정리 켜짐':'자동 정리 꺼짐'):retryStatusText(u)||(autoOn?'자동 정리 켜짐':'자동 정리 꺼짐');
     const draftProgress=!isSuite?homeDraftProgress(u):null;
     const cadenceRow=(label,pending,every,enabled,progress)=>`<div class="m3-memory-cadence-row"><span>${label} ${progress?`<b>${fmt(progress.processed)}/${fmt(progress.total)}턴</b> 임시 정리`:`<b>${fmt(pending)}턴</b> 미처리`}</span><span class="m3-cadence-target">${fmt(every)}턴${enabled?'마다 자동 정리':' 주기 · 자동 꺼짐'}</span></div>`;
     const cadence=isSuite?`<p class="m3-muted">카드별 갱신 · 기억 ${fmt(s.memoryEvery||10)}턴 / 인물 ${fmt(s.peopleEvery||1)}턴 주기</p>`:
       `<div class="m3-memory-cadence">${cadenceRow('기억',u.memoryPending??V.memory.committed,u.memoryEvery||V.memory.target||10,u.enabled&&u.memoryEnabled,draftProgress?.memory)}${cadenceRow('인물',u.observePending||0,u.observeEvery||V.cog.every||1,u.enabled&&u.observeEnabled,draftProgress?.observe)}</div>`;
-    const cadenceHelp=!isSuite&&ready&&autoOn&&!busy&&!u.error&&!u.draft?`<p class="m3-memory-note">자동 정리가 켜진 항목은 설정한 턴수가 쌓이면 처리돼요. 미리 정리할 때만 ‘지금 정리’를 누르세요.</p>`:'';
+    const cadenceHelp=!isSuite&&u.serverWaiting&&!u.draft?`<p class="m3-memory-note">미처리 턴수는 마지막 확인 값입니다. 서버 조회가 성공하면 최신 값으로 갱신합니다.</p>`:!isSuite&&ready&&autoOn&&!busy&&!u.error&&!u.draft?`<p class="m3-memory-note">자동 정리가 켜진 항목은 설정한 턴수가 쌓이면 처리돼요. 미리 정리할 때만 ‘지금 정리’를 누르세요.</p>`:'';
     const draftNote=u.draft?`<p class="m3-memory-note">위 숫자는 ‘임시 처리 / 이번 목표’예요. 최종 검증 후 기억에 반영합니다.${u.error?' 정리 주기는 시작 기준이에요. 오류로 완료가 지연되면 미처리 턴이 쌓여요.':''}${draftProgress&&(draftProgress.memory.next||draftProgress.observe.next)?` 이후 새 대화: 기억 ${fmt(draftProgress.memory.next)}턴·인물 ${fmt(draftProgress.observe.next)}턴은 다음 정리에서 처리합니다.`:''}${V.inj.armed?' 정리 중에도 마지막으로 저장된 기억으로 대화할 수 있어요.':''}<br>화면을 닫으면 처리가 늦어질 수 있어요. 다시 열면 저장된 단계부터 이어갑니다.</p>`:'';
     const controls=`<div class="m3-card-actions">${btn(autoOn?'자동 정리 일시정지':'자동 정리 켜기','autoToggle',{cls:'quiet mini',dis:busy||!ready||modeMismatch,icon:autoOn?'pause':'play'})}${btn('주기·항목 설정','unifiedRoute',{arg:'ai:automation',cls:'quiet mini',icon:'set'})}</div>`;
-    const errorText=u.errorCode==='WISH_RELATION_FIELDS'||/^관계 변경 (?:current|milestone|unresolved) 길이\/형식 오류/.test(u.error||'')?'관계 정리 결과의 길이·형식이 맞지 않아 적용을 보류했어요. 기존 기억과 완료된 정리는 유지됩니다.':/^WISH_RESPONSE_SHAPE/.test(u.errorCode||'')||/응답(?:\.|\[).*알 수 없는 필드/.test(u.error||'')?'AI 정리 응답의 항목 형식이 맞지 않아 보류했어요. 기존 기억은 유지됩니다. '+(u.draft?'위의 ‘이어서 정리·검증’을 눌러 주세요.':'위의 ‘다시 정리’를 눌러 주세요.'):u.error;
+    const errorText=u.errorCode==='WISH_RELATION_FIELDS'||/^관계 변경 (?:current|milestone|unresolved) 길이\/형식 오류/.test(u.error||'')?'관계 정리 결과의 길이·형식이 맞지 않아 적용을 보류했어요. 기존 기억과 완료된 정리는 유지됩니다.':/^WISH_RESPONSE_SHAPE/.test(u.errorCode||'')||/응답(?:\.|\[).*알 수 없는 필드/.test(u.error||'')?'AI 정리 응답의 항목 형식이 맞지 않아 보류했어요. 기존 기억은 유지됩니다. '+(u.draft?'위의 ‘이어서 정리·검증’을 눌러 주세요.':'위의 ‘다시 정리’를 눌러 주세요.'):WSUITE.crackTransport.display({code:u.errorCode,message:u.error});
     const error=!isSuite&&u.error?`<p class="m3-error-detail">${busy?'이전 정리 오류: ':''}${esc(errorText)}</p>`:'';
     const recovery=!isSuite&&u.draft&&!restartRequired?`<p class="m3-muted">임시 결과를 버리고 원문부터 다시 처리해야 할 때만 사용하세요. 현재 적용된 기억은 유지됩니다.</p>${btn('임시 결과를 버리고 다시 시작','draftRestart',{cls:'quiet mini',dis:busy||!ready,icon:'refresh'})}`:'';
     const details=fold('home-memory-details','설정·작업 상세',controls+error+`<div class="m3-card-actions">${btn('실패·주의 기록','errorLogs',{cls:'quiet mini',icon:'doc'})}</div>`+recovery);
@@ -72315,10 +72394,10 @@ const ta = (k, v, ph = '', h = '', x = '') => `<textarea data-bind="${esc(k)}" p
 
 function vCheck(){
     const u=V.unified||{},I=V.inj,s=WSUITE.suite?.summary()||{},isSuite=WSUITE.host.automation(state.currentRoom)==='suite',ready=!!WSUITE.host.aiReady?.();
-    const status=u.draft?'기존 기억 유지 · 최신 정리 미완료':I.armed?(I.authWaiting?'로그인 확인 대기':I.verified?'AI에 전달할 기억 저장 확인됨':I.error?'기억 전달 확인 필요':'기억 전달 확인 중'):'기억 전달 꺼짐';
+    const status=u.draft?'기존 기억 유지 · 최신 정리 미완료':I.armed?(I.authWaiting?'로그인 확인 대기':I.serverWaiting?'크랙 서버 확인 대기':I.verified?'AI에 전달할 기억 저장 확인됨':I.error?'기억 전달 확인 필요':'기억 전달 확인 중'):'기억 전달 꺼짐';
     const fresh=V.fresh?.show?`<section class="m3-panel m3-focus" data-key="home-fresh"><b>${esc(V.fresh.title||'새 방 시작 설정')}</b><p>${esc(V.fresh.desc||'')}</p>${btn('나중에','freshSkip',{cls:'quiet mini'})}${btn('적용','freshApply',{cls:'mini'})}</section>`:'';
     const pending=V.reviews.length+(s.pending||0);
-    const deliveryNotice=I.error?`<p class="m3-memory-note m3-attention-status">${I.authWaiting?'⚠️ 사이트 로그인 확인 후 하단의 서버 재검증을 눌러 주세요.':'⚠️ 기억 전달 확인이 필요해요. 하단의 서버 재검증에서 다시 확인할 수 있습니다.'}</p>`:'';
+    const deliveryNotice=I.error?`<p class="m3-memory-note m3-attention-status">${I.authWaiting?'⚠️ 사이트 로그인 확인 후 하단의 서버 재검증을 눌러 주세요.':I.serverWaiting?'⚠️ 크랙 서버 응답을 기다리고 있어요. 저장된 기억은 유지되며, 정상 응답 후 전달 상태를 다시 확인합니다.':'⚠️ 기억 전달 확인이 필요해요. 하단의 서버 재검증에서 다시 확인할 수 있습니다.'}</p>`:'';
     return pageHead('홈')+fresh+(isManualAiProvider()?manualJobPanel():'')+(!ready?`<section class="m3-panel m3-onboarding" data-key="first-connection"><b>처음에는 두 가지만 확인하세요</b><ol><li>사용할 API와 모델을 연결해요.</li><li>자동 정리할 항목과 주기를 정해요.</li></ol><p class="m3-muted">아래 API 연결하기로 시작하세요. 연결 뒤 설정·작업 상세에서 정리 주기를 정할 수 있습니다.</p></section>`:'')+
       `<section class="m3-panel m3-home-status" data-key="home-status"><div class="m3-row m3-sp"><b class="${status.includes('확인 필요')?'m3-attention-status':''}">${esc(warningStatusText(status))}</b><span class="m3-tag ${I.verified?'ok':''}">${fmt(I.total)} / ${fmt(I.max||APP.carrierSafeChars)}자</span></div>${capMeter()}${deliveryNotice}<div class="m3-card-actions">${btn('기억 미리보기','preview',{cls:'mini',icon:'eye'})}${homeDeliveryToggle()}</div>${homeDeliveryDetails()}</section>`+
       homeMemoryCard(u,s,isSuite,ready)+unifiedHomeCards()+
@@ -72886,6 +72965,7 @@ vExternalRebuild(run||ExternalBundles.busy())+
     if(status.running)return '자동 정리 진행 중 · 결과 확인 대기';
     if(status.authWaiting)return '로그인 확인 대기 · 다시 확인 준비 중 · 미처리 대화 유지';
     if(status.historyWaiting)return '대화 갱신 감지 · 최신 기준 확인 준비 중';
+    if(status.serverWaiting)return '크랙 서버 확인 대기 · 다시 확인 준비 중';
     return '일시 오류 · 자동 재시도 준비 중';
   }
   let statusClock=0;
@@ -74179,7 +74259,7 @@ guide(d) {
   function jobLabel() { if (V.job) return V.job.label || '결과 확인 중'; if (S.jobs.length) return S.jobs[S.jobs.length - 1].label; return ''; }
   function vFoot() {
     const a = V.inj.armed, v = V.inj.verified, busy=!!V.job&&!V.job.quiet;
-    return `<button type="button" class="m3-inject ${a ? 'on' : ''}" data-act="${a ? 'release' : 'arm'}"${busy?' disabled':''}><span class="m3-dot"></span>${a ? '주입 해제' : '주입 시작'}</button>${btn('미리보기', 'preview', { cls: 'mini', icon: 'eye' })}${a ? btn('서버 재검증', 'reverify', { cls: 'quiet mini', icon: 'refresh', feat: 'reverify', dis:busy }) : ''}<span class="m3-state">${a ? (V.inj.authWaiting ? '로그인 확인 대기 · 저장된 기억 유지' : v ? `서버 저장 확인됨 · ${fmt(V.inj.total)}자` : V.inj.error ? '주입 확인 실패 · 재검증 필요' : V.inj.awaitingItems ? '자동 주입 켜짐 · 자료 대기' : V.inj.awaitingCarrier ? '주입 켜짐 · 이전 AI 답변 대기' : `서버 저장 확인 중${dots}`) : '주입 꺼짐 · 기억은 그대로'}</span>`;
+    return `<button type="button" class="m3-inject ${a ? 'on' : ''}" data-act="${a ? 'release' : 'arm'}"${busy?' disabled':''}><span class="m3-dot"></span>${a ? '주입 해제' : '주입 시작'}</button>${btn('미리보기', 'preview', { cls: 'mini', icon: 'eye' })}${a ? btn('서버 재검증', 'reverify', { cls: 'quiet mini', icon: 'refresh', feat: 'reverify', dis:busy }) : ''}<span class="m3-state">${a ? (V.inj.authWaiting ? '로그인 확인 대기 · 저장된 기억 유지' : V.inj.serverWaiting ? '크랙 서버 확인 대기 · 저장된 기억 유지' : v ? `서버 저장 확인됨 · ${fmt(V.inj.total)}자` : V.inj.error ? '주입 확인 실패 · 재검증 필요' : V.inj.awaitingItems ? '자동 주입 켜짐 · 자료 대기' : V.inj.awaitingCarrier ? '주입 켜짐 · 이전 AI 답변 대기' : `서버 저장 확인 중${dots}`) : '주입 꺼짐 · 기억은 그대로'}</span>`;
   }
   function vOverlay() {
     const nl = navList(), idx = Math.max(0, nl.findIndex(t => t[0] === S.tab)), badge = { check: V.reviews.length, cognition: V.reviews.length };
