@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.73
+// @version      0.5.74
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,11 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.74 · Firebase App Check 오류 진단 보존
+ * 서버 원문을 비밀값 없이 보존하고, 모델 인증 필수·토큰 거절·할당량·장애를 구분합니다.
+ * 인증 상태는 실제 저장값으로 표시합니다. 인증·과금·모델 설정은 자동 변경하지 않습니다.
+ */
 
 /* 0.5.73 · 조회 서버 대체 및 정리 범위 복구
  * WRMC 2.0.1.3의 contents-api 5xx 조회 대체 조건을 두 경로에 반영합니다.
@@ -684,7 +689,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.73'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.74'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -694,6 +699,69 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
  * https://firebase.google.com/docs/app-check/web/recaptcha-enterprise-provider
  * https://firebase.google.com/docs/reference/appcheck/rest/v1/projects.apps/exchangeDebugToken
  */
+// 0.5.74: classify only the received Firebase response. No authentication,
+// configuration changes, model fallback or additional requests happen here.
+const WishFirebaseErrors=(()=>{
+  const textOf=e=>String(e?.diagnostic?.serverMessage||e?.message||e||'');
+  function redact(value,secrets=[]){
+    let text=String(value||'');
+    for(const secret of secrets)if(typeof secret==='string'&&secret.length>=4)text=text.split(secret).join('[설정값 숨김]');
+    return text.replace(/https?:\/\/[^\s<>"']+/gi,'[주소 생략]')
+      .replace(/\b(?:Bearer|Basic)\s+[^\s"',;]+/gi,'[인증정보 숨김]')
+      .replace(/\b(?:AIza[\w-]{20,}|sk-[\w-]{10,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g,'[인증정보 숨김]')
+      .replace(/(["']?(?:api[_ -]?key|debug[_ -]?token|access[_ -]?token|refresh[_ -]?token|token|authorization|password|secret|cookie|email)["']?\s*[=:]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)/gi,'$1[숨김]')
+      .replace(/projects\/[^\s/]+\/apps\/[^\s/]+/gi,'projects/[숨김]/apps/[숨김]')
+      .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi,'[이메일 숨김]').slice(0,900);
+  }
+  function statusOf(error){
+    const known=Number(error?.diagnostic?.httpStatus||error?.status||error?.statusCode||error?.customData?.status);
+    if(Number.isInteger(known)&&known>=100&&known<=599)return known;
+    return Number(textOf(error).match(/(?:\[|\bHTTP\s*[:=]?\s*|\bstatus\s*[:=]\s*|API 오류\s*)([45]\d{2})\b/i)?.[1])||0;
+  }
+  function reasonOf(error){
+    const text=textOf(error),code=String(error?.code||'');
+    if(!/app[ _-]?check|attestation|recaptcha enterprise/i.test(text+' '+code))return '';
+    const status=statusOf(error);
+    // 429 / 5xx refer to token service availability, not an invalid credential.
+    if(status===429||/quota|resource.exhausted|throttl|요청 한도/i.test(text))return 'rate';
+    if(status>=500||/network|failed to fetch|fetch failed|시간.*초과|timeout|timed out|네트워크|서버에 연결하지 못/i.test(text))return 'network';
+    if(/firebase ai logic has been deactivated/i.test(text))return 'inactive';
+    if(/to access this model[\s\S]*app[ _-]?check/i.test(text))return 'model-required';
+    if(/limited[- ]use|replay protection|token.{0,30}(?:already (?:used|consumed)|reused)/i.test(text))return 'replay';
+    if(/(?:must|requires?|enforc|missing|without|no valid)[\s\S]{0,90}app[ _-]?check|app[ _-]?check[\s\S]{0,90}(?:required|enforced|missing)/i.test(text))return 'required';
+    if(/invalid|expired|rejected|forbidden|denied|거절|거부/i.test(text)||status===401||status===403)return 'rejected';
+    return 'unknown';
+  }
+  const codes={'model-required':'FIREBASE_APPCHECK_REQUIRED',required:'FIREBASE_APPCHECK_REQUIRED',inactive:'FIREBASE_APPCHECK_INACTIVE',replay:'FIREBASE_APPCHECK_REPLAY',rejected:'FIREBASE_APPCHECK_REJECTED',unknown:'FIREBASE_APPCHECK_UNKNOWN',rate:'FIREBASE_APPCHECK_RATE',network:'FIREBASE_APPCHECK_NETWORK'};
+  function describe(reason,mode='unknown'){
+    const off=mode==='off'?' 이 요청은 App Check OFF로 토큰을 보내지 않았습니다.':'';
+    const follow='설정 → 공통 API 연결 → App Check 설정에서 실제 인증 방식을 확인하세요. 본인 Firebase 프로젝트의 같은 웹 앱에 인증을 설정한 뒤 저장·새로고침하고 연결 테스트를 한 번 실행하세요.';
+    const info={
+      'model-required':['모델의 App Check 필수 요구','Firebase가 이 모델을 사용하려면 유효한 App Check 인증이 필요하다고 응답했습니다.'+off,follow],
+      required:['App Check 인증 필요','Firebase가 유효한 App Check 인증을 요구했습니다.'+off,follow],
+      inactive:['Firebase AI Logic 프로젝트 비활성','Firebase가 프로젝트의 AI Logic을 비활성 상태로 알리며 App Check 적용을 요구했습니다.'+off,'본인 Firebase 콘솔의 AI Logic 상태와 App Check 적용을 확인하세요. '+follow],
+      replay:['App Check 토큰 종류 확인','응답에 일회용 토큰 또는 재사용 방지 조건이 명시됐습니다. 이 버전은 세션 토큰만 지원합니다.','본인 Firebase 프로젝트의 Replay protection 설정을 확인하세요. 일회용 토큰이 필수인 설정에는 현재 연결 방식이 호환되지 않습니다.'],
+      rejected:['App Check 인증 거절','App Check 관련 인증이 거절됐습니다. 이 응답만으로 키·도메인·토큰 중 어느 항목이 원인인지 확정할 수 없습니다.'+off,follow+' 아래 서버 응답을 함께 확인하세요.'],
+      unknown:['App Check 확인 필요','App Check 관련 오류를 받았지만 정확한 이유를 분류하지 못했습니다.'+off,'아래 서버 응답과 요청 당시 인증 모드를 확인하세요. 이전 버전의 기록에는 원문이 없을 수 있으므로 새 버전에서 연결 테스트를 한 번 실행해 주세요.'],
+      rate:['App Check 요청 한도','App Check 인증 서비스가 요청 한도를 알렸습니다. 토큰이 잘못됐다는 뜻은 아닙니다.','표시된 대기 시간 이후 한 번만 다시 확인하세요. 계속되면 본인 프로젝트의 App Check·reCAPTCHA 할당량을 확인하세요.'],
+      network:['App Check 서비스 연결','App Check 토큰 준비 중 서버 오류 또는 연결 문제가 발생했습니다. 이 오류만으로 인증 설정이 잘못됐다고 단정할 수 없습니다.','잠시 후 네트워크와 Firebase 상태를 확인하고 다시 시도하세요. 반복 클릭이나 기억 재구축은 필요하지 않습니다.']
+    }[reason];
+    return info?{category:info[0],cause:info[1],next:info[2]}:null;
+  }
+  function wrap(error,cfg,mode='unknown',extraSecrets=[]){
+    const reason=reasonOf(error),httpStatus=statusOf(error);
+    const secrets=[cfg?.apiKey,cfg?.projectId,cfg?.appId,...extraSecrets];
+    const serverMessage=redact(textOf(error),secrets),info=describe(reason,mode);
+    const clean=new Error(info?'Firebase '+info.category+': '+info.cause:serverMessage||'Firebase 연결 실패');
+    clean.code=codes[reason]||String(error?.code||'FIREBASE_ERROR');
+    for(const k of ['retryAfterMs','status','noAutoRetry'])if(error?.[k]!=null)clean[k]=error[k];
+    if(reason&&!['rate','network'].includes(reason))clean.noAutoRetry=true;
+    clean.diagnostic={...error?.diagnostic,httpStatus,provider:'firebase',service:'Firebase AI Logic',appCheckMode:mode,firebaseReason:reason,serverMessage,sdkCode:redact(error?.diagnostic?.sdkCode||error?.code||'',secrets)};
+    return clean;
+  }
+  return {redact,statusOf,reasonOf,describe,wrap};
+})();
+
 function createCrackFirebaseAppCheck(options) {
   'use strict';
   const defaults = () => ({mode:'off', siteKey:'', debugToken:'', revision:'off'});
@@ -921,7 +989,10 @@ function createCrackFirebaseAppCheck(options) {
       const message = String(e?.message || '');
       if (message.startsWith('App Check: ') && message.length < 230) throw e;
       if (/429|quota|throttl/i.test(message)) throw fail('인증 요청 한도입니다. 잠시 기다린 뒤 다시 시도해 주세요.');
-      if (/403|401|invalid|denied/i.test(message)) throw fail('인증을 거절했습니다. 앱 등록·사이트 키·도메인·토큰을 확인해 주세요.');
+      if (/403|401|invalid|denied/i.test(message)) {
+        const safe=message.replace(/https?:\/\/[^\s<>"']+/gi,'[주소 생략]').replace(/\b(?:AIza[\w-]{20,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g,'[인증정보 숨김]').replace(/(["']?(?:api[_ -]?key|debug[_ -]?token|token|authorization|secret)["']?\s*[=:]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)/gi,'$1[숨김]').slice(0,900);
+        throw Object.assign(fail(safe),{code:String(e?.code||'FIREBASE_APPCHECK_TOKEN')});
+      }
       throw fail('인증 모듈 또는 토큰을 준비하지 못했습니다. 네트워크·차단 확장·페이지 보안 설정을 확인해 주세요.');
     }
   }
@@ -962,6 +1033,13 @@ if(channel?.isConnected){channel.textContent=JSON.stringify(answer);channel.disp
       if (brokers.has(key)) { brokers.get(key).dispose(); brokers.delete(key); }
     }
   }
+  function stateLabel(raw) {
+    try {
+      const cfg=parseConfig(raw);if(!cfg?.projectId||!cfg?.appId)return 'App Check · Firebase 설정 확인';
+      const s=get(cfg),label={off:'OFF · 토큰 안 보냄',enterprise:'ON · Enterprise',debug:'디버그 토큰'}[s.mode];
+      return 'App Check · '+label+(needsReload.has(scopeOf(cfg))?' · 새로고침 필요':'');
+    } catch (_) { return 'App Check · 저장 설정 확인 필요'; }
+  }
   function makeButton(getRaw = options.getConfig, getVersion = options.getVersion) {
     const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Firebase App Check 설정';
     b.style.cssText = 'display:block;width:100%;margin-top:8px;padding:9px 12px;border:1px solid #8a8a9a;border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px;cursor:pointer;';
@@ -980,7 +1058,7 @@ if(channel?.isConnected){channel.textContent=JSON.stringify(answer);channel.disp
     const root = host.attachShadow({mode:'closed'});
     root.innerHTML = `<style>
 :host{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans-serif;color:#eee;--bg:#22232b;--line:#515260;--muted:#c0c2ce;--field:#16171e}*{box-sizing:border-box}.scrim{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#0007;padding:12px}.panel{width:min(560px,100%);max-height:min(620px,100%);display:flex;flex-direction:column;background:var(--bg);color:#eee;border:1px solid var(--line);border-radius:14px;box-shadow:0 16px 50px #0007;overflow:hidden}header{display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--line)}header strong{font-size:15px;flex:1}button{border:1px solid var(--line);border-radius:8px;background:#343644;color:#fff;padding:9px 11px;font:inherit;font-size:13px;cursor:pointer;min-height:36px}button:disabled{opacity:.5;cursor:wait}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #bca9ff;outline-offset:2px}.body{overflow:auto;overscroll-behavior:contain;padding:12px 15px;min-height:0}.sub{font-size:12px;color:var(--muted);line-height:1.55;overflow-wrap:anywhere;margin:0 0 10px;white-space:pre-line}.field{display:grid;gap:6px;font-size:13px;margin:10px 0}select,input{width:100%;border:1px solid var(--line);border-radius:8px;background:var(--field);color:#fff;padding:9px;font:inherit;font-size:16px;min-width:0}.row{display:flex;gap:7px;flex-wrap:wrap}.row>*{flex:1}.small{font-size:12px;color:var(--muted);line-height:1.6}.state{white-space:pre-wrap;overflow-wrap:anywhere;background:#181921;border:1px solid var(--line);border-radius:8px;padding:9px;font-size:12px;line-height:1.6;margin-top:10px}.state[data-error='1']{border-color:#e79494}details{margin-top:10px}summary{font-size:13px;cursor:pointer}.help{font-size:12px;line-height:1.65;color:var(--muted);white-space:pre-line}footer{display:grid;grid-template-columns:1fr 1fr;gap:8px;border-top:1px solid var(--line);padding:10px 15px;flex-shrink:0}.primary{background:#66518e;border-color:#9680bb}[hidden]{display:none!important}label.check{display:flex;gap:8px;font-size:12px;line-height:1.5;margin:10px 0}label.check input{width:17px;min-height:17px;flex:0 0 17px}a{color:#cbbcff}@media(max-width:380px){.body{padding:10px}.row button{padding:8px}.panel header{padding:10px}}
-</style><div class="scrim"><section class="panel" role="dialog" aria-modal="true" aria-labelledby="title"><header><strong id="title">Firebase App Check</strong><button type="button" id="close" aria-label="닫기">×</button></header><div class="body"><p class="sub" id="scope"></p><p class="sub">지금은 <b>OFF · 기존 연결 유지</b>로 두면 됩니다. 설치만으로 인증·과금·모델·자동 정리 설정을 바꾸지 않습니다.</p><label class="field">인증 방식<select id="mode"><option value="off">OFF · 기존 연결 유지</option><option value="enterprise">ON · reCAPTCHA Enterprise</option><option value="debug">개발 테스트 · 디버그 토큰</option></select></label><div id="enterprise"><label class="field">reCAPTCHA Enterprise 사이트 키<input id="site" type="text" autocomplete="off" spellcheck="false" placeholder="Firebase API 키가 아닌 사이트 키"></label><p class="small">같은 프로젝트의 웹 앱에 등록한 점수 기반 키를 사용합니다. 실행 도메인·CSP·차단 확장에 따라 실제 인증 확인이 필요합니다.</p></div><div id="debug"><label class="field">본인 프로젝트의 디버그 토큰<input id="secret" type="password" autocomplete="new-password" spellcheck="false" placeholder="본인 Firebase 콘솔에 등록한 토큰"></label><div class="row"><button type="button" id="reveal">보기</button><button type="button" id="copy">토큰 복사</button><button type="button" id="new">새 토큰 생성</button></div><label class="check"><input type="checkbox" id="consent"><span>개발·검증에만 사용하며, 토큰과 디버그 설정을 다른 사람에게 배포하지 않겠습니다.</span></label><p class="small">생성만으로 등록되지 않습니다. Firebase → 보안 → App Check → 앱 → 해당 웹 앱 ⋮ → 디버그 토큰 관리에 등록하세요. 토큰은 이 확프의 GM 저장소에 별도 보관하며 일반 백업에 넣지 않습니다. 삭제·유출 시 Firebase 콘솔에서도 폐기하세요.</p></div><div class="row"><button type="button" id="test">토큰 발급 검사</button><button type="button" id="console">Firebase 콘솔</button></div><div class="state" id="status" role="status" aria-live="polite"></div><details><summary>설정 순서와 주의사항</summary><div class="help">① 지금은 OFF로 사용해도 기존 연결 방식이 유지됩니다.
+</style><div class="scrim"><section class="panel" role="dialog" aria-modal="true" aria-labelledby="title"><header><strong id="title">Firebase App Check</strong><button type="button" id="close" aria-label="닫기">×</button></header><div class="body"><p class="sub" id="scope"></p><p class="sub">서버 정책과 프로젝트 설정에 따라 App Check 인증이 필요합니다. <b>OFF에서는 인증 토큰을 보내지 않습니다.</b> 설정 변경 후 페이지를 새로고침하세요.</p><label class="field">인증 방식<select id="mode"><option value="off">OFF · 기존 연결 유지</option><option value="enterprise">ON · reCAPTCHA Enterprise</option><option value="debug">개발 테스트 · 디버그 토큰</option></select></label><div id="enterprise"><label class="field">reCAPTCHA Enterprise 사이트 키<input id="site" type="text" autocomplete="off" spellcheck="false" placeholder="Firebase API 키가 아닌 사이트 키"></label><p class="small">같은 프로젝트의 웹 앱에 등록한 점수 기반 키를 사용합니다. 실행 도메인·CSP·차단 확장에 따라 실제 인증 확인이 필요합니다.</p></div><div id="debug"><label class="field">본인 프로젝트의 디버그 토큰<input id="secret" type="password" autocomplete="new-password" spellcheck="false" placeholder="본인 Firebase 콘솔에 등록한 토큰"></label><div class="row"><button type="button" id="reveal">보기</button><button type="button" id="copy">토큰 복사</button><button type="button" id="new">새 토큰 생성</button></div><label class="check"><input type="checkbox" id="consent"><span>개발·검증에만 사용하며, 토큰과 디버그 설정을 다른 사람에게 배포하지 않겠습니다.</span></label><p class="small">생성만으로 등록되지 않습니다. Firebase → 보안 → App Check → 앱 → 해당 웹 앱 ⋮ → 디버그 토큰 관리에 등록하세요. 토큰은 이 확프의 GM 저장소에 별도 보관하며 일반 백업에 넣지 않습니다. 삭제·유출 시 Firebase 콘솔에서도 폐기하세요.</p></div><div class="row"><button type="button" id="test">토큰 발급 검사</button><button type="button" id="console">Firebase 콘솔</button></div><div class="state" id="status" role="status" aria-live="polite"></div><details><summary>설정 순서와 주의사항</summary><div class="help">① 서버가 App Check를 요구하면 OFF로는 연결되지 않습니다.
 ② 본인 Firebase 웹 앱에 App Check 제공자를 등록합니다.
 ③ 이 창에서 사이트 키를 입력하고 토큰 발급을 검사합니다.
 ④ 저장 후 크랙 페이지를 새로고침합니다. 기존 초안은 먼저 저장하세요.
@@ -1041,7 +1119,7 @@ OFF는 서버의 강제 적용을 우회하지 않습니다. 인증 실패 시 �
   if (typeof GM_registerMenuCommand === 'function') {
     try { GM_registerMenuCommand(options.label + ' · Firebase App Check',() => open()); } catch (_) {}
   }
-  return {get,save,parseConfig,scopeOf,suffix,nameFor,payload,prepare,pageSource:() => '(' + pagePrepare.toString() + ')',probe,open,makeButton,versionOf,safeMessage};
+  return {get,save,parseConfig,scopeOf,suffix,nameFor,payload,prepare,pageSource:() => '(' + pagePrepare.toString() + ')',probe,open,makeButton,versionOf,safeMessage,stateLabel};
 }
 
 const CFA = createCrackFirebaseAppCheck({id:'wish-suite',label:'위시 RP Suite',getConfig:() => WSUITE.host?.connection?.()?.firebaseConfig || WSUITE.firebaseShared?.()?.config || '',getVersion:() => '12.18.0'});
@@ -48497,11 +48575,13 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
     const abortError=()=>makeError('작업을 중단했어요.','WISH_USER_ABORT');
     const timeoutError=()=>makeError('대기 시간을 포함한 AI 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.','AI_TIMEOUT');
     function category(error){
-      const text=String(error?.message||error||''),code=String(error?.code||''),status=Number(error?.diagnostic?.httpStatus||error?.status)||Number(text.match(/\b(400|401|403|404|408|422|429|500|502|503|504)\b/)?.[1])||0;
+      const text=String(error?.message||error||'')+'\n'+String(error?.diagnostic?.serverMessage||''),code=String(error?.code||''),status=Number(error?.diagnostic?.httpStatus||error?.status)||Number(text.match(/\b(400|401|403|404|408|422|429|500|502|503|504)\b/)?.[1])||0;
       if(/WISH_USER_ABORT|WISH_STALE|AbortError/.test(code)||error?.name==='AbortError')return {kind:'cancel',retry:false,delay:0};
       if(/AI_TIMEOUT|시간.*초과|제한 시간/.test(code+' '+text))return {kind:'timeout',retry:false,delay:15000};
-      if(/app[ -]?check|unauthenticated|permission.denied|인증 오류/i.test(text)||status===401||status===403)return {kind:'auth',retry:false,delay:60000};
-      if(status===429||/resource.exhausted|요청 한도 초과|quota.exceeded/i.test(text)){
+      if(error?.noAutoRetry&&/^FIREBASE_APPCHECK_/.test(code))return {kind:'auth',retry:false,delay:60000};
+      if(code==='FIREBASE_APPCHECK_NETWORK')return {kind:'network',retry:true,delay:2500};
+      if(status!==429&&code!=='FIREBASE_APPCHECK_RATE'&&(/app[ -]?check|unauthenticated|permission.denied|인증 오류/i.test(text)||status===401||status===403))return {kind:'auth',retry:false,delay:60000};
+      if(status===429||code==='FIREBASE_APPCHECK_RATE'||/resource.exhausted|요청 한도 초과|quota.exceeded/i.test(text)){
         const permanent=/per.?day|daily|billing|free.tier.*limit.?[:=]?\s*0|limit\s*[:=]\s*0|일일/i.test(text);
         const explicit=Math.max(0,Number(error?.retryAfterMs)||Number(error?.diagnostic?.retryAfterMs)||0,Number(text.match(/retry (?:in|after)\s+(\d+(?:\.\d+)?)\s*s/i)?.[1]||0)*1000);
         return {kind:'rate',retry:!permanent,delay:Math.max(permanent?300000:30000,explicit)};
@@ -48516,8 +48596,8 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
       }
       lastError=({rate:'요청 한도·서버 혼잡으로 잠시 대기',network:'일시적인 연결 오류',auth:'연결 인증 확인 필요',timeout:'요청 제한 시간 초과',other:'최근 요청 실패',cancel:''})[c.kind];return c;
     }
-    function status(){const now=Date.now();let cooldownUntil=0;for(const c of cooldowns.values())if(c.until>now)cooldownUntil=Math.max(cooldownUntil,c.until);
-      return {active:active?1:0,queued:pending.length,cooldownUntil,lastError,label:active?.label||pending[0]?.label||'',retrying:!!pending.some(j=>j.attempt>0),paused:!!cooldownUntil};}
+    function status(){const now=Date.now();let cooldownUntil=0,authCooldownUntil=0;for(const c of cooldowns.values())if(c.until>now){cooldownUntil=Math.max(cooldownUntil,c.until);if(c.kind==='auth')authCooldownUntil=Math.max(authCooldownUntil,c.until);}
+      return {active:active?1:0,queued:pending.length,cooldownUntil,authCooldownUntil,lastError,label:active?.label||pending[0]?.label||'',retrying:!!pending.some(j=>j.attempt>0),paused:!!cooldownUntil};}
     function valid(job){
       if(job.signal?.aborted||job.abortContext?.aborted)return abortError();
       if(job.shouldRun){try{if(!job.shouldRun())return makeError('방이나 대상이 바뀌어 이전 AI 요청을 취소했습니다.','WISH_STALE');}catch{return makeError('AI 요청 대상을 다시 확인해 주세요.','WISH_STALE');}}
@@ -48576,7 +48656,10 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
       const identity=meta.dedupeKey&&!meta.signal&&!meta.abortContext?meta.key+'\n'+meta.dedupeKey:'';
       if(identity&&same.has(identity))return same.get(identity).promise;
       const cd=cooldowns.get(meta.key),remaining=(cd?.until||0)-Date.now();
-      if(remaining>0)return Promise.reject(makeError('AI 연결이 잠시 쉬는 중입니다. '+Math.ceil(remaining/1000)+'초 뒤 다시 시도합니다.','AI_COOLDOWN',{retryAfterMs:remaining}));
+      if(remaining>0){
+        if(cd.kind==='auth')return Promise.reject(makeError('AI 인증 확인이 필요합니다. 연결 설정을 확인하고 '+Math.ceil(remaining/1000)+'초 뒤 연결 테스트를 한 번 실행하세요.','AI_AUTH_COOLDOWN',{retryAfterMs:remaining,noAutoRetry:true}));
+        return Promise.reject(makeError('AI 연결이 잠시 쉬는 중입니다. '+Math.ceil(remaining/1000)+'초 뒤 다시 시도합니다.','AI_COOLDOWN',{retryAfterMs:remaining}));
+      }
       if(pending.length>=8)return Promise.reject(makeError('AI 작업이 이미 대기 중입니다. 진행 중인 작업이 끝난 뒤 다시 시도해 주세요.','AI_QUEUE_FULL'));
       const enqueuedAt=Date.now(),job={...meta,identity,work,enqueuedAt,deadline:enqueuedAt+timeoutMs,notBefore:0,attempt:0,requestMs:0,activeStartedAt:null,done:false};
       job.promise=new Promise((resolve,reject)=>{job.resolve=resolve;job.reject=reject;});
@@ -48598,7 +48681,11 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
     return wsFirebaseLegacyShared();
   }
   WSUITE.legacyFirebaseShared=wsFirebaseLegacyShared;
-  function wsFirebaseError(error){if(/app[ -]?check/i.test(String(error?.message||error)))return CFA.safeMessage(error);let text=String(error?.message||error||'연결 실패');const cfg=parseFirebaseConfig(readAiSecret('firebase'));if(cfg?.apiKey)text=text.split(cfg.apiKey).join('[키 숨김]');return text.slice(0,700);}
+  function wsFirebaseError(error,cfg){
+    let mode=error?.diagnostic?.appCheckMode||'unknown',debugToken='';
+    try{const settings=CFA.get(cfg);if(mode==='unknown')mode=settings.mode;debugToken=settings.debugToken;}catch{}
+    return WishFirebaseErrors.wrap(error,cfg,mode,[debugToken]);
+  }
   function wsFirebaseGenerate(request,timeoutMs=120000){
     const shared=request.useExplicitConnection?null:wsFirebaseShared(),prefs=wsFirebasePrefs(),scope=WSUITE.host?.refinerScope?.();
     const cfg=shared?.config||request.firebaseConfig;if(!cfg?.apiKey||!cfg?.projectId)return Promise.reject(new Error('Firebase 설정 코드에서 apiKey와 projectId를 확인해 주세요.'));
@@ -48606,7 +48693,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
     if(request.thinkingConfig&&!req.generationConfig.thinkingConfig)req.generationConfig.thinkingConfig=request.thinkingConfig;
     const run=async ticket=>{
       try{return await wsFirebaseBridge({...req,signal:ticket.signal,deadline:ticket.deadline},ticket.timeoutMs);}
-      catch(e){const clean=new Error(wsFirebaseError(e));for(const k of ['code','diagnostic','retryAfterMs','status'])if(e?.[k]!=null)clean[k]=e[k];throw clean;}
+      catch(e){throw wsFirebaseError(e,cfg);}
     };
     // The common provider dispatcher already owns this queue slot.
     if(request.queueManaged)return run({signal:request.signal,deadline:request.deadline,timeoutMs:Math.max(1,Number(timeoutMs)||120000)});
@@ -48625,7 +48712,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
         if(error)channel.dispatchEvent(new Event(cancelName));script.remove();channel.remove();error?reject(error):resolve(result);};
       const abort=()=>finish(Object.assign(new Error('작업을 중단했어요.'),{code:'WISH_USER_ABORT'}));
       const receive=()=>{try{const r=JSON.parse(channel.textContent||'{}');if(Date.now()>=deadline)return finish(Object.assign(new Error('Firebase 응답 제한 시간을 넘었습니다.'),{code:'AI_TIMEOUT'}));
-        if(!r.ok){const e=new Error(r.error||'Firebase 응답 실패');e.code=String(r.code||'FIREBASE_ERROR');e.diagnostic={httpStatus:Number(r.status)||0,retryAfterMs:Number(r.retryAfterMs)||0};return finish(e);}
+        if(!r.ok){const e=new Error(r.error||'Firebase 응답 실패');e.code=String(r.code||'FIREBASE_ERROR');e.diagnostic={httpStatus:WishFirebaseErrors.statusOf({message:r.error,status:r.status}),retryAfterMs:Number(r.retryAfterMs)||0,stage:String(r.stage||''),firebaseStage:String(r.stage||''),appCheckMode:['off','debug','enterprise'].includes(r.appCheckMode)?r.appCheckMode:request.cfa?.mode||'unknown',sdkCode:String(r.code||'')};return finish(e);}
         finish(null,{text:String(r.text||''),usage:r.usage||{},usageMetadata:r.usage||{},finishReason:String(r.finishReason||'')});}catch(e){finish(e);}};
       if(signal?.aborted)return abort();signal?.addEventListener?.('abort',abort,{once:true});
       channel.addEventListener(eventName,receive);(document.documentElement||document.body).appendChild(channel);
@@ -48638,22 +48725,25 @@ import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/${sdk
 import * as FirebaseAI from 'https://www.gstatic.com/firebasejs/${sdkVersion}/firebase-ai.js';
 const { getAI, getGenerativeModel, GoogleAIBackend, VertexAIBackend, AgentPlatformBackend } = FirebaseAI;
 const channel=document.getElementById(${JSON.stringify(channelId)}),eventName=${JSON.stringify(eventName)},cancelName=${JSON.stringify(cancelName)};
-const controller=new AbortController(),cancel=()=>controller.abort();let timer;
+const controller=new AbortController(),cancel=()=>controller.abort();let timer,stage='Firebase 모듈 준비',appCheckMode='unknown';
 const done=r=>{if(channel?.isConnected&&!controller.signal.aborted){channel.textContent=JSON.stringify(r);channel.dispatchEvent(new Event(eventName));}};
 try{
  if(!channel?.isConnected)throw new Error('요청이 취소되었습니다.');
  channel.addEventListener(cancelName,cancel,{once:true});
  const req=JSON.parse(channel.textContent||'{}');channel.textContent='';
+ appCheckMode=req.cfa?.mode||'off';
  timer=setTimeout(cancel,Math.max(1,req.deadline-Date.now()));
  const app=getApps().find(a=>a.name===req.appName)||initializeApp(req.firebaseConfig,req.appName);
+ stage='App Check 토큰 준비';
  await ${CFA.pageSource()}(app,req.cfa,${JSON.stringify(sdkVersion)});
+ stage='Firebase AI 요청';
  if(!channel.isConnected||controller.signal.aborted||Date.now()>=req.deadline)throw new Error('인증 대기 중 요청이 취소되었습니다.');
  if(req.backend==='agent'&&typeof AgentPlatformBackend!=='function')throw Error('Firebase 응답교정 모듈을 불러오지 못했습니다.');
  const backend=req.backend==='agent'?new AgentPlatformBackend('global'):req.backend==='google'?new GoogleAIBackend():new VertexAIBackend(req.location||'global');
  const ai=getAI(app,{backend});const model=getGenerativeModel(ai,{model:req.model,systemInstruction:req.systemInstruction||undefined,generationConfig:req.generationConfig||{}},{timeout:Math.max(1,req.deadline-Date.now())});
  const generated=await model.generateContent(req.prompt,{signal:controller.signal,timeout:Math.max(1,req.deadline-Date.now())}),response=await generated.response;
  done({ok:true,text:response.text(),usage:response.usageMetadata||{},finishReason:response.candidates?.[0]?.finishReason||''});
-}catch(error){done({ok:false,error:String(error?.message||error).slice(0,900),code:String(error?.code||error?.name||''),status:Number(error?.status||error?.statusCode||error?.customData?.status)||0});}
+}catch(error){done({ok:false,error:String(error?.message||error).slice(0,900),code:String(error?.code||error?.name||''),status:Number(error?.status||error?.statusCode||error?.customData?.status)||0,stage,appCheckMode});}
 finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
       (document.head||document.documentElement).appendChild(script);
     });
@@ -49599,7 +49689,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.73-suite';
+  const SCRIPT_VERSION = '0.5.74-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -51286,9 +51376,9 @@ const WLOG=(()=>{
     .replace(/https?:\/\/[^\s<>"']+/gi,'[주소 생략]')
     .replace(/\b(?:Bearer|Basic)\s+[^\s"',;]+/gi,'[인증정보 숨김]')
     .replace(/\b(?:AIza[\w-]{20,}|sk-[\w-]{10,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g,'[인증정보 숨김]')
-    .replace(/(["']?(?:api[_ -]?key|sync[_ -]?key|access[_ -]?token|refresh[_ -]?token|token|authorization|password|secret|passphrase|cookie|email|username)["']?\s*[=:]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)/gi,'$1[숨김]')
+    .replace(/(["']?(?:api[_ -]?key|sync[_ -]?key|debug[_ -]?token|access[_ -]?token|refresh[_ -]?token|token|authorization|password|secret|passphrase|cookie|email|username)["']?\s*[=:]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)/gi,'$1[숨김]')
     .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi,'[이메일 숨김]').slice(0,900);
-  const textKeys=['operation','stage','message','code','provider','model','finishReason','version','service','method','path','expected','actual','outcome','mode','host'];
+  const textKeys=['operation','stage','message','code','provider','model','finishReason','version','service','method','path','expected','actual','outcome','mode','host','serverMessage','firebaseReason','appCheckMode','sdkCode','firebaseStage'];
   const numberKeys=['httpStatus','responseChars','inputChars','elapsedMs','timeoutMs','queueWaitMs','requestMs','attempts','batchTurns','nextBatchTurns'];
   function safeRow(raw){
     const r={id:clean(raw.id),at:Number(raw.at)||Date.now(),lastAt:Number(raw.lastAt||raw.at)||Date.now(),count:Math.max(1,Number(raw.count)||1),level:raw.level==='주의'?'주의':'오류'};
@@ -51340,6 +51430,10 @@ const WLOG=(()=>{
     else if(c==='WISH_BATCH_MINIMUM'){category='한 턴 처리 한도';cause='한 턴까지 줄인 요청도 처리하지 못했습니다. 같은 요청의 자동 반복을 멈췄습니다.';next='AI 연결에서 추론 강도를 낮추거나 모델·출력 한도를 조정한 뒤 [다시 정리]를 누르세요. 기존 기억과 원문은 남아 있습니다.';}
     else if(c==='AI_OUTPUT_LIMIT'||c==='AI_JSON_TRUNCATED'){category='AI 출력 잘림';cause='AI가 완전한 결과를 반환하기 전에 출력이 끝났습니다. 잘린 결과는 적용하지 않습니다.';next='자동 정리는 미완료 묶음만 나눠 다시 처리합니다. 한 턴에서도 반복되면 추론 강도를 낮추거나 모델을 바꿔 주세요. 파일을 붙여넣는 작업이면 완성된 JSON 전체를 다시 받으세요.';}
     else if(c==='AI_TIMEOUT'&&r.requestMs===0&&r.queueWaitMs>0){category='AI 순서 대기 시간 초과';cause='다른 작업의 순서를 기다리다가 제한 시간을 넘었습니다. 이번 요청은 서버 처리에 들어가지 않았습니다.';next='진행 중인 작업이 끝난 뒤 다시 정리하세요. 대기만 한 경우에는 정리할 턴 수를 줄이지 않습니다.';}
+    const fbReason=r.firebaseReason||((r.provider==='firebase'||/App[ -]?Check/i.test(m))?WishFirebaseErrors.reasonOf({message:r.serverMessage||m,code:c,diagnostic:{httpStatus:http}}):'');
+    const fbHelp=WishFirebaseErrors.describe(fbReason,r.appCheckMode||'unknown');
+    if(fbHelp)({category,cause,next}=fbHelp);
+    else if(c==='AI_AUTH_COOLDOWN'){category='AI 인증 확인 대기';cause='직전 인증 오류 뒤 같은 연결의 반복 요청을 잠시 막았습니다.';next='앞선 Firebase/AI 연결 오류 기록을 확인하고 설정을 고친 뒤 연결 테스트를 한 번 실행하세요. 대기 종료가 인증 복구를 뜻하지는 않습니다.';}
     // A program fault is never the AI's answer. Only rows from an AI answer path (mode, provider, schema check) get the AI-fix steps.
     const internal=/^(?:TypeError|ReferenceError|RangeError|InternalError|EvalError)$/.test(c),aiRow=!internal&&(!!r.mode&&r.mode!=='backup'||!!r.provider||mode!=='api'||/WISH_SCHEMA|WISH_DELTA_REJECTED|AI_JSON_PARSE/.test(c)||/JSON 구조 확인|결과 형식·참조 확인|응답 해석/.test(r.stage));
     const spot=String(r.path||'').replace(/^(?:응답|JSON)\.?/,'').replace(/\[(\d+)\]/g,(_,n)=>' '+(Number(n)+1)+'번째').replace(/\./g,' · ').trim(),where=spot&&!/^(?:문자 위치|줄 )/.test(spot)?'(위치: '+spot+')':'';
@@ -58288,9 +58382,9 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     return !error?.code&&String(error?.message||error||'')==='WishHistory.current is not a function'&&typeof WishHistory.current==='function';
   }
   function transientError(error){
-    if(error?.noAutoRetry)return false;
+    if(error?.noAutoRetry||/^(?:AI_AUTH_COOLDOWN|FIREBASE_APPCHECK_(?:REQUIRED|INACTIVE|REPLAY|REJECTED|UNKNOWN))$/.test(error?.code||''))return false;
     if(['WISH_RESPONSE_SHAPE','WISH_RESPONSE_SHAPE_REPAIR','WISH_RELATION_EVIDENCE','WISH_RELATION_ACTION','WISH_RELATION_FIELDS','WISH_RELATION_REPAIR','WISH_REPAIR_BUDGET','WISH_RELATION_TRAJECTORY','WISH_TRAJECTORY_REPAIR','WISH_TRAJECTORY_REVIEW','WISH_TRAJECTORY_CHANGED','WISH_TRAJECTORY_BUDGET','WISH_SEMANTIC_REVIEW','WISH_STATE_REPAIR','WISH_STATE_REPAIR_BUDGET','WISH_USER_ABORT','WISH_STALE','WISH_DRAFT_CHANGED','WISH_BATCH_MINIMUM','AI_OUTPUT_LIMIT','AI_JSON_TRUNCATED','CRACK_SECURITY_CHALLENGE'].includes(error?.code))return false;
-    if(['AI_COOLDOWN','AI_QUEUE_FULL','AI_TIMEOUT','CRACK_HTTP_BACKOFF','WISH_BATCH_SPLIT'].includes(error?.code))return true;
+    if(['AI_COOLDOWN','AI_QUEUE_FULL','AI_TIMEOUT','CRACK_HTTP_BACKOFF','WISH_BATCH_SPLIT','FIREBASE_APPCHECK_RATE','FIREBASE_APPCHECK_NETWORK'].includes(error?.code))return true;
     if(isCrackAuthError(error)||isHistoryReadChanged(error)||patchedHistoryError(error))return true;
     const text=String(error?.message||error||'');
     return /\b(?:429|500|502|503|504|529)\b|resource\s*exhausted|too\s*many\s*requests|overload|try\s*again\s*later|failed to fetch|network(?:error| error| request failed)|fetch failed|load failed|네트워크 오류|응답 시간 초과|timeout|timed out/i.test(text);
@@ -72477,10 +72571,10 @@ const ta = (k, v, ph = '', h = '', x = '') => `<textarea data-bind="${esc(k)}" p
 
 function vCheck(){
     const u=V.unified||{},I=V.inj,s=WSUITE.suite?.summary()||{},isSuite=WSUITE.host.automation(state.currentRoom)==='suite',ready=!!WSUITE.host.aiReady?.();
-    const status=u.draft?'기존 기억 유지 · 최신 정리 미완료':I.armed?(I.authWaiting?'로그인 확인 대기':I.serverWaiting?'크랙 서버 확인 대기':I.verified?'AI에 전달할 기억 저장 확인됨':I.error?'기억 전달 확인 필요':'기억 전달 확인 중'):'기억 전달 꺼짐';
+    const status=u.draft?'기존 기억 유지 · 최신 정리 미완료':I.armed?(I.authWaiting?'로그인 확인 대기':I.serverWaiting?'크랙 서버 확인 대기':I.verified?(I.error?'기존 기억 저장됨 · 최신 갱신 확인 필요':'AI에 전달할 기억 저장 확인됨'):I.error?'기억 전달 확인 필요':'기억 전달 확인 중'):'기억 전달 꺼짐';
     const fresh=V.fresh?.show?`<section class="m3-panel m3-focus" data-key="home-fresh"><b>${esc(V.fresh.title||'새 방 시작 설정')}</b><p>${esc(V.fresh.desc||'')}</p>${btn('나중에','freshSkip',{cls:'quiet mini'})}${btn('적용','freshApply',{cls:'mini'})}</section>`:'';
     const pending=V.reviews.length+(s.pending||0);
-    const deliveryNotice=I.error?`<p class="m3-memory-note m3-attention-status">${I.authWaiting?'⚠️ 사이트 로그인 확인 후 하단의 서버 재검증을 눌러 주세요.':I.serverWaiting?'⚠️ 크랙 서버 응답을 기다리고 있어요. 저장된 기억은 유지되며, 정상 응답 후 전달 상태를 다시 확인합니다.':'⚠️ 기억 전달 확인이 필요해요. 하단의 서버 재검증에서 다시 확인할 수 있습니다.'}</p>`:'';
+    const deliveryNotice=I.error?`<p class="m3-memory-note m3-attention-status">${I.authWaiting?'⚠️ 사이트 로그인 확인 후 하단의 서버 재검증을 눌러 주세요.':I.serverWaiting?'⚠️ 크랙 서버 응답을 기다리고 있어요. 저장된 기억은 유지되며, 정상 응답 후 전달 상태를 다시 확인합니다.':I.verified?'⚠️ 기존 기억의 서버 저장은 확인됐지만 최근 갱신에 오류가 있어요. 실패 기록을 확인한 뒤 서버 재검증을 눌러 주세요.':'⚠️ 기억 전달 확인이 필요해요. 하단의 서버 재검증에서 다시 확인할 수 있습니다.'}</p>`:'';
     return pageHead('홈')+fresh+(isManualAiProvider()?manualJobPanel():'')+(!ready?`<section class="m3-panel m3-onboarding" data-key="first-connection"><b>처음에는 두 가지만 확인하세요</b><ol><li>사용할 API와 모델을 연결해요.</li><li>자동 정리할 항목과 주기를 정해요.</li></ol><p class="m3-muted">아래 API 연결하기로 시작하세요. 연결 뒤 설정·작업 상세에서 정리 주기를 정할 수 있습니다.</p></section>`:'')+
       `<section class="m3-panel m3-home-status" data-key="home-status"><div class="m3-row m3-sp"><b class="${status.includes('확인 필요')?'m3-attention-status':''}">${esc(warningStatusText(status))}</b><span class="m3-tag ${I.verified?'ok':''}">${fmt(I.total)} / ${fmt(I.max||APP.carrierSafeChars)}자</span></div>${capMeter()}${deliveryNotice}<div class="m3-card-actions">${btn('기억 미리보기','preview',{cls:'mini',icon:'eye'})}${homeDeliveryToggle()}</div>${homeDeliveryDetails()}</section>`+
       homeMemoryCard(u,s,isSuite,ready)+unifiedHomeCards()+
@@ -73033,6 +73127,7 @@ vExternalRebuild(run||ExternalBundles.busy())+
   }
   function requestStatusText(status){
     const seconds=Math.max(0,Math.ceil(((Number(status.cooldownUntil)||0)-Date.now())/1000));
+    if(!status.active&&!status.queued&&Number(status.authCooldownUntil)>Date.now())return 'AI 인증 확인 필요 · 자동 재시도 없음';
     return seconds?`요청 대기 · 약 ${seconds}초`:status.paused?'요청 일시 대기':status.retrying?'일시 오류 후 재시도 중':status.active?'AI 응답 기다리는 중':status.queued?'차례를 기다리는 중':'AI 요청 대기 없음';
   }
   function requestStatusIcon(status){return Number(status.cooldownUntil)>Date.now()||status.paused||status.active||status.queued||status.retrying?'clock':'check';}
@@ -74100,7 +74195,7 @@ ai(d) {
       if(!ds&&a.model&&!models.some(([id])=>id===a.model))models.unshift([a.model,a.model+' · 기존 설정']);
       return sheet(d, { title: '공통 API 연결', desc: '위시 Core · Suite · 로어 · 크랙 요약에 같은 API와 모델을 적용합니다', body: `
       <section class="m3-grp"><div class="m3-gt">${ic('key')}연결</div>${field('AI 서비스', selc(D(d, 'provider'), a.provider, d.providers || [['ai-studio', 'Google AI Studio'], ['firebase', 'Firebase AI Logic'], ['deepseek', 'DeepSeek API'],['manual','외부 AI 복붙']]))}
-      ${a.provider==='firebase'?field('Firebase Config',ta(D(d,'firebase'),a.firebase,'firebaseConfig 설정 코드','100'))+btn('App Check 설정 · 기본 OFF','aiAppCheck',{arg:d.id,cls:'mini'})+field('Firebase 백엔드',selc(D(d,'firebaseBackend'),a.firebaseBackend,[['vertex','Vertex AI Gemini API'],['google','Gemini Developer API']]))+field('리전',inp(D(d,'firebaseLocation'),a.firebaseLocation||'global')):
+      ${a.provider==='firebase'?field('Firebase Config',ta(D(d,'firebase'),a.firebase,'firebaseConfig 설정 코드','100'))+btn(esc(CFA.stateLabel(a.firebase)),'aiAppCheck',{arg:d.id,cls:'mini'})+field('Firebase 백엔드',selc(D(d,'firebaseBackend'),a.firebaseBackend,[['vertex','Vertex AI Gemini API'],['google','Gemini Developer API']]))+field('리전',inp(D(d,'firebaseLocation'),a.firebaseLocation||'global')):
         a.provider==='openai'?field('OpenAI 호환 API Key',inp(D(d,'openaiKey'),a.openaiKey||'','저장됨 · 새 키로 교체','password'))+field('Base URL',inp(D(d,'openaiBase'),a.openaiBase||'')):
         a.provider==='vertex'?field('서비스 계정 JSON · 새로 입력하면 교체',ta(D(d,'vertexJson'),a.vertexJson||'','저장된 JSON은 다시 표시하지 않습니다.','100'))+field('리전',inp(D(d,'vertexLocation'),a.vertexLocation||'global'))+field('프로젝트 ID · 선택',inp(D(d,'vertexProject'),a.vertexProject||'')):
         ds?field('DeepSeek API Key',inp(D(d,'dsKey'),a.dsKey||'','저장됨 · 새 키로 교체','password'))+field('Base URL',inp(D(d,'dsBase'),a.dsBase||'')):
@@ -74502,14 +74597,14 @@ function ensureRoot() {
 
 function errorDiagnosticCard(row,expanded=false){
     const x = WLOG.describe(row), key = 'err-' + row.id;
-    const chips = [row.code, row.service || x.service, row.host, row.provider, row.model, x.httpStatus ? 'HTTP ' + x.httpStatus : '', row.method, row.path ? '위치 ' + row.path : '', row.expected ? '필요 ' + row.expected : '', row.actual ? '확인 ' + row.actual : '', row.inputChars ? '입력 ' + fmt(row.inputChars) + '자' : '', row.responseChars ? '응답 ' + fmt(row.responseChars) + '자' : '', row.elapsedMs ? '경과 ' + Math.round(row.elapsedMs / 1000) + '초' : '', row.timeoutMs ? '제한 ' + Math.ceil(row.timeoutMs / 1000) + '초' : '', row.finishReason ? '종료 사유 ' + row.finishReason : '', row.nextBatchTurns ? '다음 묶음 최대 '+row.nextBatchTurns+'턴' : '', row.queueWaitMs ? '순서 대기 '+Math.round(row.queueWaitMs/1000)+'초' : '', row.requestMs ? 'API 처리 '+Math.round(row.requestMs/1000)+'초' : ''].filter(Boolean);
+    const chips = [row.code, row.service || x.service, row.host, row.firebaseStage, row.appCheckMode ? '요청 시 App Check '+row.appCheckMode : '', row.sdkCode, row.provider, row.model, x.httpStatus ? 'HTTP ' + x.httpStatus : '', row.method, row.path ? '위치 ' + row.path : '', row.expected ? '필요 ' + row.expected : '', row.actual ? '확인 ' + row.actual : '', row.inputChars ? '입력 ' + fmt(row.inputChars) + '자' : '', row.responseChars ? '응답 ' + fmt(row.responseChars) + '자' : '', row.elapsedMs ? '경과 ' + Math.round(row.elapsedMs / 1000) + '초' : '', row.timeoutMs ? '제한 ' + Math.ceil(row.timeoutMs / 1000) + '초' : '', row.finishReason ? '종료 사유 ' + row.finishReason : '', row.nextBatchTurns ? '다음 묶음 최대 '+row.nextBatchTurns+'턴' : '', row.queueWaitMs ? '순서 대기 '+Math.round(row.queueWaitMs/1000)+'초' : '', row.requestMs ? 'API 처리 '+Math.round(row.requestMs/1000)+'초' : ''].filter(Boolean);
     const open = expanded || S.openSet.has(key), fail = row.level !== '주의';
     return `<section class="m3-panel m3-error-detail wp-err ${fail ? 'is-fail' : 'is-warn'}" data-key="error-${esc(row.id)}">
 <div class="wp-err-head"><b>${esc(row.operation || '작업')}</b>${tag(esc(row.level) + (row.count > 1 ? ' · ' + row.count + '회' : ''))}</div>
 <div class="wp-err-meta"><span>${esc(new Date(row.lastAt || row.at).toLocaleString('ko-KR'))}</span><span>v${esc(row.version)}</span>${row.stage ? `<span>${fail ? '실패 단계' : '단계'} · ${esc(row.stage)}</span>` : ''}</div>
 <p class="wp-err-msg">${esc(row.message)}</p>
 <details class="wp-err-fix" data-open="${esc(key)}"${open ? ' open' : ''}><summary${expanded ? ' aria-disabled="true"' : ''}><span class="wp-err-cat">${esc(x.category)}</span><span class="wp-err-sum">원인과 해결 방법</span>${expanded ? '' : ic('chev', 'wp-err-chev')}</summary>
-${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p>${esc(x.cause)}</p></div><div class="wp-err-row is-next"><span>다음 조치</span><p>${esc(x.next)}</p></div><div class="wp-err-row"><span>처리 상태</span><p>${esc(x.outcome)}</p></div>${chips.length ? `<div class="wp-err-chips">${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}${errorFixButton(row, x) ? `<div class="m3-actions m3-topgap">${errorFixButton(row, x)}</div>` : ''}</div>` : ''}</details></section>`;
+${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p>${esc(x.cause)}</p></div><div class="wp-err-row is-next"><span>다음 조치</span><p>${esc(x.next)}</p></div><div class="wp-err-row"><span>처리 상태</span><p>${esc(x.outcome)}</p></div>${row.serverMessage ? `<div class="wp-err-row"><span>서버 응답 · 비밀값 제거</span><p>${esc(row.serverMessage)}</p></div>` : ''}${chips.length ? `<div class="wp-err-chips">${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}${errorFixButton(row, x) ? `<div class="m3-actions m3-topgap">${errorFixButton(row, x)}</div>` : ''}</div>` : ''}</details></section>`;
   }
 
 function toast(text, type = 'ok', ms = 0, options = {}) {
