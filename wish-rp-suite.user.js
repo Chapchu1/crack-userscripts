@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.75
+// @version      0.5.76
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.76 · Firebase 인증 갱신 보완
+ * SDK의 강제 갱신을 무효화하던 중복 토큰 캐시를 제거합니다.
+ * 토큰 준비 뒤 AI 서버의 명시적인 App Check 401/403에만 새 토큰으로 1회 재확인합니다.
+ * 인증 방식·모델·프로젝트 설정은 유지하며, 두 번째 실패는 중단하고 원문을 기록합니다.
+ */
 
 /* 0.5.75 · 정상 주입에 남는 노란 경고 수정
  * 빈 오류 객체를 [object Object]로 표시하던 변환을 바로잡습니다.
@@ -694,7 +700,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.75'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.76'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -738,7 +744,7 @@ const WishFirebaseErrors=(()=>{
     return 'unknown';
   }
   const codes={'model-required':'FIREBASE_APPCHECK_REQUIRED',required:'FIREBASE_APPCHECK_REQUIRED',inactive:'FIREBASE_APPCHECK_INACTIVE',replay:'FIREBASE_APPCHECK_REPLAY',rejected:'FIREBASE_APPCHECK_REJECTED',unknown:'FIREBASE_APPCHECK_UNKNOWN',rate:'FIREBASE_APPCHECK_RATE',network:'FIREBASE_APPCHECK_NETWORK'};
-  function describe(reason,mode='unknown'){
+  function describe(reason,mode='unknown',diagnostic={}){
     const off=mode==='off'?' 이 요청은 App Check OFF로 토큰을 보내지 않았습니다.':'';
     const follow='설정 → 공통 API 연결 → App Check 설정에서 실제 인증 방식을 확인하세요. 본인 Firebase 프로젝트의 같은 웹 앱에 인증을 설정한 뒤 저장·새로고침하고 연결 테스트를 한 번 실행하세요.';
     const info={
@@ -751,12 +757,16 @@ const WishFirebaseErrors=(()=>{
       rate:['App Check 요청 한도','App Check 인증 서비스가 요청 한도를 알렸습니다. 토큰이 잘못됐다는 뜻은 아닙니다.','표시된 대기 시간 이후 한 번만 다시 확인하세요. 계속되면 본인 프로젝트의 App Check·reCAPTCHA 할당량을 확인하세요.'],
       network:['App Check 서비스 연결','App Check 토큰 준비 중 서버 오류 또는 연결 문제가 발생했습니다. 이 오류만으로 인증 설정이 잘못됐다고 단정할 수 없습니다.','잠시 후 네트워크와 Firebase 상태를 확인하고 다시 시도하세요. 반복 클릭이나 기억 재구축은 필요하지 않습니다.']
     }[reason];
+    if(info&&['model-required','required','rejected'].includes(reason)&&diagnostic.appCheckPrepared){
+      info[1]='App Check '+(mode==='debug'?'디버그 토큰':mode==='enterprise'?'Enterprise':'ON')+'으로 SDK 토큰 준비를 마쳤지만 AI 서버가 인증을 인정하지 않았습니다.'+(diagnostic.appCheckRefreshAttempt?' 새 토큰으로 한 번 재확인한 뒤에도 거절됐습니다.':'');
+      info[2]='같은 Firebase 프로젝트의 콘솔 → 보안 → App Check → API → Firebase AI Logic에서 기본 보호가 적용(Enforced)인지 확인하세요. 디버그 토큰 등록과 API 적용은 별도입니다. 재사용 방지(Replay protection)가 켜져 있으면 현재 세션 토큰 방식과 호환되지 않습니다. 설정이 맞으면 아래 서버 응답·인증 단계 기록으로 추가 확인이 필요합니다.';
+    }
     return info?{category:info[0],cause:info[1],next:info[2]}:null;
   }
   function wrap(error,cfg,mode='unknown',extraSecrets=[]){
     const reason=reasonOf(error),httpStatus=statusOf(error);
     const secrets=[cfg?.apiKey,cfg?.projectId,cfg?.appId,...extraSecrets];
-    const serverMessage=redact(textOf(error),secrets),info=describe(reason,mode);
+    const serverMessage=redact(textOf(error),secrets),info=describe(reason,mode,error?.diagnostic||{});
     const clean=new Error(info?'Firebase '+info.category+': '+info.cause:serverMessage||'Firebase 연결 실패');
     clean.code=codes[reason]||String(error?.code||'FIREBASE_ERROR');
     for(const k of ['retryAfterMs','status','noAutoRetry'])if(error?.[k]!=null)clean[k]=error[k];
@@ -764,7 +774,11 @@ const WishFirebaseErrors=(()=>{
     clean.diagnostic={...error?.diagnostic,httpStatus,provider:'firebase',service:'Firebase AI Logic',appCheckMode:mode,firebaseReason:reason,serverMessage,sdkCode:redact(error?.diagnostic?.sdkCode||error?.code||'',secrets)};
     return clean;
   }
-  return {redact,statusOf,reasonOf,describe,wrap};
+  function canRefresh(error){
+    const d=error?.diagnostic||{};
+    return [401,403].includes(statusOf(error))&&['debug','enterprise'].includes(d.appCheckMode)&&d.appCheckPrepared===true&&d.firebaseStage==='Firebase AI 요청'&&!d.appCheckRefreshAttempt&&['model-required','required','rejected'].includes(reasonOf(error));
+  }
+  return {redact,statusOf,reasonOf,describe,wrap,canRefresh};
 })();
 
 function createCrackFirebaseAppCheck(options) {
@@ -875,10 +889,12 @@ function createCrackFirebaseAppCheck(options) {
     const endpoint = document.createElement('span'); endpoint.hidden = true;
     endpoint.id = 'cfa-debug-' + uuid();
     const requestEvent = 'cfa-request-' + uuid(), responseEvent = 'cfa-result-' + uuid();
-    let disposed = false, inFlight = null, cached = null, retryAfter = 0, lastError = '', activeHandle = null;
+    let disposed = false, inFlight = null, retryAfter = 0, lastError = '', activeHandle = null;
     function exchange() {
       if (disposed) return Promise.reject(makeError('인증 설정이 바뀌었습니다. 새로고침해 주세요.'));
-      if (cached && cached.expireTimeMillis > Date.now() + 60000) return Promise.resolve(cached);
+      // Firebase SDK owns token caching. Every provider invocation must fetch a
+      // fresh token, including forceRefresh and the SDK's proactive refresh.
+      // Sharing an in-flight exchange is safe for these session tokens.
       if (inFlight) return inFlight;
       if (Date.now() < retryAfter) return Promise.reject(makeError(lastError || '인증 재시도 대기 중입니다. 잠시 뒤 다시 시도해 주세요.'));
       const xhr = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function' ? GM.xmlHttpRequest.bind(GM) : null;
@@ -900,9 +916,9 @@ function createCrackFirebaseAppCheck(options) {
                 const seconds = ttl ? Number(ttl[1]) : 0;
                 if (!data.token || typeof data.token !== 'string' || seconds <= 0 || !Number.isFinite(seconds)) throw Error();
                 if (disposed) return reject(makeError('인증 설정이 바뀌었습니다. 새로고침해 주세요.'));
-                cached = {token:data.token,expireTimeMillis:started + seconds * 1000 - 5000};
-                if (cached.expireTimeMillis <= Date.now()) throw Error();
-                resolve(cached);
+                const issued = {token:data.token,expireTimeMillis:started + seconds * 1000 - 5000};
+                if (issued.expireTimeMillis <= Date.now()) throw Error();
+                resolve(issued);
               } catch (_) { fail(0); }
             }, onerror:() => fail(0), ontimeout:() => fail(0), onabort:() => fail(0)});
         } catch (_) { fail(0); }
@@ -921,7 +937,7 @@ function createCrackFirebaseAppCheck(options) {
     endpoint.addEventListener(requestEvent,receive);
     (document.documentElement || document.body).appendChild(endpoint);
     const broker = {scope:scopeOf(cfg), data:{id:endpoint.id,requestEvent,responseEvent}, dispose:() => {
-      disposed = true; cached = null; try { activeHandle?.abort?.(); } catch (_) {}
+      disposed = true; try { activeHandle?.abort?.(); } catch (_) {}
       endpoint.removeEventListener(requestEvent,receive); endpoint.remove();
     }};
     brokers.set(key,broker); return broker;
@@ -987,7 +1003,7 @@ function createCrackFirebaseAppCheck(options) {
         })().catch(e => { if (!state.instance) registry.apps.delete(app); throw e; });
       }
       await limit(state.promise);
-      const result = await limit(state.sdk.getToken(state.instance,false));
+      const result = await limit(state.sdk.getToken(state.instance,data.forceRefresh===true));
       if (!result?.token) throw fail('유효한 인증 토큰이 없습니다.');
       return state.instance;
     } catch (e) {
@@ -48699,8 +48715,16 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
     const req={...request,firebaseConfig:cfg,backend:request.backend||shared?.backend||prefs.backend,location:request.location||shared?.location||prefs.location,appName:'wish-suite-'+wsCore.hash(JSON.stringify(cfg)),generationConfig:{...(request.generationConfig||{})}};
     if(request.thinkingConfig&&!req.generationConfig.thinkingConfig)req.generationConfig.thinkingConfig=request.thinkingConfig;
     const run=async ticket=>{
-      try{return await wsFirebaseBridge({...req,signal:ticket.signal,deadline:ticket.deadline},ticket.timeoutMs);}
-      catch(e){throw wsFirebaseError(e,cfg);}
+      const deadline=Number(ticket.deadline)||Date.now()+ticket.timeoutMs;
+      try{return await wsFirebaseBridge({...req,signal:ticket.signal,deadline},ticket.timeoutMs);}
+      catch(error){
+        // Retry only a completed authentication rejection, never an ambiguous
+        // timeout/network failure, rate limit, policy change or successful AI run.
+        const remaining=deadline-Date.now();
+        if(!WishFirebaseErrors.canRefresh(error)||ticket.signal?.aborted||remaining<3000||(scope!=null&&scope!==WSUITE.host?.refinerScope?.())||(request.shouldRun&&!request.shouldRun()))throw wsFirebaseError(error,cfg);
+        try{return await wsFirebaseBridge({...req,signal:ticket.signal,deadline,appCheckForceRefresh:true},Math.min(ticket.timeoutMs,remaining));}
+        catch(retryError){throw wsFirebaseError(retryError,cfg);}
+      }
     };
     // The common provider dispatcher already owns this queue slot.
     if(request.queueManaged)return run({signal:request.signal,deadline:request.deadline,timeoutMs:Math.max(1,Number(timeoutMs)||120000)});
@@ -48709,7 +48733,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
   }
   async function wsFirebaseBridge(request,timeoutMs){
     const signal=request.signal,deadline=Math.min(Number(request.deadline)||Infinity,Date.now()+Math.max(1,Number(timeoutMs)||120000));
-    request={...request,cfa:CFA.payload(request.firebaseConfig),appName:request.appName+CFA.suffix(request.firebaseConfig),deadline};
+    request={...request,cfa:{...CFA.payload(request.firebaseConfig),forceRefresh:request.appCheckForceRefresh===true},appName:request.appName+CFA.suffix(request.firebaseConfig),deadline};
     delete request.signal;delete request.abortContext;delete request.shouldRun;
     return new Promise((resolve,reject)=>{
       const token=crypto.randomUUID().replace(/-/g,''),channelId='wish-firebase-'+token,eventName='wish-firebase-result-'+token,cancelName=eventName+'-cancel';
@@ -48719,7 +48743,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
         if(error)channel.dispatchEvent(new Event(cancelName));script.remove();channel.remove();error?reject(error):resolve(result);};
       const abort=()=>finish(Object.assign(new Error('작업을 중단했어요.'),{code:'WISH_USER_ABORT'}));
       const receive=()=>{try{const r=JSON.parse(channel.textContent||'{}');if(Date.now()>=deadline)return finish(Object.assign(new Error('Firebase 응답 제한 시간을 넘었습니다.'),{code:'AI_TIMEOUT'}));
-        if(!r.ok){const e=new Error(r.error||'Firebase 응답 실패');e.code=String(r.code||'FIREBASE_ERROR');e.diagnostic={httpStatus:WishFirebaseErrors.statusOf({message:r.error,status:r.status}),retryAfterMs:Number(r.retryAfterMs)||0,stage:String(r.stage||''),firebaseStage:String(r.stage||''),appCheckMode:['off','debug','enterprise'].includes(r.appCheckMode)?r.appCheckMode:request.cfa?.mode||'unknown',sdkCode:String(r.code||'')};return finish(e);}
+        if(!r.ok){const e=new Error(r.error||'Firebase 응답 실패');e.code=String(r.code||'FIREBASE_ERROR');e.diagnostic={httpStatus:WishFirebaseErrors.statusOf({message:r.error,status:r.status}),retryAfterMs:Number(r.retryAfterMs)||0,stage:String(r.stage||''),firebaseStage:String(r.stage||''),appCheckMode:['off','debug','enterprise'].includes(r.appCheckMode)?r.appCheckMode:request.cfa?.mode||'unknown',appCheckPrepared:r.appCheckPrepared===true,appCheckRefreshAttempt:request.appCheckForceRefresh?1:0,firebaseSdkVersion:request.sdkVersion==='12.19.0'?'12.19.0':'12.18.0',firebaseBackend:String(request.backend||'vertex'),sdkCode:String(r.code||'')};return finish(e);}
         finish(null,{text:String(r.text||''),usage:r.usage||{},usageMetadata:r.usage||{},finishReason:String(r.finishReason||'')});}catch(e){finish(e);}};
       if(signal?.aborted)return abort();signal?.addEventListener?.('abort',abort,{once:true});
       channel.addEventListener(eventName,receive);(document.documentElement||document.body).appendChild(channel);
@@ -48732,7 +48756,7 @@ import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/${sdk
 import * as FirebaseAI from 'https://www.gstatic.com/firebasejs/${sdkVersion}/firebase-ai.js';
 const { getAI, getGenerativeModel, GoogleAIBackend, VertexAIBackend, AgentPlatformBackend } = FirebaseAI;
 const channel=document.getElementById(${JSON.stringify(channelId)}),eventName=${JSON.stringify(eventName)},cancelName=${JSON.stringify(cancelName)};
-const controller=new AbortController(),cancel=()=>controller.abort();let timer,stage='Firebase 모듈 준비',appCheckMode='unknown';
+const controller=new AbortController(),cancel=()=>controller.abort();let timer,stage='Firebase 모듈 준비',appCheckMode='unknown',appCheckPrepared=false;
 const done=r=>{if(channel?.isConnected&&!controller.signal.aborted){channel.textContent=JSON.stringify(r);channel.dispatchEvent(new Event(eventName));}};
 try{
  if(!channel?.isConnected)throw new Error('요청이 취소되었습니다.');
@@ -48743,6 +48767,7 @@ try{
  const app=getApps().find(a=>a.name===req.appName)||initializeApp(req.firebaseConfig,req.appName);
  stage='App Check 토큰 준비';
  await ${CFA.pageSource()}(app,req.cfa,${JSON.stringify(sdkVersion)});
+ appCheckPrepared=appCheckMode==='debug'||appCheckMode==='enterprise';
  stage='Firebase AI 요청';
  if(!channel.isConnected||controller.signal.aborted||Date.now()>=req.deadline)throw new Error('인증 대기 중 요청이 취소되었습니다.');
  if(req.backend==='agent'&&typeof AgentPlatformBackend!=='function')throw Error('Firebase 응답교정 모듈을 불러오지 못했습니다.');
@@ -48750,7 +48775,7 @@ try{
  const ai=getAI(app,{backend});const model=getGenerativeModel(ai,{model:req.model,systemInstruction:req.systemInstruction||undefined,generationConfig:req.generationConfig||{}},{timeout:Math.max(1,req.deadline-Date.now())});
  const generated=await model.generateContent(req.prompt,{signal:controller.signal,timeout:Math.max(1,req.deadline-Date.now())}),response=await generated.response;
  done({ok:true,text:response.text(),usage:response.usageMetadata||{},finishReason:response.candidates?.[0]?.finishReason||''});
-}catch(error){done({ok:false,error:String(error?.message||error).slice(0,900),code:String(error?.code||error?.name||''),status:Number(error?.status||error?.statusCode||error?.customData?.status)||0,stage,appCheckMode});}
+}catch(error){done({ok:false,error:String(error?.message||error).slice(0,900),code:String(error?.code||error?.name||''),status:Number(error?.status||error?.statusCode||error?.customData?.status)||0,stage,appCheckMode,appCheckPrepared});}
 finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
       (document.head||document.documentElement).appendChild(script);
     });
@@ -49696,7 +49721,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.75-suite';
+  const SCRIPT_VERSION = '0.5.76-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -51385,8 +51410,8 @@ const WLOG=(()=>{
     .replace(/\b(?:AIza[\w-]{20,}|sk-[\w-]{10,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g,'[인증정보 숨김]')
     .replace(/(["']?(?:api[_ -]?key|sync[_ -]?key|debug[_ -]?token|access[_ -]?token|refresh[_ -]?token|token|authorization|password|secret|passphrase|cookie|email|username)["']?\s*[=:]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)/gi,'$1[숨김]')
     .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi,'[이메일 숨김]').slice(0,900);
-  const textKeys=['operation','stage','message','code','provider','model','finishReason','version','service','method','path','expected','actual','outcome','mode','host','serverMessage','firebaseReason','appCheckMode','sdkCode','firebaseStage'];
-  const numberKeys=['httpStatus','responseChars','inputChars','elapsedMs','timeoutMs','queueWaitMs','requestMs','attempts','batchTurns','nextBatchTurns'];
+  const textKeys=['operation','stage','message','code','provider','model','finishReason','version','service','method','path','expected','actual','outcome','mode','host','serverMessage','firebaseReason','appCheckMode','sdkCode','firebaseStage','firebaseSdkVersion','firebaseBackend'];
+  const numberKeys=['httpStatus','responseChars','inputChars','elapsedMs','timeoutMs','queueWaitMs','requestMs','attempts','batchTurns','nextBatchTurns','appCheckPrepared','appCheckRefreshAttempt'];
   function safeRow(raw){
     const r={id:clean(raw.id),at:Number(raw.at)||Date.now(),lastAt:Number(raw.lastAt||raw.at)||Date.now(),count:Math.max(1,Number(raw.count)||1),level:raw.level==='주의'?'주의':'오류'};
     for(const k of textKeys)r[k]=clean(raw[k]||'');for(const k of numberKeys)r[k]=Math.max(0,Number(raw[k])||0);return r;
@@ -51438,7 +51463,7 @@ const WLOG=(()=>{
     else if(c==='AI_OUTPUT_LIMIT'||c==='AI_JSON_TRUNCATED'){category='AI 출력 잘림';cause='AI가 완전한 결과를 반환하기 전에 출력이 끝났습니다. 잘린 결과는 적용하지 않습니다.';next='자동 정리는 미완료 묶음만 나눠 다시 처리합니다. 한 턴에서도 반복되면 추론 강도를 낮추거나 모델을 바꿔 주세요. 파일을 붙여넣는 작업이면 완성된 JSON 전체를 다시 받으세요.';}
     else if(c==='AI_TIMEOUT'&&r.requestMs===0&&r.queueWaitMs>0){category='AI 순서 대기 시간 초과';cause='다른 작업의 순서를 기다리다가 제한 시간을 넘었습니다. 이번 요청은 서버 처리에 들어가지 않았습니다.';next='진행 중인 작업이 끝난 뒤 다시 정리하세요. 대기만 한 경우에는 정리할 턴 수를 줄이지 않습니다.';}
     const fbReason=r.firebaseReason||((r.provider==='firebase'||/App[ -]?Check/i.test(m))?WishFirebaseErrors.reasonOf({message:r.serverMessage||m,code:c,diagnostic:{httpStatus:http}}):'');
-    const fbHelp=WishFirebaseErrors.describe(fbReason,r.appCheckMode||'unknown');
+    const fbHelp=WishFirebaseErrors.describe(fbReason,r.appCheckMode||'unknown',r);
     if(fbHelp)({category,cause,next}=fbHelp);
     else if(c==='AI_AUTH_COOLDOWN'){category='AI 인증 확인 대기';cause='직전 인증 오류 뒤 같은 연결의 반복 요청을 잠시 막았습니다.';next='앞선 Firebase/AI 연결 오류 기록을 확인하고 설정을 고친 뒤 연결 테스트를 한 번 실행하세요. 대기 종료가 인증 복구를 뜻하지는 않습니다.';}
     // A program fault is never the AI's answer. Only rows from an AI answer path (mode, provider, schema check) get the AI-fix steps.
@@ -74604,7 +74629,7 @@ function ensureRoot() {
 
 function errorDiagnosticCard(row,expanded=false){
     const x = WLOG.describe(row), key = 'err-' + row.id;
-    const chips = [row.code, row.service || x.service, row.host, row.firebaseStage, row.appCheckMode ? '요청 시 App Check '+row.appCheckMode : '', row.sdkCode, row.provider, row.model, x.httpStatus ? 'HTTP ' + x.httpStatus : '', row.method, row.path ? '위치 ' + row.path : '', row.expected ? '필요 ' + row.expected : '', row.actual ? '확인 ' + row.actual : '', row.inputChars ? '입력 ' + fmt(row.inputChars) + '자' : '', row.responseChars ? '응답 ' + fmt(row.responseChars) + '자' : '', row.elapsedMs ? '경과 ' + Math.round(row.elapsedMs / 1000) + '초' : '', row.timeoutMs ? '제한 ' + Math.ceil(row.timeoutMs / 1000) + '초' : '', row.finishReason ? '종료 사유 ' + row.finishReason : '', row.nextBatchTurns ? '다음 묶음 최대 '+row.nextBatchTurns+'턴' : '', row.queueWaitMs ? '순서 대기 '+Math.round(row.queueWaitMs/1000)+'초' : '', row.requestMs ? 'API 처리 '+Math.round(row.requestMs/1000)+'초' : ''].filter(Boolean);
+    const chips = [row.code, row.service || x.service, row.host, row.firebaseStage, row.appCheckMode ? '요청 시 App Check '+row.appCheckMode : '', row.appCheckPrepared ? 'SDK 토큰 준비 완료' : '', row.appCheckRefreshAttempt ? '새 토큰 재확인 1회' : '', row.firebaseSdkVersion ? 'Firebase SDK '+row.firebaseSdkVersion : '', row.firebaseBackend, row.sdkCode, row.provider, row.model, x.httpStatus ? 'HTTP ' + x.httpStatus : '', row.method, row.path ? '위치 ' + row.path : '', row.expected ? '필요 ' + row.expected : '', row.actual ? '확인 ' + row.actual : '', row.inputChars ? '입력 ' + fmt(row.inputChars) + '자' : '', row.responseChars ? '응답 ' + fmt(row.responseChars) + '자' : '', row.elapsedMs ? '경과 ' + Math.round(row.elapsedMs / 1000) + '초' : '', row.timeoutMs ? '제한 ' + Math.ceil(row.timeoutMs / 1000) + '초' : '', row.finishReason ? '종료 사유 ' + row.finishReason : '', row.nextBatchTurns ? '다음 묶음 최대 '+row.nextBatchTurns+'턴' : '', row.queueWaitMs ? '순서 대기 '+Math.round(row.queueWaitMs/1000)+'초' : '', row.requestMs ? 'API 처리 '+Math.round(row.requestMs/1000)+'초' : ''].filter(Boolean);
     const open = expanded || S.openSet.has(key), fail = row.level !== '주의';
     return `<section class="m3-panel m3-error-detail wp-err ${fail ? 'is-fail' : 'is-warn'}" data-key="error-${esc(row.id)}">
 <div class="wp-err-head"><b>${esc(row.operation || '작업')}</b>${tag(esc(row.level) + (row.count > 1 ? ' · ' + row.count + '회' : ''))}</div>
