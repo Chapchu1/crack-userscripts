@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.77
+// @version      0.5.78
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,13 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.78 · 공통 연결 창의 응답교정 전용 모델·추론 설정
+ * 모델·생성 아래에 응답교정 모델과 추론 선택을 추가합니다.
+ * 기존 교정 설정과 같은 저장값을 사용하며 공급자별 모델과 공통 모델 복귀를 지원합니다.
+ * 취소 시 변경하지 않고, 공통 연결 저장 실패 시 교정 설정을 저장하지 않습니다.
+ * 교정 저장 실패 시 공통 연결을 복원하며 기존 검사 항목·자동화·UI 위치를 유지합니다.
+ */
 
 /* 0.5.77 · WRMC 2.0.2 통합 · Suite UI/저장 보호 유지
  * Claude/OpenAI 공식 API·Firebase 스트리밍과 공급자별 완료/재시도 검증을 연결합니다.
@@ -709,7 +716,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.77'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.78'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49748,7 +49755,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.77-suite';
+  const SCRIPT_VERSION = '0.5.78-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -53921,7 +53928,45 @@ async function recoverGenerationGate(rid,expectedGate=null) {
 
   function aiSettingsDraft(s){return {provider:s.provider,firebase:s.firebaseConfig,vxLoc:s.vertexLocation,dsBase:s.deepSeekBaseUrl,model:s.model,thinking:s.geminiThinkingLevel,dsModel:s.deepSeekModel,dsThinking:s.deepSeekThinking?'1':'0',dsCustom:s.deepSeekCustomModel};}
 
-function openAiSettingsDialog(options={}){const s=loadAiSettings();return WUI.openSheet('ai',{saved:s,providers:[['ai-studio','Google AI Studio'],['firebase','Firebase AI Logic'],['deepseek','DeepSeek'],['openai','OpenAI / 호환'],['anthropic','Claude API'],['vertex','Vertex JSON'],['manual','외부 AI 복붙']],models:{'ai-studio':AI_GEMINI_MODELS.map(x=>[x,x]),firebase:AI_GEMINI_MODELS.map(x=>[x,x]),vertex:AI_GEMINI_MODELS.map(x=>[x,x]),deepseek:AI_DEEPSEEK_MODELS.map(x=>[x.id,x.label]),anthropic:AI_ANTHROPIC_MODELS.map(x=>[x.id,x.label])},showCustom:true,draft:{provider:s.provider,key:'',firebase:s.firebaseConfig,firebaseBackend:s.firebaseBackend,firebaseLocation:s.firebaseLocation,dsKey:'',dsBase:s.deepSeekBaseUrl,model:s.model,thinking:s.geminiThinkingLevel,dsModel:s.deepSeekModel,dsThinking:s.deepSeekThinking?'1':'0',dsCustom:s.deepSeekCustomModel,openaiKey:'',openaiBase:s.openaiBaseUrl,openaiModel:s.openaiModel,openaiThinking:s.openAiReasoningEffort,anthropicKey:'',anthropicModel:s.anthropicModel,vertexJson:'',vertexLocation:s.vertexLocation,vertexProject:s.vertexProjectId,test:''}});}
+function WUIRefinerDraftView(d){
+  const a=d.draft,p=a.provider==='ai-studio'?'gemini':a.provider;
+  const shared=String(a.provider==='openai'?a.openaiModel||'':a.provider==='anthropic'?a.anthropicModel||'':a.provider==='deepseek'?a.dsCustom?.trim()||a.dsModel||'':a.model||'');
+  const chosen=String(a.refinerModels?.[p]||''),seen=new Set(['']);
+  const models=[['','공통 모델 사용'+(shared?' · '+shared:'')]];
+  for(const row of [...(d.models?.[a.provider]||[]),...(shared?[[shared,shared]]:[]),...(chosen?[[chosen,chosen+' · 저장된 모델']]:[])]){
+    const id=String(row[0]||'');if(id&&!seen.has(id)){seen.add(id);models.push([id,String(row[1]||id)]);}
+  }
+  const allowed=window.__WISH_RP_MANAGER_AI_BRIDGE__?.thinkingLevels?.(p,chosen||shared)||[];
+  const stored=String(a.refinerThinking||'medium');
+  const thinking=allowed.includes(stored)?stored:allowed.includes('medium')?'medium':allowed[0]||stored;
+  const levels=[...(allowed.includes('none')||stored==='none'?[['none','없음']]:[]),['low','낮음'],['medium','보통'],['high','높음']].filter(([id])=>!allowed.length||allowed.includes(id));
+  return {provider:p,shared,chosen,models,allowed,thinking,levels,ready:a.refinerReady===true};
+}
+function WUICommitRefinerDraft(d){
+  if(!d.draft.refinerReady)return false;
+  const before=d.refinerPreferences,models={},draft=d.draft;
+  for(const provider of ['gemini','firebase','vertex','deepseek','openai','anthropic']){
+    const a=String(draft.refinerModels?.[provider]||''),b=String(before?.models?.[provider]||'');
+    if(a!==b)models[provider]=a;
+  }
+  const thinkingChanged=draft.refinerThinking!==before?.thinkingLevel;
+  if(!Object.keys(models).length&&!thinkingChanged)return false;
+  const api=window.__WISH_RP_MANAGER_REFINER__;
+  if(typeof api?.setModelPreferences!=='function')throw Error('응답교정 설정이 준비되지 않았습니다. 창을 다시 열어 주세요.');
+  api.setModelPreferences({models,...(thinkingChanged?{thinkingLevel:draft.refinerThinking}:{})});
+  return true;
+}
+function WUISaveAPIAndRefiner(d){
+  const cfg=WUIAIConfig(d),before=loadAiSettings();
+  saveAiSettings(cfg);
+  try{WUICommitRefinerDraft(d);}catch(error){
+    try{saveAiSettings(before);}catch(restoreError){throw Error('응답교정 설정 저장에 실패했고 공통 API 복원도 확인하지 못했습니다. 연결 설정을 다시 확인해 주세요. '+error.message+' / '+restoreError.message);}
+    throw error;
+  }
+  return cfg;
+}
+
+function openAiSettingsDialog(options={}){const s=loadAiSettings(),refinerPreferences=window.__WISH_RP_MANAGER_REFINER__?.modelPreferences?.()||null;return WUI.openSheet('ai',{saved:s,refinerPreferences,providers:[['ai-studio','Google AI Studio'],['firebase','Firebase AI Logic'],['deepseek','DeepSeek'],['openai','OpenAI / 호환'],['anthropic','Claude API'],['vertex','Vertex JSON'],['manual','외부 AI 복붙']],models:{'ai-studio':AI_GEMINI_MODELS.map(x=>[x,x]),firebase:AI_GEMINI_MODELS.map(x=>[x,x]),vertex:AI_GEMINI_MODELS.map(x=>[x,x]),deepseek:AI_DEEPSEEK_MODELS.map(x=>[x.id,x.label]),anthropic:AI_ANTHROPIC_MODELS.map(x=>[x.id,x.label]),openai:AI_OPENAI_MODELS.map(x=>[x.id,x.label])},showCustom:true,draft:{refinerReady:!!refinerPreferences,refinerModels:{...(refinerPreferences?.models||{})},refinerThinking:refinerPreferences?.thinkingLevel||'medium',provider:s.provider,key:'',firebase:s.firebaseConfig,firebaseBackend:s.firebaseBackend,firebaseLocation:s.firebaseLocation,dsKey:'',dsBase:s.deepSeekBaseUrl,model:s.model,thinking:s.geminiThinkingLevel,dsModel:s.deepSeekModel,dsThinking:s.deepSeekThinking?'1':'0',dsCustom:s.deepSeekCustomModel,openaiKey:'',openaiBase:s.openaiBaseUrl,openaiModel:s.openaiModel,openaiThinking:s.openAiReasoningEffort,anthropicKey:'',anthropicModel:s.anthropicModel,vertexJson:'',vertexLocation:s.vertexLocation,vertexProject:s.vertexProjectId,test:''}});}
 
 
   async function runAiSlotUpdate(room){return await WLOG.run("선택한 기억 갱신 중",async task=>{return U3.run(room,'memory');});}
@@ -75457,10 +75502,10 @@ source(d) {
 viewer(d) { return sheet(d, { title: d.candidate ? 'Wish 주입 후보 원문' : '이 메시지에 들어간 Wish 주입', desc: esc(d.desc || `${fmt(String(d.text || '').length)}자`), wide: true, body: `<div class="m3-status m3-ok m3-bottomgap">${ic('check')}<span>${d.candidate?'갱신 전 후보입니다. 한도 선별과 서버 확인 뒤 실제 주입량이 확정됩니다.':'최신 AI 답변은 건드리지 않고, 그 바로 이전 AI 답변 뒤에 숨겨 붙인 내용입니다. 사용자에게는 보이지 않습니다.'}</span></div><pre class="m3-block tall">${esc(d.text || '')}</pre>`, foot: `${btn('복사', 'copyText', { arg: d.id, cls: 'mini', icon: 'copy' })}${SP}${closeBtn(d)}` }); },
 confirm(d) { return sheet(d, { title: esc(d.title), body: `<p style="color:var(--m3-fg2);line-height:1.85">${esc(d.body)}</p>`, foot: `${SP}${closeBtn(d, '취소')}${btn(esc(d.okLabel || '확인'), 'cfOk', { arg: d.id, cls: d.danger ? 'danger' : 'primary', icon: d.danger ? 'alert' : 'check' })}` }); },
 ai(d) {
-      const a = d.draft, ds = a.provider === 'deepseek', models = [...((d.models || {})[a.provider] || [])];
+      const a = d.draft, ds = a.provider === 'deepseek', models = [...((d.models || {})[a.provider] || [])], rr=WUIRefinerDraftView(d);
       if(a.provider==='manual')return sheet(d,{title:'공통 AI 연결 · 외부 AI 복붙',body:field('AI 서비스',selc(D(d,'provider'),a.provider,d.providers||[['ai-studio','Google AI Studio'],['firebase','Firebase AI Logic'],['deepseek','DeepSeek'],['openai','OpenAI / 호환'],['anthropic','Claude API'],['vertex','Vertex JSON'],['manual','외부 AI 복붙']]))+'<p class="m3-muted">API 키 없이 씁니다. 홈에서 함께 정리로 요청문을 받은 뒤 외부 AI의 답을 붙여 넣으세요. 자동 정리는 차례만 알리고 API를 호출하지 않습니다.</p>',foot:SP+closeBtn(d,'취소')+saveBtn(d,'저장','aiSave')});
       if(!ds&&a.model&&!models.some(([id])=>id===a.model))models.unshift([a.model,a.model+' · 기존 설정']);
-      return sheet(d, { title: '공통 API 연결', desc: '위시 Core · Suite · 로어 · 크랙 요약에 같은 API와 모델을 적용합니다', body: `
+      return sheet(d, { title: '공통 API 연결', desc: '위시 Core · Suite · 로어 · 크랙 요약에 같은 API를 적용하며, 응답교정 모델은 따로 선택할 수 있습니다', body: `
       <section class="m3-grp"><div class="m3-gt">${ic('key')}연결</div>${field('AI 서비스', selc(D(d, 'provider'), a.provider, d.providers || [['ai-studio', 'Google AI Studio'], ['firebase', 'Firebase AI Logic'], ['deepseek', 'DeepSeek API'],['manual','외부 AI 복붙']]))}
       ${a.provider==='firebase'?field('Firebase Config',ta(D(d,'firebase'),a.firebase,'firebaseConfig 설정 코드','100'))+btn(esc(CFA.stateLabel(a.firebase)),'aiAppCheck',{arg:d.id,cls:'mini'})+field('Firebase 백엔드',selc(D(d,'firebaseBackend'),a.firebaseBackend,[['vertex','Vertex AI Gemini API'],['google','Gemini Developer API']]))+field('리전',inp(D(d,'firebaseLocation'),a.firebaseLocation||'global')):
         a.provider==='openai'?field('OpenAI 호환 API Key',inp(D(d,'openaiKey'),a.openaiKey||'','저장됨 · 새 키로 교체','password'))+field('Base URL',inp(D(d,'openaiBase'),a.openaiBase||'')):
@@ -75471,6 +75516,9 @@ ai(d) {
       ${a.provider!=='ai-studio'?field('의미 검색용 Gemini API Key · 선택',inp(D(d,'key'),a.key||'','저장됨 · 새 키로 교체','password'),'글 생성과 별도로 임베딩 검색에 사용합니다. 비워 두면 새로 교체하지 않습니다.'):''}</section>
       <section class="m3-grp"><div class="m3-gt">${ic('spark')}모델 · 생성</div>
       ${a.provider==='openai'?field('모델 ID',inp(D(d,'openaiModel'),a.openaiModel||''))+field('추론 강도 · 공식 GPT-6 모델',selc(D(d,'openaiThinking'),a.openaiThinking||'medium',[...(a.openaiModel==='gpt-6-luna'?[['none','없음']]:[]),['low','낮음'],['medium','보통'],['high','높음']])):a.provider==='anthropic'?`<div class="m3-grid2">${field('Claude 모델',selc(D(d,'anthropicModel'),a.anthropicModel||'claude-sonnet-5-5',models))}${field('추론 강도',selc(D(d,'thinking'),a.thinking,[['low','낮음'],['medium','보통'],['high','높음']]))}</div>`:ds ? `<div class="m3-grid2">${field('DeepSeek 모델', selc(D(d, 'dsModel'), a.dsModel, models.length ? models : [[a.dsModel, a.dsModel]]))}${field('추론', selc(D(d, 'dsThinking'), a.dsThinking, [['1', '켜기'], ['0', '끄기']]))}</div>${d.showCustom ? field('커스텀 모델 ID · 서드파티 전용', inp(D(d, 'dsCustom'), a.dsCustom || '')) : ''}` : `<div class="m3-grid2">${field('모델', selc(D(d, 'model'), a.model, models.length ? models : [[a.model, a.model]]))}${field('추론 강도', selc(D(d, 'thinking'), a.thinking, d.thinkingOptions || [['low', '낮음'], ['medium', '보통'], ['high', '높음']]))}</div>`}
+      </section>
+      <section class="m3-grp" data-key="ai-response-refiner"><div class="m3-gt">${ic('edit')}응답교정 전용</div>
+      ${rr.ready?`<div class="m3-grid2">${field('응답교정 모델',selc(D(d,'refinerModels.'+rr.provider),rr.chosen,rr.models))}${field('응답교정 추론 강도',selc(D(d,'refinerThinking'),rr.thinking,rr.levels).replace('<select ',rr.allowed.length?'<select ':'<select disabled '))}</div><p class="m3-muted">같은 API 연결을 사용하며 저장하면 응답교정에만 적용합니다. ‘공통 모델 사용’을 선택하면 위 모델을 따릅니다.${rr.allowed.length?'':' 현재 모델은 추론 강도를 별도로 지정하지 않습니다.'} 연결 테스트는 위 공통 모델을 사용합니다.</p>`:'<p class="m3-muted">응답교정 설정을 준비 중입니다. 잠시 후 이 창을 다시 열어 주세요.</p>'}
       </section>
       <div class="m3-status ${a.test === 'ok' ? 'm3-ok' : a.test === 'busy' ? 'm3-busy' : a.test === 'err' ? 'm3-err' : ''}" aria-live="polite">${ic(a.test === 'ok' ? 'check' : 'alert')}<span>${a.test === 'busy' ? `연결 테스트 중${dots}` : a.test === 'ok' ? '연결 성공 · 저장을 눌러야 유지됩니다' : a.test === 'err' ? esc(a.testMsg || '연결 실패') : '연결 테스트는 소량의 API를 사용합니다.'}</span></div>`,
         foot: `${btn('인증 삭제', 'aiClear', { arg: d.id, cls: 'danger mini' })}${SP}${btn('연결 테스트', 'aiTest', { arg: d.id, dis: a.test === 'busy' })}${saveBtn(d, '저장', 'aiSave')}` });
@@ -77087,7 +77135,7 @@ relReviewApply:id=>R31.applyRelationshipReview(id),
  psLoad:WUIPresetLoadRoom,psDeleteGroup:WUIPresetDeleteGroup,
  psSave:id=>WUIPresetsSave(WUI.ui.dlg(id),false),psSaveApply:id=>WUIPresetsSave(WUI.ui.dlg(id),true),
  aiAppCheck:id=>{const d=WUI.ui.dlg(id);CFA.open(()=>WUIAIConfig(d).firebaseConfig,()=> '12.18.0');},
- aiSave:id=>{const d=WUI.ui.dlg(id);saveAiSettings(WUIAIConfig(d));WUIRefreshSettings();WUI.closeSheet(d);WSUITE.suite?.refresh();WSUITE.refreshConnectionViews();notify('Core·Suite·로어·크랙 요약의 공통 API를 저장했습니다.','success');},aiTest:async id=>{const d=WUI.ui.dlg(id);d.draft.test='busy';WUI.paint();try{const cfg=WUIAIConfig(d);if(!isAiProviderReady(cfg))throw Error('인증 정보를 입력해 주세요.');const result=await callAiProvider(cfg,'연결 테스트입니다. 다른 설명 없이 OK 두 글자만 출력하십시오.','OK라고 답하십시오.',{taskKind:'test',maxOutputTokens:512,operationLabel:'AI 연결 테스트'});d.draft.test='ok';d.draft.testMsg=getAiSelectedModel(cfg)+' · '+cleanAiGeneratedText(result.text).slice(0,50);}catch(e){d.draft.test='err';d.draft.testMsg=e.message;}},aiClear:id=>{const d=WUI.ui.dlg(id),p=normalizeAiProvider(d.draft.provider);if(!confirm(getAiProviderLabel(p)+'의 저장된 인증 정보를 삭제할까요?'))return;const next={...loadAiSettings()};next[p==='deepseek'?'deepSeekApiKey':p==='firebase'?'firebaseConfig':p==='openai'?'openaiApiKey':p==='anthropic'?'anthropicApiKey':p==='vertex'?'vertexJson':'apiKey']='';saveAiSettings(next);WUIRefreshSettings();WUI.closeSheet(d);},
+ aiSave:id=>{const d=WUI.ui.dlg(id);WUISaveAPIAndRefiner(d);WUIRefreshSettings();WUI.closeSheet(d);WSUITE.suite?.refresh();WSUITE.refreshConnectionViews();notify('공통 API와 응답교정 전용 모델 설정을 저장했습니다.','success');},aiTest:async id=>{const d=WUI.ui.dlg(id);d.draft.test='busy';WUI.paint();try{const cfg=WUIAIConfig(d);if(!isAiProviderReady(cfg))throw Error('인증 정보를 입력해 주세요.');const result=await callAiProvider(cfg,'연결 테스트입니다. 다른 설명 없이 OK 두 글자만 출력하십시오.','OK라고 답하십시오.',{taskKind:'test',maxOutputTokens:512,operationLabel:'AI 연결 테스트'});d.draft.test='ok';d.draft.testMsg=getAiSelectedModel(cfg)+' · '+cleanAiGeneratedText(result.text).slice(0,50);}catch(e){d.draft.test='err';d.draft.testMsg=e.message;}},aiClear:id=>{const d=WUI.ui.dlg(id),p=normalizeAiProvider(d.draft.provider);if(!confirm(getAiProviderLabel(p)+'의 저장된 인증 정보를 삭제할까요?'))return;const next={...loadAiSettings()};next[p==='deepseek'?'deepSeekApiKey':p==='firebase'?'firebaseConfig':p==='openai'?'openaiApiKey':p==='anthropic'?'anthropicApiKey':p==='vertex'?'vertexJson':'apiKey']='';saveAiSettings(next);WUIRefreshSettings();WUI.closeSheet(d);},
 
 
 
@@ -77577,7 +77625,7 @@ Object.assign(WSUITE.host, {
     const request={...cfg,maxOutputTokens:options.test?2048:Math.max(16384,Math.min(32768,Number(options.maxOutputTokens)||32768))};
     if(options.model&&options.model!=='shared'){
       const model=String(options.model).trim();if(!model||model.length>200)throw Error('교정 모델명을 확인해 주세요.');
-      if(cfg.provider==='openai')request.openaiModel=model;else if(cfg.provider==='anthropic')request.anthropicModel=model;else if(cfg.provider==='deepseek')request.deepSeekModel=model;else request.model=model;
+      if(cfg.provider==='openai')request.openaiModel=model;else if(cfg.provider==='anthropic')request.anthropicModel=model;else if(cfg.provider==='deepseek'){if(isDirectDeepSeekBaseUrl(cfg.deepSeekBaseUrl)){request.deepSeekModel=model;request.deepSeekCustomModel='';}else request.deepSeekCustomModel=model;}else request.model=model;
     }
     if(cfg.provider==='openai')request.openAiReasoningEffort=options.test?'low':normalizeOpenAiReasoningEffort(options.thinkingLevel||cfg.openAiReasoningEffort,request.openaiModel);
     if(gemini||cfg.provider==='anthropic')request.geminiThinkingLevel=options.test?'low':['low','medium','high'].includes(options.thinkingLevel)?options.thinkingLevel:cfg.geminiThinkingLevel||'medium';
@@ -78570,8 +78618,9 @@ A correction requires a supported contradiction, a materially relevant persisten
     } catch (_) { return {...DEFAULT_SETTINGS,reviewTopics:normalizeReviewTopics(null),responseRefinerModels:{},outputFormat:normalizeOutputFormat(null)}; }
   }
 
-  function saveSettings() {
+  function saveSettings({modelOnly=false}={}) {
     GM_setValue(SETTINGS_KEY, JSON.stringify(settings));
+    if(modelOnly)return;
     const legacy = suiteWindow.__LoreInj?.settings;
     if (legacy?.config) {
       legacy.config.refinerEnabled = settings.enabled;
@@ -78584,6 +78633,28 @@ A correction requires a supported contradiction, a materially relevant persisten
     return MODEL_OPTIONS.find(x => x.id === id) || MODEL_OPTIONS.find(x => x.id === DEFAULT_MODEL) || MODEL_OPTIONS[0];
   }
 
+  function modelPreferences(){
+    const models={...settings.responseRefinerModels};
+    if(settings.model!=='shared')for(const p of ['gemini','firebase','vertex'])if(!Object.hasOwn(models,p))models[p]=modelMeta().id;
+    return {models,thinkingLevel:settings.responseRefinerThinkingLevel};
+  }
+  function setModelPreferences(update={}){
+    const valid=new Set(['gemini','firebase','vertex','deepseek','openai','anthropic']);
+    const edits=update.models||{};
+    if(!edits||typeof edits!=='object'||Array.isArray(edits))throw Error('응답교정 모델 설정을 확인해 주세요.');
+    for(const [provider,model] of Object.entries(edits))if(!valid.has(provider)||typeof model!=='string'||model.length>200||/[\r\n\u0000-\u001f]/.test(model))throw Error('응답교정 모델명을 확인해 주세요.');
+    if(update.thinkingLevel!==undefined&&!['none','low','medium','high'].includes(update.thinkingLevel))throw Error('응답교정 추론 강도를 확인해 주세요.');
+    const before={models:settings.responseRefinerModels,model:settings.model,thinking:settings.responseRefinerThinkingLevel};
+    const migrate=Object.keys(edits).some(p=>['gemini','firebase','vertex'].includes(p));
+    const next=migrate?modelPreferences().models:{...settings.responseRefinerModels};
+    for(const [provider,model] of Object.entries(edits)){const id=model.trim();if(id)next[provider]=id;else delete next[provider];}
+    settings.responseRefinerModels=next;if(migrate)settings.model='shared';
+    if(update.thinkingLevel!==undefined)settings.responseRefinerThinkingLevel=update.thinkingLevel;
+    try{saveSettings({modelOnly:true});}catch(error){settings.responseRefinerModels=before.models;settings.model=before.model;settings.responseRefinerThinkingLevel=before.thinking;throw error;}
+    refreshConnectionModelControls?.();
+    return modelPreferences();
+  }
+  let refreshConnectionModelControls=null;
   function currentModelId(){const shared=window.__WISH_RP_MANAGER_AI_BRIDGE__?.status()||{};const override=settings.responseRefinerModels?.[shared.provider];if(override)return String(override);if(settings.model!=='shared'&&['gemini','ai-studio','firebase','vertex'].includes(shared.provider))return modelMeta().id;return String(shared.model||'gemini-3.8-flash');}
 
   function currentModelLabel() {
@@ -82197,30 +82268,33 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
     const speedField=document.createElement('label');speedField.className='rr-review-field';speedField.append(formLabel('검토 방식'));
     const speed=document.createElement('select');speed.dataset.reviewMode='true';speed.style.cssText=provider.style.cssText;
     speed.innerHTML='<option value="fast">빠른 검토 · 생성 전 자료 + 관련 기억</option><option value="normal">정밀 검토 · 저장자료 종합 검색</option>';speed.value=settings.reviewMode==='normal'?'normal':'fast';speed.onchange=()=>{settings.reviewMode=speed.value;saveSettings();updateThinking();};speedField.append(speed);box.append(speedField);
-    const api=window.__WISH_RP_MANAGER_AI_BRIDGE__,shared=api?.status()||{};
+    const api=window.__WISH_RP_MANAGER_AI_BRIDGE__;
     const modelControls=document.createElement('div');modelControls.className='rr-review-model-controls';
     const modelField=document.createElement('div');modelField.className='rr-review-field';modelField.appendChild(formLabel('응답교정 모델'));
-    const modelSelect=document.createElement('select');modelSelect.dataset.refinerModel='true';modelSelect.setAttribute('aria-label','응답교정 모델');modelSelect.style.cssText=provider.style.cssText;
-    const sharedOption=document.createElement('option');sharedOption.value='';sharedOption.textContent='공용 모델 사용 · '+(shared.model||'미설정');modelSelect.appendChild(sharedOption);
-    const modelChoices=shared.models?.length?shared.models:['gemini','firebase','vertex'].includes(shared.provider)?MODEL_OPTIONS.map(row=>({value:row.id,label:row.label})):[];
-    for(const choice of modelChoices){const opt=document.createElement('option');opt.value=choice.value;opt.textContent=choice.label;modelSelect.appendChild(opt);}
-    const savedModel=settings.responseRefinerModels[shared.provider]||'';
-    if(savedModel&&![...modelSelect.options].some(opt=>opt.value===savedModel)){const opt=document.createElement('option');opt.value=savedModel;opt.textContent=savedModel;modelSelect.appendChild(opt);}
-    modelSelect.value=savedModel;modelField.appendChild(modelSelect);
+    const modelSelect=document.createElement('select');modelSelect.dataset.refinerModel='true';modelSelect.setAttribute('aria-label','응답교정 모델');modelSelect.style.cssText=provider.style.cssText;modelField.appendChild(modelSelect);
     const thinkingField=document.createElement('div');thinkingField.className='rr-review-field';thinkingField.appendChild(formLabel('추론 수준'));
     const thinkingSelect=document.createElement('select');thinkingSelect.dataset.refinerThinking='true';thinkingSelect.setAttribute('aria-label','응답교정 추론 수준');thinkingSelect.style.cssText=provider.style.cssText;
     const thinkingHint=document.createElement('small');thinkingHint.className='rr-review-setting-hint';
     const updateThinking=()=>{
-      const model=modelSelect.value||shared.model||'',allowed=api?.thinkingLevels?.(shared.provider,model)||[];
+      const shared=api?.status()||{},model=modelSelect.value||shared.model||'',allowed=api?.thinkingLevels?.(shared.provider,model)||[];
       thinkingSelect.replaceChildren();
       for(const level of (allowed.includes('none')?['none','low','medium','high']:['low','medium','high'])){const opt=document.createElement('option');opt.value=level;opt.textContent=level[0].toUpperCase()+level.slice(1);opt.disabled=!allowed.includes(level);thinkingSelect.appendChild(opt);}
-      thinkingSelect.value=settings.responseRefinerThinkingLevel;thinkingSelect.disabled=!allowed.includes(settings.responseRefinerThinkingLevel)&&allowed.length===0;
-      thinkingHint.textContent=fastReview()?'생성 전에 주입된 자료와 답변별 관련 기억을 함께 검토합니다. 생성 경로를 확인할 수 없으면 저장자료 검토로 전환하며 처리기록에 이유를 남깁니다. 호환 인덱스와 공용 Gemini 키가 있으면 의미검색을 사용합니다. 선택한 추론 수준과 검사 항목은 유지합니다.':allowed.length?(allowed.includes(settings.responseRefinerThinkingLevel)?'응답교정에만 적용됩니다. 검토가 느리거나 출력 한도에 도달하면 Low를 선택하면 도움이 됩니다. 출력 예산은 선택한 추론 수준에 맞춰 자동 계산합니다.':'이 모델은 선택한 수준을 지원하지 않습니다. 지원되는 수준을 선택하면 적용됩니다.'):'현재 모델·연결에서는 추론 수준을 별도로 지정하지 않습니다. 저장한 선택값은 유지됩니다.';
+      thinkingSelect.value=allowed.includes(settings.responseRefinerThinkingLevel)?settings.responseRefinerThinkingLevel:allowed.includes('medium')?'medium':allowed[0]||settings.responseRefinerThinkingLevel;thinkingSelect.disabled=allowed.length===0;
+      thinkingHint.textContent=fastReview()?'생성 전에 주입된 자료와 답변별 관련 기억을 함께 검토합니다. 생성 경로를 확인할 수 없으면 저장자료 검토로 전환하며 처리기록에 이유를 남깁니다. 호환 인덱스와 공용 Gemini 키가 있으면 의미검색을 사용합니다. 선택한 추론 수준과 검사 항목은 유지합니다.':allowed.length?'응답교정에만 적용됩니다. 검토가 느리거나 출력 한도에 도달하면 Low를 선택하면 도움이 됩니다. 출력 예산은 선택한 추론 수준에 맞춰 자동 계산합니다.':'현재 모델·연결에서는 추론 수준을 별도로 지정하지 않습니다. 저장한 선택값은 유지됩니다.';
       box.querySelector('[data-model-badge]').textContent=model||'AI 미설정';
     };
-    modelSelect.onchange=()=>{if(modelSelect.value)settings.responseRefinerModels[shared.provider]=modelSelect.value;else delete settings.responseRefinerModels[shared.provider];saveSettings();updateThinking();};
-    thinkingSelect.onchange=()=>{settings.responseRefinerThinkingLevel=thinkingSelect.value;saveSettings();updateThinking();};
-    thinkingField.append(thinkingSelect,thinkingHint);modelControls.append(modelField,thinkingField);box.appendChild(modelControls);updateThinking();
+    refreshConnectionModelControls=(initial=false)=>{
+      if(!initial&&!modelSelect.isConnected)return;
+      const shared=api?.status()||{},savedModel=modelPreferences().models[shared.provider]||'';
+      modelSelect.replaceChildren();
+      const choices=[{value:'',label:'공용 모델 사용 · '+(shared.model||'미설정')},...(shared.models?.length?shared.models:['gemini','firebase','vertex'].includes(shared.provider)?MODEL_OPTIONS.map(row=>({value:row.id,label:row.label})):[])];
+      if(savedModel&&!choices.some(x=>x.value===savedModel))choices.push({value:savedModel,label:savedModel});
+      const seen=new Set();for(const choice of choices){if(seen.has(choice.value))continue;seen.add(choice.value);const opt=document.createElement('option');opt.value=choice.value;opt.textContent=choice.label;modelSelect.appendChild(opt);}
+      modelSelect.value=savedModel;updateThinking();
+    };
+    modelSelect.onchange=()=>{const shared=api?.status()||{};setModelPreferences({models:{[shared.provider]:modelSelect.value}});};
+    thinkingSelect.onchange=()=>setModelPreferences({thinkingLevel:thinkingSelect.value});
+    thinkingField.append(thinkingSelect,thinkingHint);modelControls.append(modelField,thinkingField);box.appendChild(modelControls);refreshConnectionModelControls(true);
 
 
     box.appendChild(formLabel('사용자 승인 교정 예외'));
@@ -82512,7 +82586,7 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
       if(scopeIsCurrent(scope)){addProcessHistory('오류',formatErrorHistory(error));setStatus('선택한 응답 확인 필요','error');showReviewNotice('선택한 응답을 검토하지 못했어요',String(error.message||error),'error');}
     }finally{requestedReviewBusy=false;}
   }
-  window.__WISH_RP_MANAGER_REFINER__ = { connectionInfo:()=>({model:currentModelId(),thinkingLevel:selectedThinkingLevel(),enabled:settings.enabled}), openSettings, openFromNotice, canUseTurn:canUseReviewTurn, reviewLatest: () => runRequestedRefiner(), reviewMessage:(text,id)=>runRequestedRefiner(text,true,id), setDisplayPreference, displayPreferences };
+  window.__WISH_RP_MANAGER_REFINER__ = { modelPreferences, setModelPreferences, connectionInfo:()=>({model:currentModelId(),thinkingLevel:selectedThinkingLevel(),enabled:settings.enabled}), openSettings, openFromNotice, canUseTurn:canUseReviewTurn, reviewLatest: () => runRequestedRefiner(), reviewMessage:(text,id)=>runRequestedRefiner(text,true,id), setDisplayPreference, displayPreferences };
 
   try {
     GM_registerMenuCommand('🪽 응답교정 설정 열기', openSettings);
@@ -82535,7 +82609,7 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
   WSUITE.coreRefiner={version:'1.3.26-suite-0.5.71',open:openSettings,run:runRefiner,getState:()=>({enabled:settings.enabled,busy:workerBusy,status:currentStatus}),clearProcessed:()=>{saveProcessedSet(new Set());return primeBaseline();}};
   const legacy=suiteWindow.__LoreRefiner;
   if(legacy){legacy.refineQueue?.splice(0);legacy.refineMessage=(text,force,_enqueueCallback,id)=>runRequestedRefiner(text,force,id);legacy.manualRefine=(text,id)=>runRequestedRefiner(text,true,id);legacy.enqueueRefine=()=>scheduleAutoCheck();legacy.processQueue=()=>{};legacy.clearProcessed=WSUITE.coreRefiner.clearProcessed;legacy.setNeedsWarmup=()=>primeBaseline();legacy.getRefinerState=()=>({state:workerBusy?'working':'idle',detail:currentStatus,busy:workerBusy,queue:0});legacy.__suiteCoreRefinerVersion='1.3.26-suite-0.5.71';}
-  window.addEventListener('wish:ai-settings-updated',()=>{restoreConnectionState();if(!workerBusy)void primeBaseline();});
+  window.addEventListener('wish:ai-settings-updated',()=>{restoreConnectionState();refreshConnectionModelControls?.();if(!workerBusy)void primeBaseline();});
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });
   } else {
