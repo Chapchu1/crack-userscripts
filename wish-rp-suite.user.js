@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.78
+// @version      0.5.79
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,11 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.79 · 진행규칙 편집창의 전체복사·전체선택·전체삭제
+ * 저장 전 수정 내용을 포함해 내용 전체를 복사하거나 선택할 수 있습니다.
+ * 전체삭제는 편집 중인 내용만 비우며 기존 저장·취소와 항목 삭제는 유지합니다.
+ */
 
 /* 0.5.78 · 공통 연결 창의 응답교정 전용 모델·추론 설정
  * 모델·생성 아래에 응답교정 모델과 추론 선택을 추가합니다.
@@ -716,7 +721,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.78'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.79'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49755,7 +49760,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.78-suite';
+  const SCRIPT_VERSION = '0.5.79-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'); };
@@ -72910,6 +72915,8 @@ body[data-theme="dark"] .m3-ui,body[data-theme="dark"] #wish-rp-monitor{--m3-she
 .m3-sheet>header small{display:block;font-size:12px;color:var(--m3-muted);margin-top:2px}
 .m3-dialog-body{padding:16px 18px;overflow:auto;min-height:0;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--m3-line) transparent}
 .m3-dialog-body>*{animation:none}
+#wish-rp-root .m3-rule-editor-tools{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:0 0 10px}
+#wish-rp-root .m3-rule-editor-tools>.m3-btn{justify-content:center;min-width:0;min-height:38px;padding:7px 5px;font-size:11.5px;white-space:nowrap}
 .m3-dialog-body>*:nth-child(1){animation-delay:.05s}.m3-dialog-body>*:nth-child(2){animation-delay:.09s}.m3-dialog-body>*:nth-child(3){animation-delay:.13s}.m3-dialog-body>*:nth-child(4){animation-delay:.17s}.m3-dialog-body>*:nth-child(5){animation-delay:.21s}.m3-dialog-body>*:nth-child(n+6){animation-delay:.25s}
 @keyframes m3-fieldIn{from{opacity:0;transform:translateY(9px)}}
 .m3-sheet>footer{flex:none;display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--m3-line2);background:var(--m3-card2);flex-wrap:wrap}
@@ -75668,7 +75675,9 @@ promptGuide(d) {
 eSlot(d) {
       const x = d.draft, timed = d.kind === 'char' || d.kind === 'extra', raw = !timed;
       const title = raw ? (d.kind === 'stateRaw' ? '현재상태 원문 편집' : '날짜로그 원문 편집') : d.isNew ? (d.kind === 'char' ? '캐릭터 추가' : '기타·OOC 추가') : `${esc(x.title)} 편집`;
-      return sheet(d, { title, desc: raw ? '원문을 통째로 고칩니다 · 저장하면 섹션·블록을 다시 나눕니다' : '', wide: raw, body: `${timed ? field('이름', inp(D(d, 'title'), x.title || '')) : ''}${d.kind === 'char' ? field('별칭 · 쉼표로 구분', inp(D(d, 'aliases'), x.aliases || ''), '대화에 이 이름이 나오면 자동으로 켭니다.') : ''}${field('내용', ta(D(d, 'content'), x.content || '', '', raw ? '380' : '200'), raw ? esc(d.hint || '') : '')}`, foot: `${timed && !d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` });
+      const rules = d.kind === 'extra', empty = !String(x.content || '').length;
+      const tools = rules ? `<div class="m3-rule-editor-tools" role="group" aria-label="진행규칙 내용 편집">${btn('전체복사', 'ruleEditorCopy', {arg:d.id, cls:'mini', icon:'copy', dis:!!d.busy || empty})}${btn('전체선택', 'ruleEditorSelect', {arg:d.id, cls:'mini', dis:!!d.busy || empty})}${btn('전체삭제', 'ruleEditorClear', {arg:d.id, cls:'danger mini', icon:'trash', dis:!!d.busy || empty})}</div>` : '';
+      return sheet(d, { title, desc: raw ? '원문을 통째로 고칩니다 · 저장하면 섹션·블록을 다시 나눕니다' : '', wide: raw, body: `${timed ? field('이름', inp(D(d, 'title'), x.title || '')) : ''}${d.kind === 'char' ? field('별칭 · 쉼표로 구분', inp(D(d, 'aliases'), x.aliases || ''), '대화에 이 이름이 나오면 자동으로 켭니다.') : ''}${tools}${field('내용', ta(D(d, 'content'), x.content || '', '', raw ? '380' : '200', rules ? ' data-rule-editor-content aria-label="진행규칙 내용"' : ''), raw ? esc(d.hint || '') : rules ? '전체삭제는 내용만 비웁니다. 저장을 눌러야 반영됩니다.' : '')}`, foot: `${timed && !d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` });
     },
 eState(d) { const x = d.draft; return sheet(d, { title: '현재상태 섹션 편집', desc: '이 섹션만 고칩니다', body: `${field('제목', inp(D(d, 'title'), x.title || ''))}${field('본문', ta(D(d, 'body'), x.body || '', '', '200'))}`, foot: `${d.canDelete === false ? '' : delBtn(d)}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` }); },
 eLog(d) { const x = d.draft; return sheet(d, { title: '날짜로그 블록 편집', desc: '날짜와 사건 제목이 같으면 같은 블록으로 봅니다', body: `<div class="m3-grid2">${field('날짜', inp(D(d, 'date'), x.date || ''))}${field('사건 제목', inp(D(d, 'title'), x.title || ''))}</div>${field('본문', ta(D(d, 'body'), x.body || '', '', '180'))}${x.pin !== undefined ? `<div class="m3-stack">${tog('항상 호출', D(d, 'pin'), x.pin, '관련도와 상관없이 매번 넣음')}${tog('자동 호출에서 제외', D(d, 'ex'), x.ex, '직접 고를 때만 들어감')}</div>` : ''}`, foot: `${delBtn(d)}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` }); },
@@ -75978,8 +75987,36 @@ function setKey(key, v, lazy) {
     return el.value;
   }
 
+  // These controls only edit the open rule draft; eSave remains the sole save path.
+  async function ruleEditorAction(mode, id, button) {
+    const d = findDlg(id), area = button?.closest('.m3-dialog')?.querySelector('textarea[data-rule-editor-content]');
+    if (!d || d.type !== 'eSlot' || d.kind !== 'extra' || d.leaving || d.busy || !area || area.dataset.bind !== D(d, 'content') || area.disabled || area.readOnly) return;
+    if (mode === 'copy') {
+      const text = area.value;
+      if (!text.length) return;
+      try {
+        const ok = AD.copy ? await AD.copy(text) : await navigator.clipboard.writeText(text);
+        if (ok === false) throw new Error('clipboard');
+        toast('내용 전체를 복사했습니다.');
+      } catch (_) { toast('복사하지 못했습니다. 전체선택 후 직접 복사해 주세요.', 'warn'); }
+      return;
+    }
+    area.focus({preventScroll:true});
+    if (mode === 'select') {
+      area.select();
+      area.setSelectionRange(0, area.value.length);
+    } else if (mode === 'clear') {
+      area.value = '';
+      area.dispatchEvent(new Event('input', {bubbles:true}));
+      area.setSelectionRange(0, 0);
+    }
+  }
+
   /* ───────── 19. 내장 동작 (화면 전용) ───────── */
   const BUILTIN = {
+ruleEditorCopy:(id,button)=>ruleEditorAction('copy',id,button),
+ruleEditorSelect:(id,button)=>ruleEditorAction('select',id,button),
+ruleEditorClear:(id,button)=>ruleEditorAction('clear',id,button),
 kvOpen:()=>WishKoofr.open(),
 kvSettings:()=>WishKoofr.settings(),
 kvRefresh:()=>WishKoofr.refresh(),
