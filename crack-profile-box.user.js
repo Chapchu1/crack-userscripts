@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Crack Profile Box (크랙 프로필 박스)
 // @namespace    Crack Profile Box
-// @version      1.2.3
-// @description  크랙 프로필 박스
+// @version      1.2.4
+// @description  크랙 프로필 박스 · 채팅방별 설정 저장
 // @author       chu
 // @updateURL   https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-profile-box.user.js
 // @downloadURL https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-profile-box.user.js
@@ -18,6 +18,7 @@
     const GROUP_ID_KEY = 'crack_persona_manager_profile_group_id_v1';
     const LAUNCHER_POSITION_KEY = 'crack_persona_manager_launcher_position_v1';
     const LAUNCHER_PLACEMENT_KEY = 'crack_persona_manager_launcher_placement_v1';
+    const ROOM_SETTINGS_PREFIX = 'crack_persona_manager_room_settings_v1:';
     const API_BASE = 'https://crack-api.wrtn.ai/crack-api';
     const CHAT_API_BASE = 'https://crack-api.wrtn.ai/crack-gen';
     const EXTERNAL_PROFILE_LAUNCHER_SELECTOR = [
@@ -30,6 +31,7 @@
     ].join(', ');
     const state = {
         profiles: [],
+        profilesLoaded: false,
         meta: {},
         search: '',
         view: 'all',
@@ -40,8 +42,11 @@
         selectionMode: false,
         currentChatId: null,
         currentProfileId: null,
+        currentProfileKnown: false,
         managerOpen: false,
-        launcherPlacement: 'floating'
+        launcherPlacement: 'floating',
+        launcherPosition: null,
+        profileListScrollTop: 0
     };
     let profileGroupId = null;
     let authToken = null;
@@ -59,6 +64,16 @@
     let viewportSyncFrame = null;
     let viewportSyncInstalled = false;
     let viewportSettleTimers = [];
+    let activeRoomChatId;
+    let roomEpoch = 0;
+    let legacyRoomSettings = null;
+    let roomSettingsSaveTimer = null;
+    let restoringProfileListScroll = false;
+    let roomStorageWarningShown = false;
+    const roomSettingsCache = new Map();
+    const unpersistedRoomKeys = new Set();
+    const chatProfileRevisions = new Map();
+    const pendingChatProfileChanges = new Set();
     // =========================================================
     // 기본 유틸
     // =========================================================
@@ -229,14 +244,176 @@
     function setLauncherPlacement(value) {
         const placement = value === 'embedded' ? 'embedded' : 'floating';
         state.launcherPlacement = placement;
-        try {
-            localStorage.setItem(LAUNCHER_PLACEMENT_KEY, placement);
-        } catch {
-            // 저장하지 못해도 현재 페이지에서는 적용한다.
-        }
+        saveRoomSettings();
         const launcherPlaced = ensureLauncher();
         renderLauncherPlacementControls();
         return launcherPlaced;
+    }
+    // =========================================================
+    // 채팅방별 표시 설정. 기존 공통 설정은 최초 기본값으로만 사용한다.
+    // 프로필 원문과 메모·태그·즐겨찾기 데이터는 기존 저장 방식을 유지한다.
+    // =========================================================
+    function normalizeLauncherPosition(value) {
+        return Number.isFinite(value?.left) && Number.isFinite(value?.top)
+            ? { left: Math.max(0, value.left), top: Math.max(0, value.top) }
+            : null;
+    }
+    function normalizeRoomSettings(value, defaults = {}) {
+        const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+        const settings = {
+            launcherPlacement: ['floating', 'embedded'].includes(source.launcherPlacement)
+                ? source.launcherPlacement : defaults.launcherPlacement || 'floating',
+            launcherPosition: normalizeLauncherPosition(
+                'launcherPosition' in source ? source.launcherPosition : defaults.launcherPosition
+            ),
+            search: typeof source.search === 'string' ? source.search : '',
+            view: source.view === 'favorite' ? 'favorite' : 'all',
+            sort: ['created-asc', 'created-desc', 'name-asc', 'name-desc'].includes(source.sort)
+                ? source.sort : 'created-asc',
+            selectedTags: normalizeTags(Array.isArray(source.selectedTags) ? source.selectedTags : []),
+            expandedProfiles: Array.isArray(source.expandedProfiles)
+                ? [...new Set(source.expandedProfiles.filter((id) => typeof id === 'string' && id))] : [],
+            profileListScrollTop: Number.isFinite(source.profileListScrollTop)
+                ? Math.max(0, source.profileListScrollTop) : 0
+        };
+        if (source.currentProfileId === null ||
+            (typeof source.currentProfileId === 'string' && source.currentProfileId)) {
+            settings.currentProfileId = source.currentProfileId;
+        }
+        return settings;
+    }
+    function getRoomSettingsKey(chatId) {
+        return ROOM_SETTINGS_PREFIX + (chatId ? `chat:${encodeURIComponent(chatId)}` : 'default');
+    }
+    function readRoomSettings(chatId) {
+        const key = getRoomSettingsKey(chatId);
+        let saved = roomSettingsCache.get(key);
+        try {
+            const raw = unpersistedRoomKeys.has(key) ? null : localStorage.getItem(key);
+            if (raw) saved = JSON.parse(raw);
+        } catch {
+            // 저장소를 읽을 수 없어도 현재 탭에서 기억한 설정은 유지한다.
+        }
+        const defaults = legacyRoomSettings || {};
+        const settings = normalizeRoomSettings(saved, defaults);
+        roomSettingsCache.set(key, settings);
+        return settings;
+    }
+    function writeRoomSettings(chatId, settings) {
+        const key = getRoomSettingsKey(chatId);
+        const normalized = normalizeRoomSettings(settings, legacyRoomSettings || {});
+        roomSettingsCache.set(key, normalized);
+        try {
+            const raw = JSON.stringify(normalized);
+            if (localStorage.getItem(key) !== raw) {
+                localStorage.setItem(key, raw);
+            }
+            unpersistedRoomKeys.delete(key);
+        } catch (error) {
+            unpersistedRoomKeys.add(key);
+            console.warn('[CPM] 채팅방 설정 저장 실패', error);
+            if (!roomStorageWarningShown && document.body) {
+                roomStorageWarningShown = true;
+                showToast('저장공간에 설정을 저장하지 못했어요. 현재 탭에서는 유지돼요.');
+            }
+        }
+    }
+    function saveRoomSettings() {
+        clearTimeout(roomSettingsSaveTimer);
+        roomSettingsSaveTimer = null;
+        if (activeRoomChatId === undefined) return;
+        const list = qs('#cpm-root .cpm-list-wrap');
+        if (list && !restoringProfileListScroll) state.profileListScrollTop = list.scrollTop;
+        const settings = {
+            launcherPlacement: state.launcherPlacement,
+            launcherPosition: state.launcherPosition,
+            search: state.search,
+            view: state.view,
+            sort: state.sort,
+            selectedTags: [...state.selectedTags],
+            expandedProfiles: [...state.expandedProfiles],
+            profileListScrollTop: state.profileListScrollTop
+        };
+        if (activeRoomChatId && state.currentChatId === activeRoomChatId && state.currentProfileKnown) {
+            settings.currentProfileId = state.currentProfileId;
+        }
+        writeRoomSettings(activeRoomChatId, settings);
+    }
+    function scheduleRoomSettingsSave() {
+        clearTimeout(roomSettingsSaveTimer);
+        roomSettingsSaveTimer = setTimeout(saveRoomSettings, 180);
+    }
+    function syncChatRoom() {
+        const chatId = getCurrentChatId();
+        if (activeRoomChatId === chatId) return false;
+        if (activeRoomChatId !== undefined) {
+            saveRoomSettings();
+            // 이전 방에서 열어 둔 변경·삭제 확인창을 새 방에 남기지 않는다.
+            closeManager(false);
+        }
+        activeRoomChatId = chatId;
+        roomEpoch += 1;
+        const settings = readRoomSettings(chatId);
+        state.launcherPlacement = settings.launcherPlacement;
+        state.launcherPosition = settings.launcherPosition;
+        state.search = settings.search;
+        state.view = settings.view;
+        state.sort = settings.sort;
+        state.selectedTags = new Set(settings.selectedTags);
+        state.expandedProfiles = new Set(settings.expandedProfiles);
+        state.profileListScrollTop = settings.profileListScrollTop;
+        state.currentChatId = chatId;
+        state.currentProfileId = settings.currentProfileId || null;
+        state.currentProfileKnown = Object.prototype.hasOwnProperty.call(settings, 'currentProfileId');
+        state.selectionMode = false;
+        state.selectedProfileIds.clear();
+        const launcher = qs('#cpm-launcher');
+        if (launcher) {
+            launcher.__cpmCancelDrag?.();
+            applySavedLauncherPosition(launcher);
+        }
+        ensureLauncher();
+        return true;
+    }
+    function captureChatRequestContext() {
+        syncChatRoom();
+        return {
+            chatId: activeRoomChatId,
+            roomEpoch,
+            profileRevision: chatProfileRevisions.get(activeRoomChatId) || 0
+        };
+    }
+    function rememberChatProfile(chatId, profileId) {
+        if (getCurrentChatId() === chatId) {
+            syncChatRoom();
+            state.currentChatId = chatId;
+            state.currentProfileId = profileId;
+            state.currentProfileKnown = true;
+            saveRoomSettings();
+        } else {
+            // 변경 요청을 보낸 직후 방을 옮겼어도 원래 방에만 기록한다.
+            const settings = readRoomSettings(chatId);
+            settings.currentProfileId = profileId;
+            writeRoomSettings(chatId, settings);
+        }
+    }
+    function installRoomSettingsSync() {
+        for (const method of ['pushState', 'replaceState']) {
+            const original = history[method];
+            history[method] = function (...args) {
+                const result = original.apply(this, args);
+                syncChatRoom();
+                return result;
+            };
+        }
+        window.addEventListener('popstate', syncChatRoom);
+        window.addEventListener('hashchange', syncChatRoom);
+        window.addEventListener('pageshow', syncChatRoom);
+        window.addEventListener('pagehide', saveRoomSettings);
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) saveRoomSettings();
+            else syncChatRoom();
+        });
     }
     function findProfileGroupId(value, depth = 0) {
         if (!value || typeof value !== 'object' || depth > 8) {
@@ -275,8 +452,11 @@
             }
             return null;
         }
-        if (String(value._id ?? '') === String(chatId) && 'chatProfile' in value) {
-            const id = value.chatProfile?._id;
+        if (String(value._id ?? '') === String(chatId) &&
+            ('chatProfile' in value || 'chatProfileId' in value)) {
+            const profile = value.chatProfile ?? value.chatProfileId ?? null;
+            const id = typeof profile === 'string' ? profile : profile?._id ?? profile?.id;
+            if (profile !== null && !id) return null;
             return {
                 found: true,
                 id: id ? String(id) : null
@@ -288,11 +468,19 @@
         }
         return null;
     }
-    function updateCurrentProfile(json) {
+    function updateCurrentProfile(json, context = null) {
+        syncChatRoom();
         const chatId = getCurrentChatId();
         if (!chatId) {
             state.currentChatId = null;
             state.currentProfileId = null;
+            state.currentProfileKnown = false;
+            return false;
+        }
+        if (pendingChatProfileChanges.has(chatId) || (context && (
+            context.chatId !== chatId || context.roomEpoch !== roomEpoch ||
+            context.profileRevision !== (chatProfileRevisions.get(chatId) || 0)
+        ))) {
             return false;
         }
         const result = findCurrentChatProfile(json, chatId);
@@ -300,8 +488,7 @@
             return false;
         }
         const changed = state.currentChatId !== chatId || state.currentProfileId !== result.id;
-        state.currentChatId = chatId;
-        state.currentProfileId = result.id;
+        rememberChatProfile(chatId, result.id);
         if (changed && state.managerOpen) {
             renderProfilesOnly();
         }
@@ -548,6 +735,7 @@
                 let url = '';
                 let method = 'GET';
                 let headers = null;
+                const context = captureChatRequestContext();
                 try {
                     url = typeof input === 'string' ? input : input?.url || '';
                     method = init?.method || (input instanceof Request ? input.method : 'GET');
@@ -579,7 +767,7 @@
                                 .clone()
                                 .json()
                                 .then((json) => {
-                                    handleApiResponse(json);
+                                    handleApiResponse(json, context);
                                 })
                                 .catch(() => {});
                         }
@@ -598,6 +786,7 @@
                 try {
                     this.__cpmMethod = method;
                     this.__cpmUrl = url;
+                    const context = captureChatRequestContext();
                     rememberProfileApiBase(url);
                     const foundGroupId = extractGroupId(url);
                     if (foundGroupId) {
@@ -615,7 +804,7 @@
                                         json = JSON.parse(this.responseText);
                                     }
                                     if (json) {
-                                        handleApiResponse(json);
+                                        handleApiResponse(json, context);
                                     }
                                 } catch {
                                     // JSON 응답이 아니면 무시한다.
@@ -650,9 +839,9 @@
             };
         }
     }
-    function handleApiResponse(json) {
+    function handleApiResponse(json, context = null) {
         try {
-            updateCurrentProfile(json);
+            updateCurrentProfile(json, context);
             const foundGroupId = findProfileGroupId(json);
             if (foundGroupId) {
                 const groupChanged = String(foundGroupId) !== String(profileGroupId || '');
@@ -665,6 +854,7 @@
             if (!Array.isArray(list)) {
                 return false;
             }
+            state.profilesLoaded = true;
             const first = list.find((item) => item?.profileId);
             if (first?.profileId) {
                 rememberProfileGroupId(first.profileId);
@@ -798,21 +988,28 @@
         }
         return {};
     }
-    async function changeChatProfile(profile) {
-        const chatId = getCurrentChatId();
-        if (!chatId || !profile.id) {
+    async function changeChatProfile(profile, chatId = getCurrentChatId()) {
+        if (!chatId || !profile.id || getCurrentChatId() !== chatId) {
             throw new Error('현재 채팅방이나 프로필을 찾지 못했어요.');
         }
+        if (pendingChatProfileChanges.has(chatId)) {
+            throw new Error('이 채팅방의 프로필을 변경 중이에요. 잠시 후 다시 시도해 주세요.');
+        }
         const changeSequence = ++chatProfileChangeSequence;
-        await apiRequest(`/v3/chats/${encodeURIComponent(chatId)}`, {
-            method: 'PATCH',
-            base: CHAT_API_BASE,
-            body: {
-                chatProfileId: String(profile.id)
-            }
-        });
-        state.currentChatId = chatId;
-        state.currentProfileId = String(profile.id);
+        chatProfileRevisions.set(chatId, (chatProfileRevisions.get(chatId) || 0) + 1);
+        pendingChatProfileChanges.add(chatId);
+        try {
+            await apiRequest(`/v3/chats/${encodeURIComponent(chatId)}`, {
+                method: 'PATCH',
+                base: CHAT_API_BASE,
+                body: { chatProfileId: String(profile.id) }
+            });
+            rememberChatProfile(chatId, String(profile.id));
+        } finally {
+            pendingChatProfileChanges.delete(chatId);
+            // 변경 전에 시작한 GET 응답이 뒤늦게 도착해도 선택을 되돌리지 않는다.
+            chatProfileRevisions.set(chatId, (chatProfileRevisions.get(chatId) || 0) + 1);
+        }
         const requestSiteRefresh = () => {
             if (chatProfileChangeSequence !== changeSequence || getCurrentChatId() !== chatId) {
                 return;
@@ -846,7 +1043,7 @@
             confirmButton.disabled = true;
             confirmButton.textContent = '변경 중...';
             try {
-                await changeChatProfile(profile);
+                await changeChatProfile(profile, chatId);
                 modal.remove();
                 renderProfilesOnly();
                 showToast('채팅방 프로필을 변경했어요.');
@@ -865,8 +1062,9 @@
             return false;
         }
         try {
+            const context = captureChatRequestContext();
             const json = await apiRequest(`/profiles/${profileGroupId}/chat-profiles`);
-            return handleApiResponse(json);
+            return handleApiResponse(json, context);
         } catch (error) {
             console.warn('[CPM] 프로필 API 조회 실패', error);
             return false;
@@ -2580,7 +2778,7 @@
         const tags = getAllTags();
         const availableTags = new Set(tags);
         for (const selectedTag of [...state.selectedTags]) {
-            if (!availableTags.has(selectedTag)) {
+            if (state.profilesLoaded && !availableTags.has(selectedTag)) {
                 state.selectedTags.delete(selectedTag);
             }
         }
@@ -2630,6 +2828,9 @@
         const listEl = qs('#cpm-profile-list', root);
         const countEl = qs('#cpm-count', root);
         if (!listEl) return;
+        const listWrap = qs('.cpm-list-wrap', root);
+        const scrollTop = restoringProfileListScroll
+            ? state.profileListScrollTop : listWrap?.scrollTop || 0;
         const profiles = getVisibleProfiles();
         if (countEl) {
             countEl.textContent = `${profiles.length}개 표시 / ${state.profiles.length}개${
@@ -2851,6 +3052,10 @@
                 snippet.hidden = expanded || visibleMatch;
             }
         }
+        if (listWrap) {
+            listWrap.scrollTop = scrollTop;
+            restoringProfileListScroll = false;
+        }
     }
     function renderSelectionControls(root) {
         const availableIds = new Set(
@@ -2931,10 +3136,12 @@
     // 관리자 열기
     // =========================================================
     async function openManager() {
+        syncChatRoom();
         if (qs('#cpm-root')) {
             return;
         }
         state.managerOpen = true;
+        restoringProfileListScroll = true;
         mergeDOMIntoProfiles();
         const root = document.createElement('div');
         root.id = 'cpm-root';
@@ -3131,6 +3338,11 @@
         `;
         document.body.appendChild(root);
         syncViewportLayout();
+        const listWrap = qs('.cpm-list-wrap', root);
+        listWrap.addEventListener('scroll', () => {
+            state.profileListScrollTop = listWrap.scrollTop;
+            scheduleRoomSettingsSave();
+        }, { passive: true });
         // 닫기
         qs('.cpm-close', root).onclick = closeManager;
         qs('#cpm-backdrop', root).onclick = closeManager;
@@ -3139,6 +3351,7 @@
         // 타이핑이 버벅일 수 있어 짧게 디바운스한다.
         qs('#cpm-search', root).addEventListener('input', (event) => {
             state.search = event.target.value;
+            scheduleRoomSettingsSave();
             clearTimeout(searchDebounceTimer);
             searchDebounceTimer = setTimeout(() => {
                 // 검색창 자체는 건드리지 않고
@@ -3181,6 +3394,7 @@
             if (!option) return;
             event.stopPropagation();
             state.sort = option.dataset.sortValue;
+            saveRoomSettings();
             closeSortMenu();
             const label = qs('[data-sort-label]', sortSelect);
             if (label) {
@@ -3200,6 +3414,7 @@
         qsa('[data-view]', root).forEach((button) => {
             button.onclick = () => {
                 state.view = button.dataset.view;
+                saveRoomSettings();
                 render();
             };
         });
@@ -3248,6 +3463,7 @@
                 } else {
                     state.selectedTags.add(tag);
                 }
+                saveRoomSettings();
                 renderTagsOnly();
                 renderProfilesOnly();
                 return;
@@ -3293,6 +3509,7 @@
                 } else {
                     state.expandedProfiles.add(key);
                 }
+                saveRoomSettings();
                 renderProfilesOnly();
                 return;
             }
@@ -3319,7 +3536,8 @@
             render();
         }
     }
-    function closeManager() {
+    function closeManager(persist = true) {
+        if (persist !== false) saveRoomSettings();
         clearTimeout(searchDebounceTimer);
         const root = qs('#cpm-root');
         root?.remove();
@@ -3327,6 +3545,7 @@
         state.selectionMode = false;
         state.selectedProfileIds.clear();
         state.managerOpen = false;
+        restoringProfileListScroll = false;
     }
     // =========================================================
     // Crack Dashboard / Mobile Utility 프로필 버튼 연동
@@ -3456,15 +3675,11 @@
         button.classList.remove('cpm-custom-position');
         button.style.removeProperty('--cpm-launcher-left');
         button.style.removeProperty('--cpm-launcher-top');
-        try {
-            const saved = JSON.parse(localStorage.getItem(LAUNCHER_POSITION_KEY) || 'null');
-            if (Number.isFinite(saved?.left) && Number.isFinite(saved?.top)) {
-                button.classList.add('cpm-custom-position');
-                button.style.setProperty('--cpm-launcher-left', `${saved.left}px`);
-                button.style.setProperty('--cpm-launcher-top', `${saved.top}px`);
-            }
-        } catch {
-            // 저장된 위치를 읽지 못하면 기본 위치를 사용한다.
+        const saved = normalizeLauncherPosition(state.launcherPosition);
+        if (saved) {
+            button.classList.add('cpm-custom-position');
+            button.style.setProperty('--cpm-launcher-left', `${saved.left}px`);
+            button.style.setProperty('--cpm-launcher-top', `${saved.top}px`);
         }
     }
     function installLauncherDrag(button) {
@@ -3504,17 +3719,8 @@
                     // 같은 드래그에서 바로 발생하는 click만 잠깐 막는다.
                     suppressClickUntil = Date.now() + 250;
                     const rect = button.getBoundingClientRect();
-                    try {
-                        localStorage.setItem(
-                            LAUNCHER_POSITION_KEY,
-                            JSON.stringify({
-                                left: rect.left,
-                                top: rect.top
-                            })
-                        );
-                    } catch {
-                        // 저장하지 못해도 현재 페이지 이동은 유지한다.
-                    }
+                    state.launcherPosition = { left: rect.left, top: rect.top };
+                    saveRoomSettings();
                 }
             }
             dragging = false;
@@ -3571,6 +3777,14 @@
             suppressClickUntil = 0;
             pointerId = null;
         });
+        button.__cpmCancelDrag = () => {
+            stopHoldTimer();
+            button.classList.remove('cpm-dragging');
+            dragging = false;
+            dragMoved = false;
+            suppressClickUntil = 0;
+            pointerId = null;
+        };
         button.__cpmConsumeDragClick = () => {
             if (Date.now() > suppressClickUntil) {
                 suppressClickUntil = 0;
@@ -3809,6 +4023,7 @@
             }
             clearTimeout(observerTimer);
             observerTimer = setTimeout(() => {
+                syncChatRoom();
                 syncExternalProfileLaunchers();
                 ensureLauncher();
                 if (!state.managerOpen) {
@@ -3833,6 +4048,18 @@
         loadMeta();
         loadProfileGroupId();
         loadLauncherPlacement();
+        let legacyPosition = null;
+        try {
+            legacyPosition = JSON.parse(localStorage.getItem(LAUNCHER_POSITION_KEY) || 'null');
+        } catch {
+            // 기존 위치가 없거나 손상됐으면 기본 위치를 사용한다.
+        }
+        legacyRoomSettings = normalizeRoomSettings({
+            launcherPlacement: state.launcherPlacement,
+            launcherPosition: legacyPosition
+        });
+        installRoomSettingsSync();
+        syncChatRoom();
         installViewportSync();
         installExternalProfileLauncherBridge();
         // document-start에서는 <head>가 아직 없을 수 있으므로
