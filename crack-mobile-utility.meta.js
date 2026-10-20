@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.3.6
-// @description  4.6.3.6: 울트라챗 선택 시 모델 항목 갱신 안내 수정. 모델 식별값 통일·갱신된 행 자동 재연결로 한 번 탭 선택. 기존 선물 버튼·모델 숨기기 설정·답변 아이콘·합본 기능 보존.
+// @version      4.9.2.1
+// @description  4.9.2.1: 원작자 4.7~4.9.1 라존데·모델 호환·긴 방 경량화·로그 캡처·즉시 소설/채팅 전환 통합. 업데이트 글의 재생성 지침 건너뛰기 추가. 기존 UI·버튼·울트라챗·선물권·통합 부가기능 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js

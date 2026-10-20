@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         🖼️ Crack Custom Room Image Background (배경 이미지&테마)
 // @namespace    crack-custom-room-background
-// @version      4.3.0.5
-// @description  방별 이미지·기존 테마·NYANG 5종·웹폰트를 유지하고 CSP와 동일한 사용자 테마 24종·장식선·전용 채팅창 이미지를 추가하고 “대사” 배경 감지를 보완한 4.3.0.5 통합판.
+// @version      4.3.1.1
+// @description  4.3.1.1: 원작자 4.3.1 전송 버튼 모양 선택·렌더링 최적화 통합. 기존/추가 테마 분류·사용자 테마 44종·장식선·따옴표 강조·기존 UI 유지.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        none

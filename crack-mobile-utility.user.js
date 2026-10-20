@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.3.6
-// @description  4.6.3.6: 울트라챗 선택 시 모델 항목 갱신 안내 수정. 모델 식별값 통일·갱신된 행 자동 재연결로 한 번 탭 선택. 기존 선물 버튼·모델 숨기기 설정·답변 아이콘·합본 기능 보존.
+// @version      4.9.2.1
+// @description  4.9.2.1: 원작자 4.7~4.9.1 라존데·모델 호환·긴 방 경량화·로그 캡처·즉시 소설/채팅 전환 통합. 업데이트 글의 재생성 지침 건너뛰기 추가. 기존 UI·버튼·울트라챗·선물권·통합 부가기능 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -45,8 +45,8 @@
     'use strict';
     if (window.top !== window.self) return;
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.6.3.6' || page.__CMU_4636_BOOT_PENDING__) return;
-    page.__CMU_4636_BOOT_PENDING__ = true;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.9.2.1' || page.__CMU_4921_BOOT_PENDING__) return;
+    page.__CMU_4921_BOOT_PENDING__ = true;
     function earlySorterEnabled() {
         for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
             try {
@@ -1070,7 +1070,7 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
 
 function cmuMain() {
     'use strict';
-    const VERSION = '4.6.3.6';
+    const VERSION = '4.9.2.1';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -1337,7 +1337,16 @@ function cmuMain() {
         logCaptureIncludeImages: true,
         logCaptureIncludeCodeBlocks: true,
         logCaptureRules: [],
+        logCaptureImageFormat: 'png',
+        logCapturePageLength: 'normal',
+        logCaptureWidth: 'normal',
+        logCaptureOneImage: false,
+        logCaptureNoUser: false,
         settingsTabLabels: true,
+        foldOldTurns: true,
+        foldKeepTurns: 10,
+        skipRegenerateGuide: false,
+        renderSkip: true,
     };
     const LOG_CAPTURE_THEME_META = Object.freeze({
         specsheet: { label: '스펙시트', bg: '#F5F5F1' },
@@ -1523,20 +1532,25 @@ function cmuMain() {
     let cmuRoomPanelStateObserver = null;
     let cmuRoomPanelObservedRoot = null;
     let cmuRoomPanelStateTimers = [];
-    let cmuLogCaptureLibPromise = null;
+    
     const LOG_CAPTURE = {
         active: false,
         previewOpen: false,
         rendering: false,
-        selectedIds: [],
-        selectedModels: new Map(),
-        selectionSeq: 0,
-        previewState: null,
-        undoStack: [],
+        renderSeq: 0,
+        sel: new Set(),
+        range: 0,
+        rangeStart: '',
+        models: new Map(),
+        estT: 0,
+        estimate: 0,
+        ed: null,
+        undo: [],
+        out: [],
+        ui: null,
+        view: 'edit',
+        toastT: 0,
         clickHandler: null,
-        output: null,
-        outputMode: false,
-        outputReturnScroll: 0,
         barRetireTimer: 0,
     };
     const CMU_PANEL_INPUT = {
@@ -1741,6 +1755,14 @@ function cmuMain() {
         merged.logCaptureTheme = Object.prototype.hasOwnProperty.call(LOG_CAPTURE_THEME_META, oldCaptureTheme)
             ? oldCaptureTheme
             : (captureThemeAliases[oldCaptureTheme] || 'gwedo');
+        merged.logCaptureImageFormat = merged.logCaptureImageFormat === 'webp' ? 'webp' : 'png';
+        if (merged.logCapturePageLength === 'single')
+            merged.logCaptureOneImage = true;
+        merged.logCapturePageLength = ['short', 'normal', 'long'].includes(merged.logCapturePageLength) ? merged.logCapturePageLength : 'normal';
+        merged.logCaptureWidth = ['narrow', 'normal', 'wide'].includes(merged.logCaptureWidth) ? merged.logCaptureWidth : 'normal';
+        merged.skipRegenerateGuide = source.skipRegenerateGuide === true;
+        merged.logCaptureOneImage = !!merged.logCaptureOneImage;
+        merged.logCaptureNoUser = !!merged.logCaptureNoUser;
         Reflect.deleteProperty(merged, 'themeStyle');
         return merged;
     }
@@ -4583,6 +4605,7 @@ function cmuMain() {
       font-weight: 900;
     }
     #igx-live-popup.inline .blat { color: var(--text-name) !important; opacity: .75; }
+    .chip .cmu-rs-eng { margin-left: 4px; font-size: .86em; opacity: .62; font-weight: 500; }
     #igx-live-popup.inline .bdot {
       width: 6px !important;
       height: 6px !important;
@@ -4880,6 +4903,8 @@ function cmuMain() {
         cmuSyncModelMoved();
         syncCmuDomWatchOptions();
         scheduleCmuInputCounterSync();
+        cmuFoldSync();
+        if (!active || !settings.skipRegenerateGuide) cmuCancelRegenGuide();
     }
     function normalizeAnimatedThumbUrl(url) {
         try {
@@ -6751,6 +6776,12 @@ function cmuMain() {
       <path d="M4.5 8.5h4l1.25-2h4.5l1.25 2h4A1.5 1.5 0 0 1 21 10v7a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17v-7A1.5 1.5 0 0 1 4.5 8.5Z"></path>
       <circle cx="12" cy="13" r="3.2"></circle>
     </svg>`;
+    const LC_WIDTHS = { narrow: 420, normal: 480, wide: 560 };
+    function lcW() {
+        return LC_WIDTHS[settings.logCaptureWidth] || LC_WIDTHS.normal;
+    }
+    const LC_OUT_W = 1080;
+    const LC_PAGE_PX = { short: 1920, normal: 2700, long: 4320 };
     addStyle(`
     #${ID.logCaptureButton}.cmu-native-toolbar-btn,
     #${ID.logCaptureButton}.cmu-native-toolbar-btn svg,
@@ -6762,13 +6793,14 @@ function cmuMain() {
     }
     #${ID.logCaptureButton}.cmu-native-toolbar-btn svg {
       color:hsl(var(--line-gray-2, 0 0% 62%))!important;
-      width:16px!important;
-      height:16px!important;
+      width:17px!important;
+      height:17px!important;
     }
     #${ID.logCaptureButton}[data-cmu-logcap-on="1"] svg {
-      color:hsl(var(--brand-primary, 336 90% 65%))!important;
+      color:#FFB25E!important;
     }
     html.cmu-logcap-mode main [data-message-group-id] {
+      position:relative!important;
       cursor:pointer!important;
       -webkit-tap-highlight-color:transparent!important;
       -webkit-user-select:none!important;
@@ -6780,6 +6812,23 @@ function cmuMain() {
       outline-offset:3px!important;
       border-radius:12px!important;
     }
+    html.cmu-logcap-mode main [data-message-group-id][data-cmu-logcap-start]::after {
+      content:"처음";
+      position:absolute;
+      right:4px;
+      top:-9px;
+      z-index:3;
+      font:700 10px/1 system-ui,-apple-system,sans-serif;
+      background:#FFB25E;
+      color:#231709;
+      padding:4px 7px;
+      border-radius:6px;
+      pointer-events:none;
+    }
+    html.cmu-logcap-mode main [data-message-group-id][data-cmu-logcap-skip] {
+      opacity:.4!important;
+      cursor:default!important;
+    }
     #${ID.logCaptureBar}[hidden] { display:none!important; }
     #${ID.logCaptureBar} {
       position:fixed;
@@ -6788,368 +6837,98 @@ function cmuMain() {
       transform:translateX(-50%);
       z-index:2147483200;
       width:min(94vw, 430px);
-      max-width:94vw;
       box-sizing:border-box;
-      padding:10px 11px;
+      padding:10px;
       border-radius:14px;
-      background:rgba(24,23,28,.94);
+      background:rgba(24,23,28,.96);
       border:1px solid rgba(255,255,255,.14);
       color:#fafafa;
-      box-shadow:0 8px 24px rgba(0,0,0,.24);
-      display:grid;
-      grid-template-columns:minmax(0,1fr);
+      box-shadow:0 8px 24px rgba(0,0,0,.3);
+      display:flex;
+      flex-direction:column;
       gap:8px;
+      font:13px/1.35 system-ui,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
       touch-action:manipulation;
       pointer-events:auto;
     }
-    #${ID.logCaptureBar} .cmu-lc-msg {
-      min-width:0;
-      font-size:13px;
-      line-height:1.35;
-      text-align:center;
-    }
-    #${ID.logCaptureBar} .cmu-lc-actions {
-      display:grid;
-      grid-template-columns:repeat(3,minmax(0,1fr));
-      gap:7px;
-    }
-    #${ID.logCaptureBar} .cmu-lc-act {
-      width:100%;
-      min-width:0;
-      min-height:39px;
-      border:0;
-      background:rgba(255,255,255,.08);
-      color:#fff;
-      border-radius:10px;
-      padding:8px 7px;
-      font-size:12px;
-      white-space:nowrap;
-      touch-action:manipulation;
-      -webkit-tap-highlight-color:transparent;
-    }
-    #${ID.logCaptureBar} .cmu-lc-act.primary {
-      background:rgba(255,178,94,.2);
-      color:#ffd3a5;
-    }
-    #${ID.logCaptureBar} .cmu-lc-act:disabled {
-      opacity:.35;
-      pointer-events:none;
-    }
+    #${ID.logCaptureBar} .cmu-lcb-row1 { display:flex;align-items:center;justify-content:space-between;gap:6px 8px;flex-wrap:wrap;min-height:28px; }
+    #${ID.logCaptureBar} .cmu-lcb-chips { display:flex;gap:5px;flex-wrap:wrap; }
+    #${ID.logCaptureBar} button { font:inherit;-webkit-tap-highlight-color:transparent;touch-action:manipulation; }
+    #${ID.logCaptureBar} .cmu-lcb-chip { border:0;padding:6px 9px;border-radius:8px;background:rgba(255,255,255,.08);color:#e4e4e7;font-size:12px;line-height:1.2;white-space:nowrap; }
+    #${ID.logCaptureBar} .cmu-lcb-chip.on { background:rgba(255,178,94,.22);color:#ffd3a5;box-shadow:inset 0 0 0 1px rgba(255,178,94,.55); }
+    #${ID.logCaptureBar} .cmu-lcb-cnt { margin-left:auto;font-size:12px;color:#c9c9cf;white-space:nowrap;text-align:right; }
+    #${ID.logCaptureBar} .cmu-lcb-cnt b { color:#fff; }
+    #${ID.logCaptureBar} .cmu-lcb-row2 { display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:7px; }
+    #${ID.logCaptureBar} .cmu-lcb-btn { min-height:39px;border:0;border-radius:10px;background:rgba(255,255,255,.08);color:#fff;font-size:13px;font-weight:600;white-space:nowrap; }
+    #${ID.logCaptureBar} .cmu-lcb-btn.pri { background:rgba(255,178,94,.24);color:#ffd3a5; }
+    #${ID.logCaptureBar} .cmu-lcb-btn:disabled { opacity:.35;pointer-events:none; }
     #${ID.logCapturePreview} {
       position:fixed;
       inset:0;
       z-index:2147483420;
-      background:rgba(10,10,12,.7);
-      backdrop-filter:blur(6px);
+      background:rgba(10,10,12,.72);
       display:none;
-      touch-action:pan-y;
       -webkit-tap-highlight-color:transparent;
-    }
-    #${ID.logCapturePreview}.open {
-      display:flex;
-      align-items:stretch;
-      justify-content:center;
-    }
-    #${ID.logCapturePreview} .cmu-lcp-panel {
-      width:min(100vw, 980px);
-      height:100%;
-      height:100dvh;
-      max-height:100%;
-      background:#111214;
       color:#f4f4f5;
-      display:flex;
-      flex-direction:column;
-      touch-action:pan-y;
+      font:13px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+      touch-action:none;
+      overscroll-behavior:none;
     }
-    #${ID.logCapturePreview} .cmu-lcp-head,
-    #${ID.logCapturePreview} .cmu-lcp-foot {
-      padding:10px 12px;
-      border-bottom:1px solid rgba(255,255,255,.08);
-      display:flex;
-      gap:8px;
-      align-items:center;
-      flex-wrap:wrap;
+    #${ID.logCapturePreview}.open { display:flex;justify-content:center; }
+    html.cmu-lcp-lock,
+    html.cmu-lcp-lock body { overflow:hidden!important;overscroll-behavior:none!important; }
+    #${ID.logCapturePreview} [hidden] { display:none!important; }
+    #${ID.logCapturePreview} button { font:inherit;color:inherit;-webkit-tap-highlight-color:transparent;touch-action:manipulation; }
+    #${ID.logCapturePreview} .cmu-lcp-panel { position:relative;width:min(100vw, 560px);height:100%;height:100dvh;background:#111214;display:flex;flex-direction:column;overflow:hidden; }
+    #${ID.logCapturePreview} .cmu-lcp-view { flex:1;min-height:0;display:flex;flex-direction:column; }
+    #${ID.logCapturePreview} .cmu-lcp-top { display:flex;align-items:center;gap:8px;padding:calc(10px + env(safe-area-inset-top)) 12px 10px;border-bottom:1px solid rgba(255,255,255,.08); }
+    #${ID.logCapturePreview} .cmu-lcp-top b { flex:1;min-width:0;text-align:center;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+    #${ID.logCapturePreview} .cmu-lcp-tb { border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:10px;padding:7px 10px;font-size:12.5px;font-weight:600;white-space:nowrap; }
+    #${ID.logCapturePreview} .cmu-lcp-x { width:36px;padding:7px 0;text-align:center; }
+    #${ID.logCapturePreview} .cmu-lcp-gap { width:36px; }
+    #${ID.logCapturePreview} .cmu-lcp-hint { margin:9px 12px 0;font-size:11.5px;color:#b8b8bf;line-height:1.45;display:flex;flex-direction:column;gap:6px; }
+    #${ID.logCapturePreview} .cmu-lcp-restore { align-self:flex-start;border:1px solid rgba(255,178,94,.45);background:rgba(255,178,94,.12);color:#ffd3a5;border-radius:8px;padding:5px 10px;font-size:11.5px; }
+    #${ID.logCapturePreview} .cmu-lcp-scroll { flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;scrollbar-gutter:stable;padding:10px 12px 76px;-webkit-overflow-scrolling:touch;overscroll-behavior:none;touch-action:pan-y; }
+    #${ID.logCapturePreview} .cmu-lcp-wrap { position:relative;margin:0 auto; }
+    #${ID.logCapturePreview} .cmu-lcp-size { position:relative;overflow:hidden; }
+    #${ID.logCapturePreview} .cmu-lcp-scale { position:absolute;left:0;top:0;transform-origin:0 0; }
+    #${ID.logCapturePreview} .cmu-lcp-eds { position:absolute;inset:0;pointer-events:none; }
+    #${ID.logCapturePreview} .cmu-lcp-eb { position:absolute;z-index:1;width:22px;height:22px;padding:0;border:1px solid rgba(0,0,0,.16);border-radius:50%;background:rgba(255,255,255,.95);color:#3a3834;box-shadow:0 1px 4px rgba(0,0,0,.22);font-size:15px;font-weight:700;line-height:1;display:flex;align-items:center;justify-content:center;pointer-events:auto; }
+    #${ID.logCapturePreview} .cmu-lcp-eb::before { content:"";position:absolute;inset:-6px; }
+    #${ID.logCapturePreview} .cmu-lcp-eb.add { background:#FFB25E;border-color:rgba(0,0,0,.12);color:#231709; }
+    #${ID.logCapturePreview} .cmu-lcp-bottom { border-top:1px solid rgba(255,255,255,.08);padding:10px 12px calc(12px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px;background:#141518; }
+    #${ID.logCapturePreview} .cmu-lcp-row { display:flex;align-items:center;gap:7px; }
+    #${ID.logCapturePreview} .cmu-lcp-theme { flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-size:12px;color:#b8b8bf; }
+    #${ID.logCapturePreview} .cmu-lcp-select { flex:1;min-width:0;max-width:220px;box-sizing:border-box;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:#1b1c20;color:#f5f5f6;padding:5px 10px;font:inherit;font-size:16px;line-height:1.3;color-scheme:dark; }
+    #${ID.logCapturePreview} .cmu-lcp-seg { display:inline-flex;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:2px;flex:0 0 auto; }
+    #${ID.logCapturePreview} .cmu-lcp-seg button { border:0;background:none;padding:5px 11px;border-radius:6px;font-size:12px;color:#b8b8bf; }
+    #${ID.logCapturePreview} .cmu-lcp-seg button.on { background:rgba(255,255,255,.15);color:#fff;font-weight:700; }
+    #${ID.logCapturePreview} .cmu-lcp-seg button.na { opacity:.4; }
+    #${ID.logCapturePreview} .cmu-lcp-tg { flex:1;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);border-radius:8px;padding:8px 10px;font-size:12.5px;color:#d4d4d8; }
+    #${ID.logCapturePreview} .cmu-lcp-tg.on { background:rgba(255,178,94,.14);border-color:rgba(255,178,94,.45);color:#ffd3a5; }
+    #${ID.logCapturePreview} .cmu-lcp-tg:disabled { opacity:.35; }
+    #${ID.logCapturePreview} .cmu-lcp-make,
+    #${ID.logCapturePreview} .cmu-lcp-save { border:0;border-radius:10px;background:rgba(255,178,94,.24);color:#ffd3a5;font-weight:700;padding:12px 0;font-size:14px;width:100%; }
+    #${ID.logCapturePreview} .cmu-lcp-make:disabled { opacity:.6; }
+    #${ID.logCapturePreview} .cmu-lcp-rsub { padding:9px 14px 0;color:#b8b8bf;font-size:11.5px; }
+    #${ID.logCapturePreview} .cmu-lcp-rgrid { flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;display:grid;grid-template-columns:1fr 1fr;align-content:start;gap:10px;padding:12px 14px;overscroll-behavior:none;touch-action:pan-y; }
+    #${ID.logCapturePreview} .cmu-lcp-rpg { position:relative;height:250px;border-radius:6px;overflow:hidden;box-shadow:0 0 0 1px rgba(255,255,255,.1);background:#222; }
+    #${ID.logCapturePreview} .cmu-lcp-rpg img { display:block;width:100%;height:auto;pointer-events:none; }
+    #${ID.logCapturePreview} .cmu-lcp-rpg span { position:absolute;left:6px;bottom:6px;background:rgba(0,0,0,.62);color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px; }
+    #${ID.logCapturePreview} .cmu-lcp-rfoot { padding:4px 14px calc(14px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:9px; }
+    #${ID.logCapturePreview} .cmu-lcp-rhint { margin:0;font-size:11.5px;color:#b8b8bf;line-height:1.5; }
+    #${ID.logCapturePreview} .cmu-lcp-vbtn { border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:10px;padding:10px 0;font-weight:600;width:100%; }
+    #${ID.logCapturePreview} .cmu-lcp-vhint { padding:10px 14px 0;font-size:12px;color:#b8b8bf; }
+    #${ID.logCapturePreview} .cmu-lcp-vlist { flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;padding:12px 12px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:12px;overscroll-behavior:none;-webkit-overflow-scrolling:touch;touch-action:pan-y; }
+    #${ID.logCapturePreview} .cmu-lcp-vlist img {
+      display:block;width:100%;height:auto;
+      -webkit-user-select:auto!important;user-select:auto!important;
+      -webkit-touch-callout:default!important;pointer-events:auto!important;touch-action:pan-y!important;
     }
-    #${ID.logCapturePreview} .cmu-lcp-head {
-      padding-top:calc(10px + env(safe-area-inset-top));
-    }
-    #${ID.logCapturePreview} .cmu-lcp-foot {
-      border-top:1px solid rgba(255,255,255,.08);
-      border-bottom:0;
-      padding-bottom:calc(10px + env(safe-area-inset-bottom));
-    }
-    #${ID.logCapturePreview} .cmu-lcp-title {
-      font-size:13px;
-      font-weight:700;
-      margin-right:auto;
-    }
-    #${ID.logCapturePreview} .cmu-lcp-scroll {
-      flex:1 1 auto;
-      overflow:auto;
-      padding:10px 6px;
-      touch-action:pan-y;
-      -webkit-overflow-scrolling:touch;
-      overscroll-behavior:contain;
-    }
-    #${ID.logCapturePreview} .cmu-lcp-btn {
-      border:1px solid rgba(255,255,255,.12);
-      background:rgba(255,255,255,.06);
-      color:#fff;
-      border-radius:10px;
-      padding:7px 10px;
-      font-size:12px;
-      line-height:1.2;
-      touch-action:manipulation;
-      -webkit-tap-highlight-color:transparent;
-    }
-    #${ID.logCapturePreview} .cmu-lcp-note {
-      font-size:12px;
-      color:#b8b8bf;
-      line-height:1.45;
-      margin-bottom:12px;
-    }
-    #${ID.logCapturePreview} .cmu-lcp-stage-wrap {
-      display:flex;
-      justify-content:center;
-    }
-    .cmu-lc-render-stage {
-      --lc-bg:#FAFAF8;
-      --lc-text:#201F1C;
-      --lc-title:#161512;
-      --lc-accent:#201F1C;
-      --lc-dialogue:#77746C;
-      --lc-line:#E4E2DC;
-      --lc-em:#77746C;
-      width:840px;
-      max-width:100%;
-      box-sizing:border-box;
-      overflow:hidden;
-      background:var(--lc-bg);
-      color:var(--lc-text);
-      font-family:'Pretendard Variable',Pretendard,'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;
-      font-size:15px;
-      line-height:1.92;
-      letter-spacing:.01em;
-      word-break:keep-all;
-      overflow-wrap:anywhere;
-    }
-    .cmu-lc-render-stage.theme-specsheet {
-      --lc-bg:#F5F5F1;--lc-text:#161513;--lc-title:#161513;--lc-accent:#161513;--lc-dialogue:#57544D;--lc-line:#161513;--lc-em:#74716A;
-      border:2px solid var(--lc-line);
-      background-image:linear-gradient(rgba(22,21,19,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(22,21,19,.05) 1px,transparent 1px);
-      background-size:20px 20px;
-      box-shadow:6px 6px 0 rgba(22,21,19,.88);
-    }
-    .cmu-lc-render-stage.theme-gwedo {
-      --lc-bg:#FAFAF8;--lc-text:#201F1C;--lc-title:#161512;--lc-accent:#201F1C;--lc-dialogue:#77746C;--lc-line:#E4E2DC;--lc-em:#77746C;
-      border:1px solid var(--lc-line);
-    }
-    .cmu-lc-render-stage.theme-simya {
-      --lc-bg:#161B24;--lc-text:#D6DAE2;--lc-title:#EEF0F4;--lc-accent:#C2A468;--lc-dialogue:#8FA4C4;--lc-line:#3A4152;--lc-em:#AFA58D;
-      border:1px solid var(--lc-line);
-      border-left:7px solid var(--lc-accent);
-    }
-    .cmu-lc-render-stage.theme-seongjwa {
-      --lc-bg:#0E1220;--lc-text:#CFD6E6;--lc-title:#E9EEF8;--lc-accent:#7286AD;--lc-dialogue:#9DB1DD;--lc-line:#35405E;--lc-em:#9AA7C1;
-      border:1px solid var(--lc-line);
-      background-image:radial-gradient(circle at 18% 14%,rgba(157,177,221,.14) 0 1px,transparent 1.5px),radial-gradient(circle at 78% 22%,rgba(114,134,173,.14) 0 1px,transparent 1.5px),radial-gradient(circle at 48% 82%,rgba(157,177,221,.11) 0 1px,transparent 1.5px);
-      background-size:92px 92px,133px 133px,161px 161px;
-    }
-    .cmu-lc-render-stage.theme-heugyo {
-      --lc-bg:#131210;--lc-text:#DDD9CF;--lc-title:#F0EDE4;--lc-accent:#D8D3C6;--lc-dialogue:#C9B788;--lc-line:#2A2925;--lc-em:#B7A98C;
-      border:1px solid var(--lc-line);
-      font-family:'Noto Serif KR','Gowun Batang',Batang,'바탕',serif;
-    }
-    .cmu-lc-render-stage :is(em,i) {
-      font-style:normal!important;
-      color:var(--lc-em)!important;
-    }
-    .cmu-lc-render-stage :is(em,i) * {
-      font-style:normal!important;
-      color:inherit!important;
-    }
-    .cmu-lc-theme-head,
-    .cmu-lc-theme-foot {
-      box-sizing:border-box;
-      color:var(--lc-accent);
-    }
-    .cmu-lc-content { box-sizing:border-box; }
-
-    .theme-specsheet .cmu-lc-theme-head { padding:13px 16px 10px;border-bottom:2px solid var(--lc-line);background:rgba(230,229,224,.88); }
-    .theme-specsheet .cmu-lc-theme-foot { padding:9px 16px 12px;border-top:2px solid var(--lc-line);background:rgba(230,229,224,.88); }
-    .theme-specsheet .cmu-lc-content { padding:16px; }
-    .cmu-lc-spec-mark { display:flex;align-items:center;gap:7px; }
-    .cmu-lc-spec-mark span { display:block;height:7px;background:var(--lc-accent); }
-    .cmu-lc-spec-mark span:nth-child(1){width:58px}.cmu-lc-spec-mark span:nth-child(2){width:12px}.cmu-lc-spec-mark span:nth-child(3){width:7px;opacity:.55}
-    .cmu-lc-spec-end { display:flex;justify-content:flex-end;gap:4px; }
-    .cmu-lc-spec-end i { display:block;width:4px;height:13px;background:var(--lc-accent); }
-
-    .theme-gwedo .cmu-lc-theme-head { padding:24px 22px 16px; }
-    .theme-gwedo .cmu-lc-theme-foot { padding:22px 22px 25px; }
-    .theme-gwedo .cmu-lc-content { padding:0 22px; }
-    .cmu-lc-orbit-rule { display:flex;align-items:center;justify-content:center;gap:10px;color:var(--lc-accent);font-size:9px;line-height:1; }
-    .cmu-lc-orbit-rule::before,.cmu-lc-orbit-rule::after { content:'';width:82px;height:1px;background:var(--lc-line); }
-    .cmu-lc-orbit-rule.small::before,.cmu-lc-orbit-rule.small::after { width:46px; }
-
-    .theme-simya .cmu-lc-theme-head { padding:21px 22px 15px;border-bottom:1px solid var(--lc-line); }
-    .theme-simya .cmu-lc-theme-foot { padding:18px 22px 22px; }
-    .theme-simya .cmu-lc-content { padding:20px 22px 0; }
-    .cmu-lc-night-mark { display:flex;gap:8px;align-items:center; }
-    .cmu-lc-night-mark i { width:5px;height:5px;border:1px solid var(--lc-accent);transform:rotate(45deg);opacity:.95; }
-    .cmu-lc-night-end { display:flex;justify-content:flex-end;align-items:center;gap:10px; }
-    .cmu-lc-night-end::before { content:'';width:95px;height:1px;background:var(--lc-line); }
-    .cmu-lc-night-end::after { content:'◆';font-size:8px;color:var(--lc-accent); }
-
-    .theme-seongjwa .cmu-lc-theme-head { padding:22px 20px 16px;text-align:center; }
-    .theme-seongjwa .cmu-lc-theme-foot { padding:20px 20px 24px;text-align:center; }
-    .theme-seongjwa .cmu-lc-content { padding:0 22px; }
-    .cmu-lc-star-mark { color:var(--lc-accent);font-size:12px;letter-spacing:.55em; }
-
-    .theme-heugyo .cmu-lc-theme-head { padding:22px 22px 16px; }
-    .theme-heugyo .cmu-lc-theme-foot { padding:22px 22px 28px; }
-    .theme-heugyo .cmu-lc-content { padding:0 22px; }
-    .cmu-lc-heugyo-mark { display:block;width:48px;height:48px; }
-
-    .cmu-lc-card { position:relative;margin:0;box-sizing:border-box; }
-    .cmu-lc-rolebar { display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;margin:0 0 10px;min-height:25px; }
-    .cmu-lc-role { justify-self:start;font-family:'IBM Plex Mono',Consolas,Menlo,monospace;font-size:10px;font-weight:700;letter-spacing:.24em;line-height:1;color:var(--lc-accent); }
-    .cmu-lc-card.user .cmu-lc-role { justify-self:end;color:var(--lc-dialogue); }
-    .cmu-lc-body { min-width:0; }
-    .cmu-lc-render-stage.is-editing .cmu-lc-body { padding-top:4px; }
-    .cmu-lc-render-stage.is-editing .cmu-lc-block:not(.is-image) {
-      margin-left:-28px;
-      padding-left:28px;
-    }
-
-    .theme-specsheet .cmu-lc-card { padding:17px 18px 18px;border:1.5px solid var(--lc-line);background:rgba(251,251,248,.94); }
-    .theme-specsheet .cmu-lc-card + .cmu-lc-card { margin-top:17px; }
-    .theme-specsheet .cmu-lc-rolebar { margin:-17px -18px 14px;padding:7px 12px;border-bottom:1.5px solid var(--lc-line);background:var(--lc-line); }
-    .theme-specsheet .cmu-lc-role { color:var(--lc-bg); }.theme-specsheet .cmu-lc-card.user .cmu-lc-role { color:#E8E5DD; }
-
-    .theme-gwedo .cmu-lc-card + .cmu-lc-card { margin-top:27px; }
-    .theme-gwedo .cmu-lc-card.assistant { padding-left:15px;border-left:1px solid var(--lc-accent); }
-    .theme-gwedo .cmu-lc-card.user { margin-left:3%;padding-right:14px;border-right:2px solid var(--lc-dialogue);color:#4D4B46; }
-
-    .theme-simya .cmu-lc-card + .cmu-lc-card { margin-top:29px; }
-    .theme-simya .cmu-lc-card.assistant { width:97%;padding-left:13px;border-left:2px solid var(--lc-accent); }
-    .theme-simya .cmu-lc-card.user { width:97%;margin-left:auto;padding-right:13px;border-right:2px solid var(--lc-dialogue);color:#C6CAD2; }
-
-    .theme-seongjwa .cmu-lc-card + .cmu-lc-card { margin-top:42px; }
-    .theme-seongjwa .cmu-lc-card + .cmu-lc-card::before { content:'✦ ─── ✧ ─── ✦';position:absolute;top:-28px;left:0;right:0;text-align:center;color:var(--lc-line);font-size:10px;letter-spacing:.08em; }
-    .theme-seongjwa .cmu-lc-role::before { content:'✦ '; }
-
-    .theme-heugyo .cmu-lc-card + .cmu-lc-card { margin-top:27px; }
-    .theme-heugyo .cmu-lc-card.assistant { padding-left:14px;border-left:1px solid var(--lc-accent); }
-    .theme-heugyo .cmu-lc-card.user { margin-left:3%;padding-right:14px;border-right:2px solid var(--lc-dialogue);color:#CEC6B8; }
-
-    .cmu-lc-block { position:relative;margin:0 0 .78em; }
-    .cmu-lc-block:last-child { margin-bottom:0; }
-    .cmu-lc-block p { margin:.62em 0; }
-    .cmu-lc-block blockquote { margin:.7em 0;padding:.28em 0 .28em .9em;border-left:2px solid var(--lc-dialogue);color:var(--lc-em); }
-    .cmu-lc-block ul,.cmu-lc-block ol { padding-left:1.3em;margin:.65em 0; }
-    .cmu-lc-block pre { white-space:pre-wrap;overflow-wrap:anywhere;padding:.82em .95em;border-radius:8px;background:rgba(127,127,127,.09);font-size:.92em;line-height:1.6; }
-    .cmu-lc-block img { display:block;max-width:100%;height:auto;margin:.75em auto;border-radius:8px; }
-    #${ID.logCapturePreview} .cmu-lc-edit-message,
-    #${ID.logCapturePreview} .cmu-lc-edit-block {
-      z-index:2;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      border:1px solid rgba(0,0,0,.13);
-      background:rgba(255,255,255,.94);
-      color:#3a3834;
-      box-shadow:0 2px 8px rgba(0,0,0,.08);
-    }
-    #${ID.logCapturePreview} .cmu-lc-edit-message {
-      position:static;
-      justify-self:end;
-      width:25px;
-      height:25px;
-      padding:0;
-      border-radius:999px;
-      font-size:17px;
-      line-height:1;
-    }
-    #${ID.logCapturePreview} .cmu-lc-edit-block {
-      position:absolute;
-      top:2px;
-      left:1px;
-      width:24px;
-      height:23px;
-      padding:0;
-      border-radius:999px;
-      font-size:13px;
-      line-height:1;
-    }
-    #${ID.logCapturePreview} .cmu-lc-block.is-image .cmu-lc-edit-block {
-      top:8px;
-      right:8px;
-      left:auto;
-      width:auto;
-      min-width:25px;
-      padding:0 8px;
-      border-radius:999px;
-      font-size:11px;
-    }
-    #${ID.logCapturePreview} .cmu-lc-excluded {
-      display:block;
-      width:100%;
-      box-sizing:border-box;
-      border:1px dashed var(--lc-line);
-      background:rgba(127,127,127,.14);
-      color:var(--lc-em);
-      border-radius:9px;
-      padding:9px 11px;
-      font-size:12px;
-      line-height:1.35;
-      text-align:center;
-    }
-    #${ID.logCapturePreview} .cmu-lc-excluded-message {
-      margin:0;
-      min-height:46px;
-    }
-    #${ID.logCapturePreview} .cmu-lc-empty {
-      padding:34px 18px;
-      text-align:center;
-      color:#77736c;
-      font-size:13px;
-    }
-    #${ID.logCapturePreview} .cmu-lcp-output-wrap {
-      width:min(100%, 840px);
-      margin:0 auto;
-      background:#fff;
-      box-shadow:0 6px 24px rgba(0,0,0,.28);
-      overflow:visible;
-    }
-    #${ID.logCapturePreview} .cmu-lcp-output-img {
-      display:block;
-      width:100%;
-      height:auto;
-      margin:0;
-      border:0;
-      background:#fff;
-      -webkit-user-select:auto!important;
-      user-select:auto!important;
-      -webkit-touch-callout:default!important;
-      -webkit-tap-highlight-color:rgba(0,0,0,.08)!important;
-      touch-action:auto!important;
-      pointer-events:auto!important;
-    }
-    #${ID.logCapturePreview} .cmu-lcp-output-help {
-      margin:12px auto 4px;
-      max-width:840px;
-      color:#b8b8bf;
-      font-size:12px;
-      line-height:1.5;
-      text-align:center;
-    }
-    #${ID.logCapturePreview} .cmu-lcp-inline-status {
-      min-height:18px;
-      margin-right:auto;
-      color:#b8b8bf;
-      font-size:12px;
-      line-height:1.35;
-    }
+    #${ID.logCapturePreview} .cmu-lcp-toast { position:absolute;left:14px;right:14px;bottom:calc(196px + env(safe-area-inset-bottom));z-index:5;background:#2e3036;color:#fff;border-radius:12px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12.5px;box-shadow:0 8px 20px rgba(0,0,0,.5); }
+    #${ID.logCapturePreview} .cmu-lcp-toast.low { bottom:calc(24px + env(safe-area-inset-bottom)); }
+    #${ID.logCapturePreview} .cmu-lcp-toast button { border:0;background:none;color:#ffd3a5;font-weight:700;padding:0;white-space:nowrap; }
+    #cmu-lc-measure { position:fixed;left:-10000px;top:0;visibility:hidden;pointer-events:none; }
     #cmu-settings-panel .qputil .subrow.cmu-choice-row,
     #cmu-settings-panel .qputil .subrow.cmu-rule-editor {
       display:block!important;
@@ -7170,26 +6949,6 @@ function cmuMain() {
       gap:7px!important;
       flex-wrap:wrap!important;
     }
-    #${ID.logCapturePreview} .cmu-lcp-select {
-      display:block;
-      box-sizing:border-box;
-      width:100%;
-      min-width:0;
-      border:1px solid rgba(255,255,255,.1);
-      border-radius:11px;
-      background:#17181b;
-      color:#f5f5f6;
-      padding:9px 34px 9px 11px;
-      font:inherit;
-      line-height:1.3;
-      color-scheme:dark;
-    }
-    #${ID.logCapturePreview} .cmu-lcp-select {
-      width:auto;
-      min-width:126px;
-      padding:7px 31px 7px 10px;
-      font-size:12px;
-    }
     .cmu-lc-rule-list { display:flex;flex-direction:column;gap:8px; }
     .cmu-lc-rule-row { display:grid;grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr) 30px;gap:6px;align-items:center; }
     .cmu-lc-rule-input { box-sizing:border-box;width:100%;min-width:0;border:1px solid rgba(255,255,255,.09);border-radius:10px;background:#17181b;color:#f5f5f6;padding:9px 10px;font:inherit;line-height:1.35; }
@@ -7197,16 +6956,245 @@ function cmuMain() {
     .cmu-lc-rule-delete { width:30px;height:30px;border:1px solid rgba(255,255,255,.09);border-radius:9px;background:rgba(255,255,255,.04);color:#bbbcc3;font-size:16px;line-height:1; }
     .cmu-lc-rule-add { margin-top:10px;width:100%;border:1px dashed rgba(255,255,255,.14);border-radius:10px;background:rgba(255,255,255,.035);color:#d3d4d9;padding:9px 10px;font:inherit;font-size:12px; }
     .cmu-lc-rule-empty { padding:12px;border:1px dashed rgba(255,255,255,.09);border-radius:10px;color:#8f9199;text-align:center;font-size:12px;line-height:1.4; }
-    #${ID.logCapturePreview} .cmu-lcp-bulk-row { display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0; }
-    #${ID.logCapturePreview} .cmu-lcp-theme-row { display:flex;align-items:center;gap:7px;min-width:0; }
-    #${ID.logCapturePreview} .cmu-lcp-theme-row span { font-size:12px;color:#b8b8bf;white-space:nowrap; }
-    #${ID.logCapturePreview} .cmu-lc-edit-block.is-code { width:auto;min-width:25px;padding:0 8px;font-size:11px;left:1px; }
     .cmu-lc-rule-add,.cmu-lc-rule-delete { touch-action:manipulation; }
     `);
+    const LC_MONO = `ui-monospace,SFMono-Regular,Menlo,Consolas,monospace`;
+    const LC_THEME_CSS = `
+.lc{box-sizing:border-box;width:420px;position:relative;margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif;font-size:15px;font-weight:400;font-style:normal;line-height:1.8;letter-spacing:.005em;text-align:left;word-break:keep-all;overflow-wrap:anywhere;-webkit-text-size-adjust:none}
+.lc *,.lc *::before,.lc *::after{box-sizing:border-box;margin:0;padding:0}
+.lc-body{display:flex;flex-direction:column}
+.lc-card{position:relative}
+.lc-role{font:600 10px/1 ${LC_MONO};letter-spacing:.24em}
+.lc .user .lc-role{text-align:right}
+.lc-text{display:flex;flex-direction:column;gap:.7em}
+.lc em{font-style:normal}
+.lc strong{font-weight:700}
+.lc u{text-decoration:underline}
+.lc s{text-decoration:line-through}
+.lc code{font-family:${LC_MONO};font-size:.88em;padding:0 .25em;border-radius:3px;background:rgba(127,127,127,.16)}
+.lc blockquote{padding-left:.9em;border-left:2px solid rgba(127,127,127,.45)}
+.lc h4{font-size:1.06em;font-weight:800}
+.lc .lc-list{padding-left:1.3em}
+.lc .lc-list li+li{margin-top:.2em}
+.lc .lc-hr{height:1px;background:currentColor;opacity:.22;margin:.3em 0}
+.lc .lc-table table{border-collapse:collapse;width:100%;font-size:.9em;line-height:1.6}
+.lc .lc-table td{border:1px solid rgba(127,127,127,.38);padding:4px 7px;vertical-align:top}
+.lc-img{overflow:hidden}
+.lc-img img,.lc-img .lc-ph{display:block;width:100%;height:auto}
+.lc-pno{font:500 10px/1 ${LC_MONO};letter-spacing:.14em}
+.lc-code{position:relative;font:12.5px/1.75 ${LC_MONO}}
+.lc-code-h{display:flex;align-items:center;gap:8px;font:600 9.5px/1 ${LC_MONO};letter-spacing:.22em}
+.lc-code-b{white-space:pre-wrap}
+.sj-frame{position:absolute;left:0;top:0;pointer-events:none}
+.lc .rule{display:flex;align-items:center;justify-content:center;gap:10px;font-size:9px;line-height:1;color:#201F1C}
+.lc .rule::before,.lc .rule::after{content:"";width:82px;height:1px;background:#E4E2DC}
+.lc .rule.small::before,.lc .rule.small::after{width:46px}
+.lc[data-t="gwedo"]{background:#FAFAF8;color:#2A2823}
+.lc[data-t="gwedo"] .lc-head{padding:24px 22px 18px}
+.lc[data-t="gwedo"] .lc-body{padding:0 22px;gap:27px}
+.lc[data-t="gwedo"] .lc-card.ai{padding-left:15px;border-left:1px solid #1F1E1B}
+.lc[data-t="gwedo"] .lc-card.user{margin-left:3%;padding-right:14px;border-right:2px solid #8A867D;color:#4D4B46}
+.lc[data-t="gwedo"] .lc-role{color:#1F1E1B;font-weight:700;margin-bottom:10px}
+.lc[data-t="gwedo"] .user .lc-role{color:#8A867D}
+.lc[data-t="gwedo"] .q{color:#161510;font-weight:500}
+.lc[data-t="gwedo"] em{color:#7C786F}
+.lc[data-t="gwedo"] strong{color:#161510}
+.lc[data-t="gwedo"] .lc-img{border-radius:8px}
+.lc[data-t="gwedo"] .lc-code{border:1px solid #D6D2C9;border-radius:8px;padding:16px 14px 12px;margin-top:8px;color:#3A3833}
+.lc[data-t="gwedo"] .lc-code-h{position:absolute;top:-5px;left:11px;background:#FAFAF8;padding:0 6px;color:#8C877E}
+.lc[data-t="gwedo"] .lc-foot{padding:22px 22px 24px;display:flex;flex-direction:column;align-items:center;gap:10px;color:#A39E93}
+.lc[data-t="specsheet"]{background-color:#F4F3EE;background-image:linear-gradient(rgba(22,21,19,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(22,21,19,.05) 1px,transparent 1px);background-size:20px 20px;color:#161513;border:2px solid #161513}
+.lc[data-t="specsheet"] .lc-head{background:#161513;color:#F4F3EE;display:flex;align-items:center;justify-content:space-between;padding:10px 12px}
+.lc .ss-bars{display:flex;gap:6px;align-items:center}
+.lc .ss-bars i{display:block;height:7px;background:#F4F3EE}
+.lc .ss-bars i:nth-child(1){width:52px}.lc .ss-bars i:nth-child(2){width:12px}.lc .ss-bars i:nth-child(3){width:7px;opacity:.5}
+.lc .ss-meta{font:600 10px/1 ${LC_MONO};letter-spacing:.2em}
+.lc[data-t="specsheet"] .lc-body{padding:9px 8px 2px;gap:11px}
+.lc[data-t="specsheet"] .lc-card{border:1.5px solid #161513;background:#FBFBF8;box-shadow:3px 3px 0 #161513}
+.lc[data-t="specsheet"] .lc-role{display:flex;justify-content:space-between;background:#161513;color:#F4F3EE;padding:7px 10px}
+.lc[data-t="specsheet"] .lc-role::after{content:attr(data-no)}
+.lc[data-t="specsheet"] .lc-text{padding:12px 13px 13px}
+.lc[data-t="specsheet"] .lc-card.user{background:#ECEBE5}
+.lc[data-t="specsheet"] .user .lc-role{background:#ECEBE5;color:#161513;border-bottom:1.5px solid #161513}
+.lc[data-t="specsheet"] .q{font-weight:600}
+.lc[data-t="specsheet"] em{color:#6E6A62}
+.lc[data-t="specsheet"] strong{font-weight:800;box-shadow:inset 0 -.42em rgba(22,21,19,.12)}
+.lc[data-t="specsheet"] .lc-img{border:1.5px solid #161513}
+.lc[data-t="specsheet"] .lc-code{border:1.5px solid #161513;background:#FFFFFE}
+.lc[data-t="specsheet"] .lc-code-h{background:#161513;color:#F4F3EE;padding:6px 10px}
+.lc[data-t="specsheet"] .lc-code-b{padding:10px 12px 11px}
+.lc[data-t="specsheet"] .lc-foot{display:flex;justify-content:space-between;align-items:center;margin-top:9px;padding:10px 12px;border-top:2px solid #161513;background:#E9E7E0}
+.lc .ss-code{display:flex;gap:3px;align-items:center}
+.lc .ss-code i{display:block;height:14px;background:#161513;width:3px}
+.lc .ss-code i:nth-child(3n){width:1.5px}.lc .ss-code i:nth-child(4n){width:5px}
+.lc[data-t="simya"]{background:#161B24;color:#D3D8E1;border-left:6px solid #C2A468}
+.lc[data-t="simya"] .lc-head{padding:24px 22px 18px 18px;display:flex;align-items:center;gap:9px}
+.lc .sy-d{display:block;width:6px;height:6px;border:1px solid #C2A468;transform:rotate(45deg)}
+.lc .sy-d.f{background:#C2A468}
+.lc .sy-line{flex:1;height:1px;background:rgba(194,164,104,.38)}
+.lc[data-t="simya"] .lc-body{padding:0 22px 0 18px;gap:28px}
+.lc[data-t="simya"] .lc-card.ai{width:97%;padding-left:13px;border-left:2px solid #C2A468}
+.lc[data-t="simya"] .lc-card.user{width:97%;margin-left:auto;padding-right:13px;border-right:2px solid #8FA4C4;color:#C6CAD2}
+.lc[data-t="simya"] .lc-role{color:#C2A468;margin-bottom:10px}
+.lc[data-t="simya"] .user .lc-role{color:#8FA4C4}
+.lc[data-t="simya"] .q{color:#F2F0EA}
+.lc[data-t="simya"] em{color:#8D96A8}
+.lc[data-t="simya"] strong{color:#D7B977}
+.lc[data-t="simya"] .lc-img{border-radius:6px}
+.lc[data-t="simya"] .lc-code{background:#1F2632;border-radius:6px;padding:12px 14px 13px;color:#E3E0D8}
+.lc[data-t="simya"] .lc-code-h{color:#C2A468;margin-bottom:9px}
+.lc[data-t="simya"] .lc-foot{padding:24px 22px 22px 18px;display:flex;align-items:center;gap:9px;color:#6F7A8E}
+.lc[data-t="seongjwa"]{background:#0E1220;color:#CBD3E4}
+.lc[data-t="seongjwa"] .lc-head{padding:40px 36px 18px;display:flex;justify-content:center}
+.lc .sj-div{display:block;width:300px;height:auto}
+.lc[data-t="seongjwa"] .lc-body{padding:0 38px;gap:30px}
+.lc[data-t="seongjwa"] .lc-role{display:flex;align-items:center;gap:7px;color:#9DB1DD;margin-bottom:10px}
+.lc[data-t="seongjwa"] .user .lc-role{justify-content:flex-end}
+.lc[data-t="seongjwa"] .lc-role::before{content:"";width:7px;height:12px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 24'%3E%3Cpath d='M7 0Q7.9 9.6 8.1 10.9Q10.6 11.6 14 12Q10.6 12.4 8.1 13.1Q7.9 14.4 7 24Q6.1 14.4 5.9 13.1Q3.4 12.4 0 12Q3.4 11.6 5.9 10.9Q6.1 9.6 7 0Z' fill='%23C9D6F2'/%3E%3C/svg%3E") center/contain no-repeat}
+.lc[data-t="seongjwa"] .lc-card.user{color:#BAC3D6}
+.lc[data-t="seongjwa"] .q{color:#EEF2FB}
+.lc[data-t="seongjwa"] em{color:#8592AE}
+.lc[data-t="seongjwa"] strong{color:#C3D2F4}
+.lc[data-t="seongjwa"] .lc-img{border-radius:4px}
+.lc[data-t="seongjwa"] .lc-code{background:rgba(157,177,221,.06);border:1px solid rgba(157,177,221,.2);border-radius:6px;padding:12px 14px 13px;color:#E4E9F5}
+.lc[data-t="seongjwa"] .lc-code-h{color:#9DB1DD;margin-bottom:9px}
+.lc[data-t="seongjwa"] .lc-foot{padding:24px 36px 44px;display:flex;flex-direction:column;align-items:center;gap:9px;color:#6E7A98}
+.lc .sj-mini{display:block;width:150px;height:auto}
+.lc[data-t="heugyo"]{background:linear-gradient(160deg,#181614 0%,#121110 55%,#0E0D0C 100%);color:#D9D3C7}
+.lc[data-t="heugyo"] .lc-head{padding:24px 22px 18px;display:flex;align-items:center;gap:12px}
+.lc .hg-mark{display:block;width:34px;height:34px;flex:0 0 auto}
+.lc .hg-line{flex:1;height:1px;background:linear-gradient(90deg,rgba(201,183,136,.6),rgba(201,183,136,0))}
+.lc[data-t="heugyo"] .lc-body{padding:0 22px;gap:27px}
+.lc[data-t="heugyo"] .lc-card.ai{padding-left:15px;border-left:1px solid rgba(201,183,136,.35)}
+.lc[data-t="heugyo"] .lc-card.ai::before{content:"";position:absolute;left:-4px;top:3px;width:7px;height:7px;background:#C9B788;transform:rotate(45deg)}
+.lc[data-t="heugyo"] .lc-card.user{margin-left:3%;padding-right:14px;border-right:2px solid #C9B788;color:#CEC6B8}
+.lc[data-t="heugyo"] .lc-role{letter-spacing:.32em;color:#C9B788;margin-bottom:10px}
+.lc[data-t="heugyo"] .user .lc-role{color:#9C9483}
+.lc[data-t="heugyo"] .q{color:#F3EFE6}
+.lc[data-t="heugyo"] em{color:#958D7E}
+.lc[data-t="heugyo"] strong{color:#D8BE85}
+.lc[data-t="heugyo"] .lc-img{border-radius:6px;border:1px solid #2E2B25}
+.lc[data-t="heugyo"] .lc-code{background:#191714;border-top:2px solid #C9B788;padding:11px 15px 13px;color:#E6E0D4}
+.lc[data-t="heugyo"] .lc-code-h{color:#C9B788;letter-spacing:.24em;margin-bottom:9px}
+.lc[data-t="heugyo"] .lc-foot{padding:26px 22px 26px;display:flex;align-items:center;gap:10px;color:#6F685B}
+.lc .hg-fline{flex:1;height:1px;background:linear-gradient(90deg,rgba(201,183,136,0),rgba(201,183,136,.5))}
+.lc .hg-d{display:block;width:6px;height:6px;background:#C9B788;transform:rotate(45deg)}
+`;
+    const LC_PREVIEW_CSS = `
+:host{all:initial;display:block}
+.pages{display:block}
+.pages > .lc{box-shadow:0 1px 2px rgba(0,0,0,.3),0 12px 26px -16px rgba(0,0,0,.6)}
+.brk{display:flex;align-items:center;gap:10px;margin:16px 0;color:#FFD3A5;font:700 16px/1 ${LC_MONO}}
+.brk::before,.brk::after{content:"";flex:1;border-top:2px dashed rgba(255,178,94,.6)}
+.measuring .x{display:none!important}
+.pages .x{position:relative}
+.pages .x:not(.lc-card),.pages .lc-card.x .lc-text{max-height:5.4em;overflow:hidden}
+.pages .x,.pages .x *{text-decoration:line-through;text-decoration-color:#FF8A3D;text-decoration-thickness:2px}
+.pages .x::before{content:"";position:absolute;inset:0;background:var(--veil,rgba(0,0,0,.55));border-radius:4px;z-index:2}
+.pages .x::after{content:"빠짐";position:absolute;right:4px;top:4px;z-index:3;font:700 11px/1 system-ui,-apple-system,sans-serif;color:#231709;background:#FFB25E;padding:4px 7px;border-radius:6px;text-decoration:none;letter-spacing:0;width:auto;height:auto;transform:none}
+.pages .lc-card.x::after{content:"메시지 빠짐"}
+.lc[data-t="gwedo"]{--veil:rgba(250,250,248,.66)}
+.lc[data-t="specsheet"]{--veil:rgba(251,251,248,.66)}
+.lc[data-t="simya"]{--veil:rgba(22,27,36,.66)}
+.lc[data-t="seongjwa"]{--veil:rgba(14,18,32,.66)}
+.lc[data-t="heugyo"]{--veil:rgba(18,17,16,.68)}
+`;
+    const LC_INK = '#C9D6F2';
+    const LC_SJ_BG = '#0E1220';
+    const lcF = n => +Number(n).toFixed(2);
+    function lcStar4(cx, cy, rx, ry, w) {
+        const P = [[0, -ry], [w, -w], [rx, 0], [w, w], [0, ry], [-w, w], [-rx, 0], [-w, -w]];
+        let d = `M${lcF(cx)} ${lcF(cy - ry)}`;
+        for (let k = 1; k <= 8; k++) {
+            const a = P[k - 1], b = P[k % 8];
+            d += `Q${lcF(cx + (a[0] + b[0]) * .27)} ${lcF(cy + (a[1] + b[1]) * .27)} ${lcF(cx + b[0])} ${lcF(cy + b[1])}`;
+        }
+        return d + 'Z';
+    }
+    function lcStar8(cx, cy, ryL, rxL, dg, rin) {
+        const s = Math.SQRT1_2;
+        const T = [[0, -ryL], [dg * s, -dg * s], [rxL, 0], [dg * s, dg * s], [0, ryL], [-dg * s, dg * s], [-rxL, 0], [-dg * s, -dg * s]];
+        const pts = [];
+        for (let k = 0; k < 8; k++) {
+            pts.push(T[k]);
+            const a = (-67.5 + 45 * k) * Math.PI / 180;
+            pts.push([rin * Math.cos(a), rin * Math.sin(a)]);
+        }
+        return 'M' + pts.map(p => `${lcF(cx + p[0])} ${lcF(cy + p[1])}`).join('L') + 'Z';
+    }
+    function lcRing(cx, cy, rx, ry, t, ts, deg) {
+        const e = (a, b) => `M${lcF(cx - a)} ${lcF(cy)}a${lcF(a)} ${lcF(b)} 0 1 0 ${lcF(2 * a)} 0a${lcF(a)} ${lcF(b)} 0 1 0 ${lcF(-2 * a)} 0Z`;
+        return `<path d="${e(rx, ry)}${e(rx - t, ry - ts)}" fill="${LC_INK}" fill-rule="evenodd" transform="rotate(${deg} ${cx} ${cy})"/>`;
+    }
+    const lcInk = (d, extra = '') => `<path d="${d}" fill="${LC_INK}"${extra}/>`;
+    const lcMirror = (inner, w) => `<g>${inner}</g><g transform="matrix(-1 0 0 1 ${w} 0)">${inner}</g>`;
+    function lcSjDivider() {
+        const cx = 170, cy = 36;
+        const side = lcInk(`M${cx + 58} ${cy - .6}L${cx + 160} ${cy - .12}L${cx + 160} ${cy + .12}L${cx + 58} ${cy + .6}Z`)
+            + `<circle cx="${cx + 53}" cy="${cy}" r="1.4" fill="${LC_INK}"/>` + lcInk(lcStar4(cx + 43, cy, 3.9, 9.6, .9));
+        return `<svg class="sj-div" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 72" aria-hidden="true">${lcMirror(side, 340)}${lcRing(cx, cy, 34, 10, 2.6, .42, 35)}${lcInk(lcStar8(cx, cy, 27.2, 19.2, 11.6, 4))}<path d="M${cx} ${cy - 20.8}V${cy - 4.8}M${cx} ${cy + 4.8}V${cy + 20.8}M${cx - 14.4} ${cy}H${cx - 4.8}M${cx + 4.8} ${cy}H${cx + 14.4}" stroke="${LC_SJ_BG}" stroke-width=".7" fill="none"/>${lcInk(lcStar4(cx - 16, cy - 16, 2.7, 6, .6))}</svg>`;
+    }
+    function lcSjMini() {
+        const cx = 100, cy = 10;
+        const side = lcInk(`M${cx + 14} ${cy - .45}L${cx + 82} ${cy - .1}L${cx + 82} ${cy + .1}L${cx + 14} ${cy + .45}Z`) + `<circle cx="${cx + 9}" cy="${cy}" r="1.1" fill="${LC_INK}"/>`;
+        return `<svg class="sj-mini" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 20" aria-hidden="true">${lcMirror(side, 200)}${lcInk(lcStar4(cx, cy, 3, 7.6, .7))}</svg>`;
+    }
+    function lcSjFrame(W, H) {
+        const o = 12, i = 23, R = 26, fw = W - 2 * o, fh = H - 2 * o;
+        const X = t => lcF(o + fw * t), Y = t => lcF(o + fh * t);
+        const line = d => `<path d="${d}" fill="none" stroke="${LC_INK}" stroke-opacity=".62" stroke-width=".9"/>`;
+        const big = (x, y) => `<circle cx="${x}" cy="${y}" r="2.3" fill="${LC_INK}"/>`;
+        const tiny = (x, y) => `<circle cx="${x}" cy="${y}" r="1.05" fill="${LC_INK}"/>`;
+        const solid = (x, y, k = 1) => lcInk(lcStar4(x, y, 4.4 * k, 7 * k, .9 * k));
+        const hollow = (x, y) => `<path d="${lcStar4(x, y, 4.4, 7, .9)}" fill="${LC_SJ_BG}" stroke="${LC_INK}" stroke-width=".85"/>`;
+        let s = '';
+        s += line(`M${o} ${lcF(Y(.394) - 7)}V${o + R}A${R} ${R} 0 0 0 ${o + R} ${o}H${lcF(X(.578) - 4.4)}`);
+        s += line(`M${i} ${Y(.364)}V${i}H${X(.547)}`) + big(i, Y(.364)) + big(X(.547), i);
+        s += hollow(X(.578), o) + solid(X(.622), o);
+        s += line(`M${X(.68)} ${o}H${W - i}V${Y(.617)}`) + tiny(X(.68), o) + tiny(W - i, Y(.617));
+        s += line(`M${X(.573)} ${i}H${W - o}V${Y(.537)}`) + tiny(X(.573), i) + tiny(W - o, Y(.537));
+        s += solid(W - o, Y(.574)) + hollow(W - o, Y(.606));
+        s += line(`M${W - o} ${lcF(Y(.606) + 7)}V${H - o - R}A${R} ${R} 0 0 0 ${W - o - R} ${H - o}H${lcF(X(.422) + 4.4)}`);
+        s += line(`M${W - i} ${Y(.636)}V${H - i}H${X(.453)}`) + big(W - i, Y(.636)) + big(X(.453), H - i);
+        s += hollow(X(.422), H - o) + solid(X(.378), H - o);
+        s += line(`M${X(.32)} ${H - o}H${i}V${Y(.383)}`) + tiny(X(.32), H - o) + tiny(i, Y(.383));
+        s += line(`M${X(.427)} ${H - i}H${o}V${Y(.463)}`) + tiny(X(.427), H - i) + tiny(o, Y(.463));
+        s += hollow(o, Y(.394)) + solid(o, Y(.426));
+        s += solid(i, i, 1.3) + solid(W - i, H - i, 1.3);
+        return `<svg class="sj-frame" xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true">${s}</svg>`;
+    }
+    const LC_HG_MARK = `<svg class="hg-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" aria-hidden="true"><path d="M10 92 L90 92 C66 80 58 54 54 14 C46 56 32 80 10 92 Z" fill="#C9B788"/><path d="M40 57 C39 70 33 73 23 74 C33 75 39 78 40 91 C41 78 47 75 57 74 C47 73 41 70 40 57 Z" fill="#141311"/><circle cx="63" cy="80" r="6.5" fill="#141311"/></svg>`;
+    const LC_THEMES = {
+        gwedo: { head: () => '<div class="rule"><span>◆</span></div>', foot: (i, n) => `<div class="rule small"><span>◆</span></div><span class="lc-pno">${i} / ${n}</span>` },
+        specsheet: { head: () => '<span class="ss-bars"><i></i><i></i><i></i></span><span class="ss-meta">LOG</span>', foot: (i, n) => `<span class="lc-pno">END · ${i} / ${n}</span><span class="ss-code">${'<i></i>'.repeat(14)}</span>` },
+        simya: { head: () => '<i class="sy-d"></i><i class="sy-d f"></i><i class="sy-d"></i><span class="sy-line"></span>', foot: (i, n) => `<span class="sy-line"></span><i class="sy-d f"></i><span class="lc-pno">${i} / ${n}</span>` },
+        seongjwa: { head: () => lcSjDivider(), foot: (i, n) => `${lcSjMini()}<span class="lc-pno">${i} / ${n}</span>`, frame: true },
+        heugyo: { head: () => `${LC_HG_MARK}<span class="hg-line"></span>`, foot: (i, n) => `<span class="hg-fline"></span><i class="hg-d"></i><span class="lc-pno">${i} / ${n}</span>` },
+    };
     function normalizeLogCaptureTheme(value) {
         const key = String(value || '').trim();
         return Object.prototype.hasOwnProperty.call(LOG_CAPTURE_THEME_META, key) ? key : 'gwedo';
     }
+    let lcWebpOk = null;
+    function lcCanWebp() {
+        if (lcWebpOk === null) {
+            try {
+                const c = document.createElement('canvas');
+                c.width = c.height = 1;
+                lcWebpOk = String(c.toDataURL('image/webp') || '').startsWith('data:image/webp');
+            }
+            catch (_) {
+                lcWebpOk = false;
+            }
+        }
+        return lcWebpOk;
+    }
+    function lcPageMaxCss() {
+        if (settings.logCaptureOneImage)
+            return Infinity;
+        return (LC_PAGE_PX[settings.logCapturePageLength] || LC_PAGE_PX.normal) / (LC_OUT_W / lcW());
+    }
+    const lcSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     function removeLogCaptureToolbarButton() {
         document.getElementById(ID.logCaptureButton)?.remove?.();
     }
@@ -7215,7 +7203,7 @@ function cmuMain() {
             return;
         const on = !!(LOG_CAPTURE.active || LOG_CAPTURE.previewOpen);
         btn.dataset.cmuLogcapOn = on ? '1' : '0';
-        btn.title = on ? '로그 캡처 모드 종료' : '로그 캡처';
+        btn.title = on ? '로그 캡처 끝내기' : '로그 캡처';
         btn.setAttribute('aria-label', btn.title);
     }
     function createLogCaptureToolbarButton(baseBtn) {
@@ -7239,8 +7227,6 @@ function cmuMain() {
         if (!(button instanceof HTMLButtonElement) || button.disabled)
             return false;
         const act = button.dataset.lcAct || '';
-        if (!act)
-            return false;
         event?.preventDefault?.();
         event?.stopPropagation?.();
         event?.stopImmediatePropagation?.();
@@ -7248,9 +7234,29 @@ function cmuMain() {
             cmuLogCaptureExitMode(true, true);
         }
         else if (act === 'clear') {
-            cmuLogCaptureClearSelected();
+            LOG_CAPTURE.sel.clear();
+            LOG_CAPTURE.range = 0;
+            LOG_CAPTURE.rangeStart = '';
+            cmuLogCaptureRefresh();
         }
-        else if (act === 'preview') {
+        else if (act === 'range') {
+            LOG_CAPTURE.range = LOG_CAPTURE.range ? 0 : 1;
+            LOG_CAPTURE.rangeStart = '';
+            cmuLogCaptureRefresh();
+        }
+        else if (act === 'nouser') {
+            settings.logCaptureNoUser = !settings.logCaptureNoUser;
+            saveSettings();
+            cmuLogCaptureRefresh();
+        }
+        else if (act === 'last1' || act === 'last3') {
+            const turns = lcTurns();
+            LOG_CAPTURE.sel = new Set(turns.slice(act === 'last1' ? -1 : -3).flat());
+            LOG_CAPTURE.range = 0;
+            LOG_CAPTURE.rangeStart = '';
+            cmuLogCaptureRefresh();
+        }
+        else if (act === 'next') {
             cmuLogCaptureOpenPreview();
         }
         else {
@@ -7271,11 +7277,11 @@ function cmuMain() {
         if (!bar) {
             bar = document.createElement('div');
             bar.id = ID.logCaptureBar;
-            bar.innerHTML = `<div class="cmu-lc-msg"></div><div class="cmu-lc-actions"><button type="button" class="cmu-lc-act" data-lc-act="cancel">취소</button><button type="button" class="cmu-lc-act" data-lc-act="clear">전체 해제</button><button type="button" class="cmu-lc-act primary" data-lc-act="preview">미리보기</button></div>`;
+            bar.innerHTML = `<div class="cmu-lcb-row1"><div class="cmu-lcb-chips"><button type="button" class="cmu-lcb-chip" data-lc-act="last1">마지막 턴</button><button type="button" class="cmu-lcb-chip" data-lc-act="last3">최근 3턴</button><button type="button" class="cmu-lcb-chip" data-lc-act="range">범위</button><button type="button" class="cmu-lcb-chip" data-lc-act="nouser">유저 제외</button></div><span class="cmu-lcb-cnt"></span></div><div class="cmu-lcb-row2"><button type="button" class="cmu-lcb-btn" data-lc-act="cancel">취소</button><button type="button" class="cmu-lcb-btn" data-lc-act="clear">모두 해제</button><button type="button" class="cmu-lcb-btn pri" data-lc-act="next">다음</button></div>`;
             const runPointer = (e) => cmuLogCaptureRunBarAction(e.target, e);
             const runClick = (e) => {
-                // pointerup/touchend 직후 브라우저가 만드는 합성 click은 반드시 여기서 소비한다.
-                // 취소 시 바가 사라진 자리의 사이트 버튼으로 클릭이 관통하는 것을 막는다.
+                // pointerup/touchend 직후 브라우저가 만드는 합성 click은 여기서 먹는다.
+                // 취소 때 바가 사라진 자리의 사이트 버튼으로 클릭이 새는 것을 막는다.
                 if (bar.dataset.cmuRetiring === '1' || e.detail !== 0) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -7295,17 +7301,53 @@ function cmuMain() {
     }
     function cmuLogCaptureRefreshBar() {
         const bar = cmuLogCaptureGetBar();
-        const count = LOG_CAPTURE.selectedIds.length;
-        const msg = bar.querySelector('.cmu-lc-msg');
-        if (msg)
-            msg.textContent = count ? `${count}개 선택됨 · 로그를 더 눌러 추가/해제` : '캡처할 로그를 하나씩 선택하세요';
+        const ids = lcEffectiveIds();
+        const cnt = bar.querySelector('.cmu-lcb-cnt');
+        if (cnt) {
+            if (LOG_CAPTURE.range === 1)
+                cnt.textContent = '처음 메시지를 누르세요';
+            else if (LOG_CAPTURE.range === 2)
+                cnt.textContent = '끝 메시지를 누르세요';
+            else if (!ids.length)
+                cnt.textContent = '메시지를 눌러 고르세요';
+            else
+                cnt.innerHTML = `<b>${ids.length}개</b> · ${LOG_CAPTURE.estimate ? `약 ${LOG_CAPTURE.estimate}장` : '…'}`;
+        }
+        bar.querySelector('[data-lc-act="range"]')?.classList.toggle('on', !!LOG_CAPTURE.range);
+        bar.querySelector('[data-lc-act="nouser"]')?.classList.toggle('on', !!settings.logCaptureNoUser);
         const clear = bar.querySelector('[data-lc-act="clear"]');
-        const preview = bar.querySelector('[data-lc-act="preview"]');
+        const next = bar.querySelector('[data-lc-act="next"]');
         if (clear)
-            clear.disabled = count < 1;
-        if (preview)
-            preview.disabled = count < 1;
+            clear.disabled = !LOG_CAPTURE.sel.size;
+        if (next)
+            next.disabled = !ids.length;
         bar.hidden = false;
+    }
+    function cmuLogCaptureRefresh() {
+        LOG_CAPTURE.estimate = 0;
+        cmuLogCaptureMarkSelection();
+        cmuLogCaptureRefreshBar();
+        clearTimeout(LOG_CAPTURE.estT);
+        LOG_CAPTURE.estT = setTimeout(lcEstimatePages, 180);
+    }
+    function lcEstimatePages() {
+        LOG_CAPTURE.estT = 0;
+        if (!LOG_CAPTURE.active)
+            return;
+        const ids = lcEffectiveIds();
+        if (!ids.length)
+            return;
+        try {
+            const msgs = ids.map(lcModelFor).filter(Boolean).map(lcEditableCopy);
+            const theme = normalizeLogCaptureTheme(settings.logCaptureTheme);
+            const pages = msgs.length ? lcBuildPages(lcMeasurePages(), theme, msgs, lcPageMaxCss()) : [];
+            lcMeasurePages().innerHTML = '';
+            LOG_CAPTURE.estimate = pages.length;
+        }
+        catch (err) {
+            try { console.warn(`${LOG} log capture estimate failed`, err); } catch (_) { }
+        }
+        cmuLogCaptureRefreshBar();
     }
     function cmuLogCaptureHideBar(guardClickThrough = false) {
         const bar = document.getElementById(ID.logCaptureBar);
@@ -7319,9 +7361,8 @@ function cmuMain() {
             bar.remove();
             return;
         }
-        // 취소는 pointerup/touchend에서 실행된다. 이때 바를 즉시 제거하면 이어서 생성되는
-        // 합성 click이 같은 좌표의 사이트 버튼으로 재타깃될 수 있다. 화면에서는 즉시 숨기되
-        // 짧은 시간 투명한 히트 영역으로 남겨 그 click을 소비한 뒤 제거한다.
+        // 취소는 pointerup/touchend에서 실행된다. 바를 바로 지우면 뒤따르는 합성 click이
+        // 같은 자리의 사이트 버튼으로 갈 수 있어서, 화면에서만 숨기고 잠깐 투명한 판으로 남겼다가 지운다.
         bar.dataset.cmuRetiring = '1';
         bar.setAttribute('aria-hidden', 'true');
         bar.style.setProperty('opacity', '0', 'important');
@@ -7334,206 +7375,367 @@ function cmuMain() {
         }, 450);
     }
     function cmuLogCaptureClearMarks() {
-        document.querySelectorAll('[data-cmu-logcap-selected]').forEach(el => el.removeAttribute('data-cmu-logcap-selected'));
-    }
-    function cmuLogCaptureMarkSelection() {
-        cmuLogCaptureClearMarks();
-        LOG_CAPTURE.selectedIds.forEach(id => {
-            const group = document.querySelector(`[data-message-group-id="${CSS.escape(id)}"]`);
-            if (group instanceof HTMLElement)
-                group.setAttribute('data-cmu-logcap-selected', '1');
+        document.querySelectorAll('[data-cmu-logcap-selected], [data-cmu-logcap-skip], [data-cmu-logcap-start], [data-cmu-logcap-user]').forEach(el => {
+            el.removeAttribute('data-cmu-logcap-selected');
+            el.removeAttribute('data-cmu-logcap-skip');
+            el.removeAttribute('data-cmu-logcap-start');
+            el.removeAttribute('data-cmu-logcap-user');
         });
     }
-    function lcMessageOrderKey(id = '', fallback = 0) {
-        const clean = String(id || '').trim().toLowerCase();
-        if (/^[0-9a-f]{24}$/.test(clean))
-            return `0:${clean}`;
-        return `1:${String(fallback).padStart(10, '0')}:${clean}`;
+    function lcModelFor(id) {
+        if (LOG_CAPTURE.models.has(id))
+            return LOG_CAPTURE.models.get(id);
+        const group = document.querySelector(`main [data-message-group-id="${CSS.escape(id)}"]`);
+        const model = group ? lcBuildMessageModel(group) : null;
+        if (model)
+            LOG_CAPTURE.models.set(id, model);
+        return model;
     }
-    function cmuLogCaptureSyncSelectedIds() {
-        LOG_CAPTURE.selectedIds = Array.from(LOG_CAPTURE.selectedModels.entries())
-            .sort((a, b) => String(a[1]?.orderKey || '').localeCompare(String(b[1]?.orderKey || '')))
-            .map(([id]) => id);
+    function lcEditableCopy(model) {
+        return {
+            id: model.id,
+            role: model.role,
+            off: false,
+            blocks: model.blocks.map(b => ({
+                ...b,
+                off: (b.t === 'img' && !settings.logCaptureIncludeImages) || (b.t === 'code' && !settings.logCaptureIncludeCodeBlocks),
+            })),
+        };
     }
-    function cmuLogCaptureClearSelected() {
-        LOG_CAPTURE.selectedModels.clear();
-        LOG_CAPTURE.selectedIds = [];
-        cmuLogCaptureMarkSelection();
-        cmuLogCaptureRefreshBar();
-    }
-    function cmuLogCaptureStartSelection(options = {}) {
-        const preserve = options.preserve === true;
-        LOG_CAPTURE.active = true;
-        LOG_CAPTURE.previewOpen = false;
-        LOG_CAPTURE.rendering = false;
-        if (!preserve) {
-            LOG_CAPTURE.selectedModels.clear();
-            LOG_CAPTURE.selectedIds = [];
-            LOG_CAPTURE.selectionSeq = 0;
+    function lcBlockHtml(b, bi, inGhost) {
+        const x = b.off && !inGhost ? ' x' : '';
+        const at = ` data-bi="${bi}"`;
+        if (b.t === 'p') {
+            const tag = b.tag === 'blockquote' ? 'blockquote' : (b.tag === 'h' ? 'h4' : 'p');
+            return `<${tag}${at} class="lc-p${x}"${b.ws ? ' style="white-space:pre-wrap"' : ''}>${b.h}</${tag}>`;
         }
+        if (b.t === 'list')
+            return `<${b.tag}${at} class="lc-list${x}">${b.items.map(h => `<li>${h}</li>`).join('')}</${b.tag}>`;
+        if (b.t === 'table')
+            return `<div${at} class="lc-table${x}"><table>${b.rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</table></div>`;
+        if (b.t === 'hr')
+            return `<div${at} class="lc-hr${x}"></div>`;
+        if (b.t === 'code')
+            return `<div${at} class="lc-code${x}">${b.lang ? `<div class="lc-code-h"><span>${escapeHtml(b.lang)}</span></div>` : ''}<div class="lc-code-b">${escapeHtml(b.text)}</div></div>`;
+        return `<figure${at} class="lc-img${x}"><img src="${escapeHtml(b.src)}" alt="" style="aspect-ratio:${b.w}/${b.h}" decoding="async"></figure>`;
+    }
+    function lcCardHtml(m, mi, pairs, ghost) {
+        const user = m.role === 'user';
+        return `<article class="lc-card ${user ? 'user' : 'ai'}${ghost ? ' x' : ''}" data-mi="${mi}"><div class="lc-role" data-act="msg" data-no="#${String(mi + 1).padStart(2, '0')}">${user ? 'USER' : 'AI'}</div><div class="lc-text">${pairs.map(([b, bi]) => lcBlockHtml(b, bi, ghost)).join('')}</div></article>`;
+    }
+    function lcSplitAt(el, offset) {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let node = null, acc = 0;
+        while (walker.nextNode()) {
+            const len = walker.currentNode.nodeValue.length;
+            if (acc + len >= offset) {
+                node = walker.currentNode;
+                break;
+            }
+            acc += len;
+        }
+        const first = el.cloneNode(false);
+        const rest = el.cloneNode(false);
+        if (!node) {
+            first.append(...Array.from(el.cloneNode(true).childNodes));
+            return [first, rest];
+        }
+        const r1 = document.createRange();
+        r1.setStart(el, 0);
+        r1.setEnd(node, offset - acc);
+        const r2 = document.createRange();
+        r2.setStart(node, offset - acc);
+        r2.setEnd(el, el.childNodes.length);
+        first.appendChild(r1.cloneContents());
+        rest.appendChild(r2.cloneContents());
+        return [first, rest];
+    }
+    function lcSplitToFit(el, fits) {
+        const code = el.matches('.lc-code');
+        if (!code && !el.matches('p, blockquote, h4'))
+            return null;
+        const target = code ? el.querySelector('.lc-code-b') : el;
+        if (!target)
+            return null;
+        const original = target.cloneNode(true);
+        const full = original.textContent || '';
+        if (full.length < 80)
+            return null;
+        const show = node => target.replaceChildren(...Array.from(node.childNodes));
+        let lo = 1, hi = full.length - 1, best = 0;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            show(lcSplitAt(original, mid)[0]);
+            if (fits()) {
+                best = mid;
+                lo = mid + 1;
+            }
+            else {
+                hi = mid - 1;
+            }
+        }
+        let cut = best;
+        if (code) {
+            const nl = full.lastIndexOf('\n', cut - 1);
+            cut = nl > 0 ? nl + 1 : 0;
+        }
+        else {
+            const br = Math.max(full.lastIndexOf(' ', cut - 1), full.lastIndexOf('\n', cut - 1));
+            if (br > 0 && cut - br < 40)
+                cut = br + 1;
+        }
+        if (cut < 40 || cut >= full.length) {
+            show(original.cloneNode(true));
+            return null;
+        }
+        const [first, rest] = lcSplitAt(original, cut);
+        show(first);
+        if (!fits()) {
+            show(original.cloneNode(true));
+            return null;
+        }
+        const restEl = el.cloneNode(true);
+        const restTarget = code ? restEl.querySelector('.lc-code-b') : restEl;
+        restTarget.replaceChildren(...Array.from(rest.childNodes));
+        if (code)
+            restEl.querySelector('.lc-code-h')?.remove();
+        return restEl;
+    }
+    function lcBuildPages(host, theme, msgs, maxH) {
+        const T = LC_THEMES[theme] || LC_THEMES.gwedo;
+        const pages = [];
+        host.innerHTML = '';
+        host.classList.add('measuring');
+        const newPage = () => {
+            const el = document.createElement('div');
+            el.className = 'lc';
+            el.dataset.t = theme;
+            el.style.width = `${lcW()}px`;
+            el.innerHTML = `<div class="lc-head">${T.head()}</div><div class="lc-body"></div><div class="lc-foot">${T.foot(8, 8)}</div>`;
+            host.appendChild(el);
+            const pg = { el, body: el.querySelector('.lc-body'), live: 0 };
+            pages.push(pg);
+            return pg;
+        };
+        let page = newPage();
+        const fits = () => page.el.offsetHeight <= maxH;
+        msgs.forEach((m, mi) => {
+            const pairs = m.blocks.map((b, bi) => [b, bi]);
+            if (m.off || !m.blocks.some(b => !b.off)) {
+                page.body.insertAdjacentHTML('beforeend', lcCardHtml(m, mi, pairs, true));
+                return;
+            }
+            page.body.insertAdjacentHTML('beforeend', lcCardHtml(m, mi, pairs, false));
+            if (fits()) {
+                page.live++;
+                return;
+            }
+            page.body.lastElementChild.remove();
+            let k = 0;
+            let carry = null; // 쪽 끝에서 나뉜 문단의 남은 부분, 또는 다음 쪽으로 넘길 블록
+            while (k < pairs.length || carry) {
+                page.body.insertAdjacentHTML('beforeend', lcCardHtml(m, mi, [], false));
+                const card = page.body.lastElementChild;
+                const text = card.querySelector('.lc-text');
+                let placed = 0;
+                while (k < pairs.length || carry) {
+                    let el, ghost = false;
+                    if (carry) {
+                        el = carry;
+                        carry = null;
+                        text.appendChild(el);
+                    }
+                    else {
+                        const [b, bi] = pairs[k++];
+                        text.insertAdjacentHTML('beforeend', lcBlockHtml(b, bi, false));
+                        el = text.lastElementChild;
+                        ghost = !!b.off;
+                    }
+                    if (ghost || fits()) {
+                        if (!ghost)
+                            placed++;
+                        continue;
+                    }
+                    // 넘침: 긴 문단·코드블록은 이 쪽에 들어가는 만큼만 남기고 나머지는 다음 쪽으로
+                    const rest = lcSplitToFit(el, fits);
+                    if (rest) {
+                        placed++;
+                        carry = rest;
+                        break;
+                    }
+                    if (!placed && !page.live) {
+                        placed++; // 나눌 수 없는 블록 하나가 쪽보다 크다(이미지 등): 이 쪽만 길어진다
+                        break;
+                    }
+                    el.remove();
+                    carry = el;
+                    break;
+                }
+                if (placed)
+                    page.live++;
+                else
+                    card.remove();
+                if (k < pairs.length || carry)
+                    page = newPage();
+            }
+        });
+        const last = pages[pages.length - 1];
+        if (pages.length > 1 && !last.live) {
+            const prev = pages[pages.length - 2];
+            while (last.body.firstChild)
+                prev.body.appendChild(last.body.firstChild);
+            last.el.remove();
+            pages.pop();
+        }
+        host.classList.remove('measuring');
+        pages.forEach((pg, k) => { pg.el.querySelector('.lc-foot').innerHTML = T.foot(k + 1, pages.length); });
+        return pages;
+    }
+    function lcAddFrames(pages, theme) {
+        if (!LC_THEMES[theme]?.frame)
+            return;
+        pages.forEach(pg => {
+            pg.el.querySelector(':scope > .sj-frame')?.remove();
+            pg.el.insertAdjacentHTML('beforeend', lcSjFrame(pg.el.offsetWidth || lcW(), pg.el.offsetHeight));
+        });
+    }
+    function lcMakeShadowPages(host) {
+        const shadow = host.shadowRoot || host.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `<style>${LC_THEME_CSS}${LC_PREVIEW_CSS}</style><div class="pages"></div>`;
+        return shadow.querySelector('.pages');
+    }
+    function lcMeasurePages() {
+        let host = document.getElementById('cmu-lc-measure');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'cmu-lc-measure';
+            host.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(host);
+        }
+        host.style.width = `${lcW()}px`;
+        return host.shadowRoot?.querySelector('.pages') || lcMakeShadowPages(host);
+    }
+    function lcGroups() {
+        return Array.from(document.querySelectorAll('main [data-message-group-id]')).filter(g => g instanceof HTMLElement && groupMessageId(g));
+    }
+    function lcChronoGroups() {
+        const groups = lcGroups();
+        const list = groups[0]?.parentElement;
+        let reversed = true;
+        try {
+            reversed = !list || getComputedStyle(list).flexDirection === 'column-reverse';
+        }
+        catch (_) { }
+        return reversed ? groups.reverse() : groups;
+    }
+    function lcEffectiveIds() {
+        const noUser = !!settings.logCaptureNoUser;
+        return lcChronoGroups().filter(g => LOG_CAPTURE.sel.has(groupMessageId(g)) && !(noUser && isUserGroupByDom(g))).map(groupMessageId);
+    }
+    function lcTurns() {
+        const turns = [];
+        lcChronoGroups().forEach(g => {
+            if (isUserGroupByDom(g) || !turns.length)
+                turns.push([]);
+            turns[turns.length - 1].push(groupMessageId(g));
+        });
+        return turns;
+    }
+    function cmuLogCaptureMarkSelection() {
+        const noUser = !!settings.logCaptureNoUser;
+        lcGroups().forEach(g => {
+            const id = groupMessageId(g);
+            const user = isUserGroupByDom(g);
+            const skip = noUser && user;
+            g.toggleAttribute('data-cmu-logcap-user', user);
+            g.toggleAttribute('data-cmu-logcap-skip', skip);
+            if (LOG_CAPTURE.sel.has(id) && !skip)
+                g.setAttribute('data-cmu-logcap-selected', '1');
+            else
+                g.removeAttribute('data-cmu-logcap-selected');
+            g.toggleAttribute('data-cmu-logcap-start', LOG_CAPTURE.range === 2 && id === LOG_CAPTURE.rangeStart);
+        });
+    }
+    
+    
+    
+    function cmuLogCaptureStartSelection(options = {}) {
+        if (options.preserve !== true) {
+            LOG_CAPTURE.sel.clear();
+            LOG_CAPTURE.models.clear();
+        }
+        LOG_CAPTURE.active = true;
+        LOG_CAPTURE.range = 0;
+        LOG_CAPTURE.rangeStart = '';
         document.documentElement.classList.add('cmu-logcap-mode');
+        // '긴 방 가볍게'로 접힌 옛 메시지도 고를 수 있게 다 펼친다(고르는 동안은 다시 접지 않음)
+        try {
+            const st = cmuFoldState();
+            if (st.list?.isConnected && st.count)
+                cmuKeepView(() => cmuUnfoldAll());
+        }
+        catch (_) { }
         syncLogCaptureToolbarButton();
-        cmuLogCaptureMarkSelection();
-        cmuLogCaptureRefreshBar();
+        cmuLogCaptureRefresh();
     }
     function cmuLogCaptureExitMode(clear = false, guardClickThrough = false) {
+        const wasActive = LOG_CAPTURE.active;
         LOG_CAPTURE.active = false;
+        LOG_CAPTURE.range = 0;
+        LOG_CAPTURE.rangeStart = '';
+        clearTimeout(LOG_CAPTURE.estT);
+        LOG_CAPTURE.estT = 0;
         document.documentElement.classList.remove('cmu-logcap-mode');
         cmuLogCaptureHideBar(guardClickThrough);
         cmuLogCaptureClearMarks();
         if (clear) {
-            LOG_CAPTURE.selectedModels.clear();
-            LOG_CAPTURE.selectedIds = [];
-            LOG_CAPTURE.selectionSeq = 0;
+            LOG_CAPTURE.sel.clear();
+            LOG_CAPTURE.models.clear();
         }
         syncLogCaptureToolbarButton();
+        if (wasActive) {
+            try { cmuFoldSoon(250); } catch (_) { }
+        }
     }
     function toggleLogCaptureMode() {
         if (!settings.logCapture || !isChatRoomPath()) {
             showToast('로그 캡처를 먼저 켜 주세요');
             return;
         }
-        if (LOG_CAPTURE.active) {
+        if (LOG_CAPTURE.active)
             cmuLogCaptureExitMode(true);
-        }
-        else if (LOG_CAPTURE.previewOpen) {
+        else if (LOG_CAPTURE.previewOpen)
             cmuLogCaptureClosePreview(true);
-        }
-        else {
+        else
             cmuLogCaptureStartSelection();
-        }
     }
-    function lcCloneCaptureContent(root) {
-        const clone = root.cloneNode(true);
-        // Read the live source before sanitizing styles. Do not measure individual lines.
-        const sources = [root, ...root.querySelectorAll('*')];
-        const copies = [clone, ...clone.querySelectorAll('*')];
-        const preserving = new Set(['pre', 'pre-wrap', 'pre-line', 'break-spaces']);
-        sources.forEach((source, index) => {
-            if (!(source instanceof HTMLElement)) return;
-            const copy = copies[index];
-            const css = getComputedStyle(source);
-            if (preserving.has(css.whiteSpace)) copy.setAttribute('data-cmu-lc-whitespace', source.closest('pre') ? 'pre-wrap' : css.whiteSpace);
-            // Inline tags can be visual blocks in the source (e.g. styled spans).
-            if (source.matches('span, strong, em, b, i') && css.display === 'block')
-                copy.setAttribute('data-cmu-lc-display', 'block');
-        });
-        return clone;
-    }
-    function lcCaptureBlockNodes(root) {
-        const blocks = [];
-        let inline = null;
-        const flush = () => {
-            if (!inline) return;
-            if (inline.textContent.trim() || inline.querySelector('br, img')) blocks.push(inline);
-            inline = null;
-        };
-        // Keep semantic roots such as a paragraph, list or code block intact.
-        if (root.matches('p, pre, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6')) return [root];
-        for (const node of root.childNodes) {
-            const isBlock = node instanceof HTMLElement && node.matches('p, div, pre, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6, hr, [data-cmu-lc-display="block"]');
-            if (isBlock) { flush(); blocks.push(node.cloneNode(true)); continue; }
-            if (node.nodeType !== Node.TEXT_NODE && !(node instanceof HTMLElement)) continue;
-            if (!inline) {
-                inline = document.createElement('p');
-                if (root.style.whiteSpace) inline.style.whiteSpace = root.style.whiteSpace;
-            }
-            inline.appendChild(node.cloneNode(true));
-        }
-        flush();
-        return blocks;
-    }
+    
+    
 
-    function lcSanitizeClone(root) {
-        if (!(root instanceof HTMLElement))
-            return root;
-        root.querySelectorAll('button, textarea, input, select, [contenteditable="true"], .cmu-message-badge, .cac-answer-cost, .cmi-model-slot, [data-cmu-toolbar-button], [data-action], [role="button"], [role="menu"], [aria-label="메시지 옵션"]').forEach(el => el.remove());
-        root.querySelectorAll('script, style').forEach(el => el.remove());
-        if (!settings.logCaptureIncludeImages)
-            root.querySelectorAll('img, video').forEach(el => el.remove());
-        if (!settings.logCaptureIncludeCodeBlocks)
-            root.querySelectorAll('.wrtn-codeblock, pre').forEach(el => {
-                if (el.matches?.('pre') && el.closest?.('.wrtn-codeblock'))
-                    return;
-                el.remove();
-            });
-        root.querySelectorAll('[data-cmu-theme-quote], [data-sgb-quote]').forEach(el => {
-            const parent = el.parentNode;
-            if (!parent)
-                return;
-            while (el.firstChild)
-                parent.insertBefore(el.firstChild, el);
-            el.remove();
-        });
-        root.querySelectorAll('*').forEach(el => {
-            el.removeAttribute('style');
-            el.removeAttribute('class');
-        });
-        root.removeAttribute('style');
-        root.removeAttribute('class');
-        for (const el of [root, ...root.querySelectorAll('[data-cmu-lc-whitespace], [data-cmu-lc-display]')]) {
-            const whitespace = el.getAttribute('data-cmu-lc-whitespace');
-            if (['pre', 'pre-wrap', 'pre-line', 'break-spaces'].includes(whitespace)) el.style.whiteSpace = whitespace;
-            if (el.getAttribute('data-cmu-lc-display') === 'block') el.style.display = 'block';
-        }
-        return root;
-    }
+    
+    const LC_JUNK = 'button, textarea, input, select, script, style, svg, video, [role="button"], [role="menu"], [contenteditable="true"], .cmu-message-badge, .cac-answer-cost, .cmi-model-slot, [data-cmu-toolbar-button], [data-cmu-theme-codeblock-head], [data-sgb-codeblock-head], .cmu-user-badge-row';
     function lcParseTextRules(raw = []) {
-        return normalizeLogCaptureRules(raw).map(rule => ({
-            from: String(rule.from || ''),
-            to: String(rule.to || ''),
-        })).filter(rule => !!rule.from);
+        return normalizeLogCaptureRules(raw).map(rule => ({ from: String(rule.from || ''), to: String(rule.to || '') })).filter(rule => !!rule.from);
     }
-    function lcApplyTextRules(root) {
-        if (!(root instanceof HTMLElement))
-            return;
-        const rules = lcParseTextRules(settings.logCaptureRules);
-        if (!rules.length)
-            return;
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-        const nodes = [];
-        while (walker.nextNode())
-            nodes.push(walker.currentNode);
-        nodes.forEach(node => {
-            let value = String(node.nodeValue || '');
-            rules.forEach(rule => { value = value.split(rule.from).join(rule.to || ''); });
-            node.nodeValue = value;
-        });
-    }
+    
     function lcFindContentRoot(group) {
         if (!(group instanceof HTMLElement))
             return null;
-        const preferredSelectors = [
-            '.wrtn-markdown',
-            '[class*="wrtn-markdown"]',
-            '.markdown-body',
-            '.prose',
-            '[class*="prose"]',
-            '[class*="whitespace-pre-wrap"]',
-            '[class*="break-words"]',
-            '[class*="break-all"]'
-        ];
+        const preferredSelectors = ['.wrtn-markdown', '[class*="wrtn-markdown"]', '.markdown-body', '.prose', '[class*="prose"]', '[class*="whitespace-pre-wrap"]', '[class*="break-words"]', '[class*="break-all"]'];
         for (const selector of preferredSelectors) {
             const candidates = Array.from(group.querySelectorAll(selector)).filter(el => {
                 if (!(el instanceof HTMLElement))
                     return false;
                 if (el.closest('button, [role="menu"], [data-radix-popper-content-wrapper]'))
                     return false;
+                if (el.parentElement?.closest('.wrtn-markdown, [class*="wrtn-markdown"]') && selector !== '.wrtn-markdown')
+                    return false;
                 return !!String(el.textContent || '').trim() || !!el.querySelector('img');
             });
             if (candidates.length)
                 return candidates.sort((a, b) => String(b.textContent || '').length - String(a.textContent || '').length)[0];
         }
-        const leaves = Array.from(group.querySelectorAll('p, div, span')).filter(el => {
-            if (!(el instanceof HTMLElement) || el.querySelector('button, [role="button"]'))
-                return false;
-            const value = String(el.textContent || '').trim();
-            if (!value || value.length < 2)
-                return false;
-            const childText = Array.from(el.children).some(child => String(child.textContent || '').trim() === value);
-            return !childText;
-        });
-        return leaves.sort((a, b) => String(b.textContent || '').length - String(a.textContent || '').length)[0] || null;
+        return null;
     }
     function lcCaptureImageSource(img) {
         if (!(img instanceof HTMLImageElement))
@@ -7543,7 +7745,7 @@ function cmuMain() {
     function lcIsMessageContentImage(img) {
         if (!(img instanceof HTMLImageElement))
             return false;
-        if (img.closest('[role="menu"], [data-radix-popper-content-wrapper], .cmu-message-badge, .cac-answer-cost, .cmi-model-slot, [data-cmu-toolbar-button]'))
+        if (img.closest('[role="menu"], [data-radix-popper-content-wrapper], .cmu-message-badge, .cac-answer-cost, .cmi-model-slot, [data-cmu-toolbar-button], button'))
             return false;
         const src = lcCaptureImageSource(img);
         if (!src || /^data:image\/svg\+xml/i.test(src))
@@ -7561,733 +7763,702 @@ function cmuMain() {
             return false;
         return knownContentHost || Math.max(renderedWidth, renderedHeight) >= 120 || Math.max(naturalWidth, naturalHeight) >= 240;
     }
-    function lcAppendMissingMessageImages(group, clone) {
-        if (!(group instanceof HTMLElement) || !(clone instanceof HTMLElement) || !settings.logCaptureIncludeImages)
-            return;
-        const existing = new Set(Array.from(clone.querySelectorAll('img')).map(lcCaptureImageSource).filter(Boolean));
-        Array.from(group.querySelectorAll('img')).forEach(sourceImage => {
-            if (!lcIsMessageContentImage(sourceImage))
-                return;
-            const src = lcCaptureImageSource(sourceImage);
-            if (!src || existing.has(src))
-                return;
-            const img = sourceImage.cloneNode(true);
-            img.setAttribute('src', src);
-            img.removeAttribute('srcset');
-            img.removeAttribute('sizes');
-            img.removeAttribute('loading');
-            img.removeAttribute('style');
-            img.removeAttribute('class');
-            const wrap = document.createElement('div');
-            wrap.appendChild(img);
-            clone.appendChild(wrap);
-            existing.add(src);
+    
+    function lcApplyRulesToText(value, rules) {
+        let out = String(value || '');
+        rules.forEach(rule => { out = out.split(rule.from).join(rule.to || ''); });
+        return out;
+    }
+    function lcCleanInline(src, rules) {
+        const out = document.createElement('div');
+        const KEEP = { em: 'em', i: 'em', strong: 'strong', b: 'strong', u: 'u', s: 's', del: 's', strike: 's', code: 'code', sub: 'sub', sup: 'sup' };
+        const walk = (node, parent) => {
+            node.childNodes.forEach(ch => {
+                if (ch.nodeType === Node.TEXT_NODE) {
+                    parent.appendChild(document.createTextNode(lcApplyRulesToText(ch.nodeValue, rules)));
+                    return;
+                }
+                if (!(ch instanceof Element) || ch.matches(LC_JUNK) || ch.matches('img'))
+                    return;
+                const tag = ch.tagName.toLowerCase();
+                if (tag === 'br') {
+                    parent.appendChild(document.createElement('br'));
+                    return;
+                }
+                const keep = KEEP[tag];
+                if (keep) {
+                    const el = document.createElement(keep);
+                    walk(ch, el);
+                    if (el.childNodes.length)
+                        parent.appendChild(el);
+                    return;
+                }
+                walk(ch, parent);
+            });
+        };
+        walk(src, out);
+        return out;
+    }
+    function lcWrapQuotes(root) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode: node => node.parentElement?.closest('code') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
         });
+        const nodes = [];
+        while (walker.nextNode())
+            nodes.push(walker.currentNode);
+        const re = /"[^"\n]{1,600}"|“[^”\n]{1,600}”/g;
+        nodes.forEach(node => {
+            const value = String(node.nodeValue || '');
+            re.lastIndex = 0;
+            if (!re.test(value))
+                return;
+            re.lastIndex = 0;
+            const frag = document.createDocumentFragment();
+            let last = 0, m;
+            while ((m = re.exec(value))) {
+                if (m.index > last)
+                    frag.appendChild(document.createTextNode(value.slice(last, m.index)));
+                const span = document.createElement('span');
+                span.className = 'q';
+                span.textContent = m[0];
+                frag.appendChild(span);
+                last = m.index + m[0].length;
+            }
+            if (last < value.length)
+                frag.appendChild(document.createTextNode(value.slice(last)));
+            node.parentNode?.replaceChild(frag, node);
+        });
+    }
+    function lcPreservesNewlines(el) {
+        try {
+            return ['pre', 'pre-wrap', 'pre-line', 'break-spaces'].includes(getComputedStyle(el).whiteSpace);
+        }
+        catch (_) {
+            return false;
+        }
+    }
+    function lcInlineHtml(src, rules) {
+        const out = lcCleanInline(src, rules);
+        lcWrapQuotes(out);
+        return out.innerHTML.trim();
+    }
+    function lcImageBlock(img) {
+        const rect = img.getBoundingClientRect?.() || { width: 0, height: 0 };
+        const w = Number(img.naturalWidth || 0) || Math.round(rect.width) || 16;
+        const h = Number(img.naturalHeight || 0) || Math.round(rect.height) || 9;
+        return { t: 'img', src: lcCaptureImageSource(img), w, h };
+    }
+    function lcCodeBlock(el, rules) {
+        const box = el.matches('.wrtn-codeblock') ? el : (el.querySelector('.wrtn-codeblock') || el);
+        const pre = box.matches('pre') ? box : box.querySelector('pre');
+        if (!pre)
+            return null;
+        let lang = '';
+        if (box !== pre) {
+            const head = Array.from(box.children).find(child => !child.contains(pre));
+            lang = normalizeText(head?.querySelector('span')?.textContent || head?.textContent || '');
+        }
+        let text;
+        if (pre.querySelector('[data-cmu-theme-codeblock-head], [data-sgb-codeblock-head]')) {
+            const copy = pre.cloneNode(true);
+            copy.querySelectorAll('[data-cmu-theme-codeblock-head], [data-sgb-codeblock-head]').forEach(n => n.remove());
+            text = copy.textContent || '';
+        }
+        else {
+            text = pre.innerText || pre.textContent || '';
+        }
+        text = lcApplyRulesToText(String(text).replace(/\n+$/, ''), rules);
+        if (!text.trim())
+            return null;
+        return { t: 'code', lang: lang.slice(0, 24), text };
+    }
+    function lcTableBlock(table, rules) {
+        const rows = Array.from(table.querySelectorAll('tr')).map(tr => Array.from(tr.children).filter(c => /^(TD|TH)$/.test(c.tagName)).map(c => lcInlineHtml(c, rules)));
+        return rows.length ? { t: 'table', rows } : null;
+    }
+    const LC_BLOCK_SEL = 'p, div, section, article, blockquote, ul, ol, pre, table, h1, h2, h3, h4, h5, h6, hr, figure';
+    function lcModelBlocks(root, rules) {
+        const blocks = [];
+        let run = null;
+        const flush = () => {
+            if (!run)
+                return;
+            const holder = document.createElement('div');
+            run.nodes.forEach(n => holder.appendChild(n.cloneNode(true)));
+            const h = lcInlineHtml(holder, rules);
+            if (h.replace(/<br\s*\/?>/g, '').trim())
+                blocks.push({ t: 'p', h, ws: run.ws });
+            run = null;
+        };
+        const visit = (container) => {
+            const wsHere = lcPreservesNewlines(container);
+            for (const node of Array.from(container.childNodes)) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    if (String(node.nodeValue || '').trim() || run) {
+                        run = run || { nodes: [], ws: wsHere };
+                        run.nodes.push(node);
+                    }
+                    continue;
+                }
+                if (!(node instanceof HTMLElement) || node.matches(LC_JUNK))
+                    continue;
+                const display = (() => { try { return getComputedStyle(node).display; } catch (_) { return ''; } })();
+                const looksBlock = node.matches(LC_BLOCK_SEL) || (display && display !== 'inline' && display !== 'contents' && display !== 'none');
+                const contentImgs = Array.from(node.matches('img') ? [node] : node.querySelectorAll('img')).filter(lcIsMessageContentImage);
+                if (!looksBlock && !contentImgs.length) {
+                    run = run || { nodes: [], ws: wsHere };
+                    run.nodes.push(node);
+                    continue;
+                }
+                flush();
+                if (display === 'none')
+                    continue;
+                if (node.matches('.wrtn-codeblock, pre') || (node.querySelector('pre') && !node.matches('p, blockquote, ul, ol, table'))) {
+                    const code = lcCodeBlock(node, rules);
+                    if (code)
+                        blocks.push(code);
+                    continue;
+                }
+                if (node.matches('hr')) {
+                    blocks.push({ t: 'hr' });
+                    continue;
+                }
+                const table = node.matches('table') ? node : node.querySelector(':scope > table, :scope > div > table');
+                if (table) {
+                    const tb = lcTableBlock(table, rules);
+                    if (tb)
+                        blocks.push(tb);
+                    continue;
+                }
+                if (node.matches('ul, ol')) {
+                    const items = Array.from(node.children).filter(li => li.matches('li')).map(li => lcInlineHtml(li, rules)).filter(Boolean);
+                    if (items.length)
+                        blocks.push({ t: 'list', tag: node.tagName.toLowerCase(), items });
+                    continue;
+                }
+                const text = normalizeText(node.textContent || '');
+                if (contentImgs.length && !text) {
+                    contentImgs.forEach(img => blocks.push(lcImageBlock(img)));
+                    continue;
+                }
+                if (node.matches('div, section, article, figure') && node.querySelector(':scope > p, :scope > div, :scope > blockquote, :scope > ul, :scope > ol, :scope > pre, :scope > table, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > hr')) {
+                    visit(node);
+                    flush();
+                    continue;
+                }
+                const h = lcInlineHtml(node, rules);
+                if (h.replace(/<br\s*\/?>/g, '').trim()) {
+                    const tag = node.matches('blockquote') ? 'blockquote' : (node.matches('h1, h2, h3, h4, h5, h6') ? 'h' : 'p');
+                    blocks.push({ t: 'p', tag, h, ws: lcPreservesNewlines(node) });
+                }
+                contentImgs.forEach(img => blocks.push(lcImageBlock(img)));
+            }
+            flush();
+        };
+        visit(root);
+        return blocks;
     }
     function lcBuildMessageModel(group) {
         const root = lcFindContentRoot(group);
         if (!(root instanceof HTMLElement))
             return null;
-        const role = isUserGroupByDom(group) ? 'user' : 'assistant';
-        const clone = lcSanitizeClone(lcCloneCaptureContent(root));
-        lcAppendMissingMessageImages(group, clone);
-        lcApplyTextRules(clone);
-        const rawNodes = lcCaptureBlockNodes(clone);
-        const nodes = rawNodes.length ? rawNodes : [clone];
-        const blocks = nodes.map(node => {
-            const wrap = document.createElement('div');
-            wrap.appendChild(node.cloneNode(true));
-            const html = wrap.innerHTML.trim();
-            const plain = String(wrap.textContent || '').replace(/\s+/g, ' ').trim();
-            const hasImage = /<img[\s>]/i.test(html);
-            const hasCode = /<pre[\s>]/i.test(html) || /data-(?:cmu-theme|sgb)-codeblock/i.test(html);
-            if (!plain && !hasImage)
-                return null;
-            return { html, type: hasImage ? 'image' : (hasCode ? 'code' : 'block'), off: false };
-        }).filter(Boolean);
+        const rules = lcParseTextRules(settings.logCaptureRules);
+        const blocks = lcModelBlocks(root, rules);
+        const have = new Set(blocks.filter(b => b.t === 'img').map(b => b.src));
+        Array.from(group.querySelectorAll('img')).forEach(img => {
+            if (root.contains(img) || !lcIsMessageContentImage(img))
+                return;
+            const b = lcImageBlock(img);
+            if (b.src && !have.has(b.src)) {
+                have.add(b.src);
+                blocks.push(b);
+            }
+        });
         if (!blocks.length)
             return null;
-        return {
-            id: groupMessageId(group),
-            role,
-            off: false,
-            blocks,
-        };
+        return { id: groupMessageId(group), role: isUserGroupByDom(group) ? 'user' : 'ai', blocks };
     }
-    function lcCloneState(state) {
-        return JSON.parse(JSON.stringify(state || null));
-    }
-    function lcPushUndoOps(ops) {
-        if (!LOG_CAPTURE.previewState || !Array.isArray(ops) || !ops.length)
-            return;
-        LOG_CAPTURE.undoStack.push({ ops });
-        if (LOG_CAPTURE.undoStack.length > 30)
-            LOG_CAPTURE.undoStack.shift();
-    }
-    function lcUndo() {
-        const rec = LOG_CAPTURE.undoStack.pop();
-        if (!rec || !LOG_CAPTURE.previewState)
-            return;
-        (rec.ops || []).forEach(op => {
-            const msg = LOG_CAPTURE.previewState.messages?.[op.m];
-            if (!msg)
-                return;
-            if (op.b === null || op.b === undefined)
-                msg.off = !!op.off;
-            else if (msg.blocks?.[op.b])
-                msg.blocks[op.b].off = !!op.off;
-        });
-        cmuLogCaptureRefreshStage(true);
-    }
-    function lcRestoreAll() {
-        if (!LOG_CAPTURE.previewState)
-            return;
-        const ops = [];
-        LOG_CAPTURE.previewState.messages.forEach((msg, mi) => {
-            if (msg.off) {
-                ops.push({ m: mi, b: null, off: true });
-                msg.off = false;
-            }
-            (msg.blocks || []).forEach((block, bi) => {
-                if (block.off) {
-                    ops.push({ m: mi, b: bi, off: true });
-                    block.off = false;
-                }
-            });
-        });
-        lcPushUndoOps(ops);
-        cmuLogCaptureRefreshStage(true);
-    }
-    function lcCountBlocksByType(type, state = LOG_CAPTURE.previewState) {
-        let total = 0;
-        let off = 0;
-        const messages = Array.isArray(state?.messages) ? state.messages : [];
-        messages.forEach(msg => {
-            (msg.blocks || []).forEach(block => {
-                if (block?.type !== type)
-                    return;
-                total += 1;
-                if (block.off)
-                    off += 1;
-            });
-        });
-        return { total, off };
-    }
-    function lcGetBulkToggleMeta(type, state = LOG_CAPTURE.previewState) {
-        const { total, off } = lcCountBlocksByType(type, state);
-        const noun = type === 'code' ? '코드블록' : '이미지';
-        return {
-            total,
-            off,
-            disabled: total < 1,
-            allOff: total > 0 && off >= total,
-            label: total < 1
-                ? `${noun} 없음`
-                : (off >= total ? `${noun} 일괄 포함` : `${noun} 일괄 제외`),
-        };
-    }
-    function cmuLogCaptureSyncBulkButtons(root = document.getElementById(ID.logCapturePreview)) {
-        if (!(root instanceof HTMLElement) || LOG_CAPTURE.outputMode)
-            return;
-        [['code', 'toggle-code-all'], ['image', 'toggle-image-all']].forEach(([type, action]) => {
-            const btn = root.querySelector(`[data-lc-ui="${action}"]`);
-            if (!(btn instanceof HTMLButtonElement))
-                return;
-            const meta = lcGetBulkToggleMeta(type);
-            btn.textContent = meta.label;
-            btn.disabled = !!meta.disabled;
-            btn.setAttribute('aria-disabled', meta.disabled ? 'true' : 'false');
-        });
-    }
-    function cmuLogCaptureToggleAllBlocks(type) {
-        if (!LOG_CAPTURE.previewState)
-            return;
-        const meta = lcGetBulkToggleMeta(type);
-        if (meta.disabled)
-            return;
-        const nextOff = !meta.allOff;
-        const ops = [];
-        LOG_CAPTURE.previewState.messages.forEach((msg, mi) => {
-            (msg.blocks || []).forEach((block, bi) => {
-                if (block?.type === type && block.off !== nextOff) {
-                    ops.push({ m: mi, b: bi, off: block.off });
-                    block.off = nextOff;
-                }
-            });
-        });
-        lcPushUndoOps(ops);
-        cmuLogCaptureRefreshStage(true);
-    }
-    function lcRenderBlock(block, msgIndex, blockIndex, editing) {
-        if (!block)
-            return '';
-        if (block.off) {
-            if (!editing)
-                return '';
-            const label = block.type === 'image'
-                ? '제외된 이미지 · 눌러서 복원'
-                : (block.type === 'code' ? '제외된 코드블록 · 눌러서 복원' : '제외된 문단 · 눌러서 복원');
-            return `<button type="button" class="cmu-lc-excluded" data-lc-edit="block" data-lc-msg="${msgIndex}" data-lc-block="${blockIndex}">${label}</button>`;
-        }
-        const editLabel = block.type === 'image' ? '이미지 제외' : (block.type === 'code' ? '코드 제외' : '문단 제외');
-        const editText = block.type === 'image' ? '이미지 제외' : (block.type === 'code' ? '코드 제외' : '−');
-        const editButton = editing
-            ? `<button type="button" class="cmu-lc-edit-block${block.type === 'code' ? ' is-code' : ''}" data-lc-edit="block" data-lc-msg="${msgIndex}" data-lc-block="${blockIndex}" aria-label="${editLabel}">${editText}</button>`
-            : '';
-        return `<div class="cmu-lc-block${block.type === 'image' ? ' is-image' : ''}" data-lc-msg="${msgIndex}" data-lc-block="${blockIndex}">${block.html}${editButton}</div>`;
-    }
-    function lcRenderMessageCard(msg, msgIndex, editing = false) {
-        if (!msg)
-            return '';
-        if (msg.off) {
-            if (!editing)
-                return '';
-            return `<article class="cmu-lc-card ${msg.role === 'user' ? 'user' : 'assistant'}" data-lc-msg="${msgIndex}"><button type="button" class="cmu-lc-excluded cmu-lc-excluded-message" data-lc-edit="message" data-lc-msg="${msgIndex}">제외된 로그 · 눌러서 복원</button></article>`;
-        }
-        const blocks = (msg.blocks || []).map((block, blockIndex) => lcRenderBlock(block, msgIndex, blockIndex, editing)).join('');
-        if (!editing && !blocks)
-            return '';
-        const editButton = editing
-            ? `<button type="button" class="cmu-lc-edit-message" data-lc-edit="message" data-lc-msg="${msgIndex}" aria-label="로그 전체 제외">×</button>`
-            : '';
-        const roleLabel = msg.role === 'user' ? 'USER' : 'AI';
-        return `<article class="cmu-lc-card ${msg.role === 'user' ? 'user' : 'assistant'}" data-lc-msg="${msgIndex}"><div class="cmu-lc-rolebar"><span class="cmu-lc-role">${roleLabel}</span>${editButton}</div><div class="cmu-lc-body">${blocks}</div></article>`;
-    }
-    function lcBuildStageHtml(state, editing = false) {
-        const messages = Array.isArray(state?.messages) ? state.messages : [];
-        if (!messages.length)
-            return editing ? `<div class="cmu-lc-empty">선택한 로그가 없어요.</div>` : '';
-        const html = messages.map((msg, idx) => lcRenderMessageCard(msg, idx, editing)).join('');
-        return html || (editing ? `<div class="cmu-lc-empty">모든 로그가 제외되었어요.</div>` : '');
-    }
-    function lcHeugyoMarkSvg() {
-        return `<svg class="cmu-lc-heugyo-mark" viewBox="0 0 100 100" aria-hidden="true"><path d="M10 92 L90 92 C66 80 58 54 54 14 C46 56 32 80 10 92 Z" fill="var(--lc-accent)"/><path d="M40 57 C39 70 33 73 23 74 C33 75 39 78 40 91 C41 78 47 75 57 74 C47 73 41 70 40 57 Z" fill="var(--lc-bg)"/><circle cx="63" cy="80" r="6.5" fill="var(--lc-bg)"/></svg>`;
-    }
-    function lcThemeDecoration(theme, position) {
-        if (theme === 'specsheet')
-            return position === 'head'
-                ? `<div class="cmu-lc-spec-mark"><span></span><span></span><span></span></div>`
-                : `<div class="cmu-lc-spec-end">${'<i></i>'.repeat(13)}</div>`;
-        if (theme === 'gwedo')
-            return `<div class="cmu-lc-orbit-rule${position === 'foot' ? ' small' : ''}"><span>◆</span></div>`;
-        if (theme === 'simya')
-            return position === 'head' ? `<div class="cmu-lc-night-mark"><i></i><i></i><i></i></div>` : `<div class="cmu-lc-night-end"></div>`;
-        if (theme === 'seongjwa')
-            return `<div class="cmu-lc-star-mark">✦ ✧ ✦</div>`;
-        if (theme === 'heugyo')
-            return position === 'head' ? lcHeugyoMarkSvg() : `<div class="cmu-lc-orbit-rule small"><span>◆</span></div>`;
-        return `<div class="cmu-lc-orbit-rule${position === 'foot' ? ' small' : ''}"><span>◆</span></div>`;
-    }
-    function lcThemeFrameHtml(theme, bodyHtml, editing = false) {
-        const cleanTheme = normalizeLogCaptureTheme(theme);
-        return `<div class="cmu-lc-render-stage theme-${cleanTheme}${editing ? ' is-editing' : ''}"><div class="cmu-lc-theme-head">${lcThemeDecoration(cleanTheme, 'head')}</div><div class="cmu-lc-content">${bodyHtml}</div><div class="cmu-lc-theme-foot">${lcThemeDecoration(cleanTheme, 'foot')}</div></div>`;
-    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     function ensureLogCapturePreviewRoot() {
         let root = document.getElementById(ID.logCapturePreview);
         if (root)
             return root;
         root = document.createElement('div');
         root.id = ID.logCapturePreview;
-        root.addEventListener('click', (e) => {
-            if (e.target === root)
-                cmuLogCaptureClosePreview();
-        });
         document.body.appendChild(root);
         return root;
     }
-    function cmuLogCaptureClearOutput(invalidate = true) {
-        if (invalidate) {
-            LOG_CAPTURE.renderSeq = (LOG_CAPTURE.renderSeq || 0) + 1;
-            LOG_CAPTURE.rendering = false;
-            LOG_CAPTURE.renderHost?.remove?.();
-            LOG_CAPTURE.renderHost = null;
-        }
-        const output = LOG_CAPTURE.output;
-        if (output?.url) {
-            try { URL.revokeObjectURL(output.url); } catch (_) { }
-        }
-        LOG_CAPTURE.output = null;
-        LOG_CAPTURE.outputMode = false;
-    }
-    function cmuLogCaptureSetInlineStatus(text = '') {
-        const root = document.getElementById(ID.logCapturePreview);
-        const status = root?.querySelector?.('.cmu-lcp-inline-status');
-        if (status)
-            status.textContent = String(text || '');
-    }
-    function cmuLogCaptureRestoreScroll(scroll, top) {
-        if (!(scroll instanceof HTMLElement))
-            return;
-        const target = Math.max(0, Number(top) || 0);
-        scroll.scrollTop = target;
-        requestAnimationFrame(() => { if (scroll.isConnected) scroll.scrollTop = target; });
-    }
-    function cmuLogCaptureRefreshStage(preserveScroll = true) {
-        if (!LOG_CAPTURE.previewState || !LOG_CAPTURE.previewOpen)
-            return;
-        const root = ensureLogCapturePreviewRoot();
-        if (LOG_CAPTURE.outputMode) {
-            const top = Number(LOG_CAPTURE.outputReturnScroll || 0);
-            renderLogCapturePreview();
-            const nextScroll = root.querySelector('.cmu-lcp-scroll');
-            cmuLogCaptureRestoreScroll(nextScroll, top);
-            return;
-        }
-        const scroll = root.querySelector('.cmu-lcp-scroll');
-        const oldTop = preserveScroll && scroll instanceof HTMLElement ? scroll.scrollTop : 0;
-        const wrap = root.querySelector('.cmu-lcp-stage-wrap');
-        if (!(wrap instanceof HTMLElement)) {
-            renderLogCapturePreview();
-            return;
-        }
-        const theme = normalizeLogCaptureTheme(settings.logCaptureTheme);
-        wrap.innerHTML = lcThemeFrameHtml(theme, lcBuildStageHtml(LOG_CAPTURE.previewState, true), true);
-        cmuLogCaptureClearOutput();
-        cmuLogCaptureRestoreScroll(scroll, oldTop);
-        cmuLogCaptureUpdateSaveButtons();
-        cmuLogCaptureSyncBulkButtons(root);
-    }
-    function cmuLogCapturePatchEditedNode(msgIndex, blockIndex = null) {
-        const root = document.getElementById(ID.logCapturePreview);
-        const scroll = root?.querySelector?.('.cmu-lcp-scroll');
-        const msg = LOG_CAPTURE.previewState?.messages?.[msgIndex];
-        if (!root || !msg)
-            return;
-        let target = null;
-        let nextHtml = '';
-        let replacementSelector = '';
-        if (blockIndex === null) {
-            target = root.querySelector(`.cmu-lc-card[data-lc-msg="${msgIndex}"]`);
-            nextHtml = lcRenderMessageCard(msg, msgIndex, true);
-            replacementSelector = `.cmu-lc-card[data-lc-msg="${msgIndex}"]`;
-        }
-        else {
-            const edit = root.querySelector(`[data-lc-edit="block"][data-lc-msg="${msgIndex}"][data-lc-block="${blockIndex}"]`);
-            target = edit?.closest?.('.cmu-lc-block') || edit;
-            nextHtml = lcRenderBlock(msg.blocks?.[blockIndex], msgIndex, blockIndex, true);
-            replacementSelector = `[data-lc-edit="block"][data-lc-msg="${msgIndex}"][data-lc-block="${blockIndex}"]`;
-        }
-        if (!(target instanceof HTMLElement)) {
-            cmuLogCaptureRefreshStage(true);
-            return;
-        }
-        const beforeTop = target.getBoundingClientRect().top;
-        target.outerHTML = nextHtml;
-        const replacement = blockIndex === null
-            ? root.querySelector(replacementSelector)
-            : (root.querySelector(replacementSelector)?.closest?.('.cmu-lc-block') || root.querySelector(replacementSelector));
-        if (scroll instanceof HTMLElement && replacement instanceof HTMLElement) {
-            const delta = replacement.getBoundingClientRect().top - beforeTop;
-            scroll.scrollTop += delta;
-        }
-        cmuLogCaptureClearOutput();
-        cmuLogCaptureUpdateSaveButtons();
-        cmuLogCaptureSyncBulkButtons(root);
-    }
-    function cmuLogCapturePreviewActionTarget(target) {
-        if (!(target instanceof Element))
-            return null;
-        return target.closest('button[data-lc-ui], button[data-lc-edit]');
-    }
-    function cmuLogCaptureBindPreviewEvents(root) {
-        if (!(root instanceof HTMLElement))
-            return;
-        root.__cmuPreviewPointer = null;
-        root.__cmuPreviewHandled = { at: 0, sig: '' };
-        const signature = (node) => {
-            if (!(node instanceof Element))
-                return '';
-            return [node.dataset.lcUi || '', node.dataset.lcEdit || '', node.dataset.lcMsg || '', node.dataset.lcBlock || '', node.dataset.format || ''].join('|');
-        };
-        root.onpointerdown = (event) => {
-            if (event.isPrimary === false || (event.button !== undefined && event.button !== 0))
-                return;
-            const action = cmuLogCapturePreviewActionTarget(event.target);
-            if (!action)
-                return;
-            root.__cmuPreviewPointer = {
-                id: event.pointerId,
-                x: event.clientX,
-                y: event.clientY,
-                at: Date.now(),
-                action,
-                sig: signature(action),
-            };
-        };
-        root.onpointercancel = () => { root.__cmuPreviewPointer = null; };
-        root.onpointerup = (event) => {
-            const press = root.__cmuPreviewPointer;
-            root.__cmuPreviewPointer = null;
-            if (!press || (press.id && event.pointerId && press.id !== event.pointerId))
-                return;
-            const action = cmuLogCapturePreviewActionTarget(event.target);
-            if (!action || action !== press.action)
-                return;
-            if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > 14)
-                return;
-            if (Date.now() - press.at > 700)
-                return;
-            const sig = signature(action);
-            root.__cmuPreviewHandled = { at: Date.now(), sig };
-            cmuLogCapturePreviewClickHandler(event);
-        };
-        root.onclick = (event) => {
-            const action = cmuLogCapturePreviewActionTarget(event.target);
-            const sig = signature(action);
-            const last = root.__cmuPreviewHandled || { at: 0, sig: '' };
-            if (action && sig === last.sig && Date.now() - Number(last.at || 0) < 700) {
-                event.preventDefault();
-                event.stopPropagation();
-                return;
-            }
-            cmuLogCapturePreviewClickHandler(event);
-        };
-        root.onchange = cmuLogCapturePreviewChangeHandler;
-    }
-    function renderLogCapturePreview() {
-        cmuLogCaptureResetOutput();
-        const state = LOG_CAPTURE.previewState;
-        const root = ensureLogCapturePreviewRoot();
-        if (!state) {
-            root.classList.remove('open');
-            root.innerHTML = '';
-            LOG_CAPTURE.previewOpen = false;
-            syncLogCaptureToolbarButton();
-            return;
-        }
-        const theme = normalizeLogCaptureTheme(settings.logCaptureTheme);
-        const codeMeta = lcGetBulkToggleMeta('code', state);
-        const imageMeta = lcGetBulkToggleMeta('image', state);
-        root.classList.add('open');
-        LOG_CAPTURE.previewOpen = true;
-        LOG_CAPTURE.outputMode = false;
-        root.innerHTML = `
-          <div class="cmu-lcp-panel">
-            <div class="cmu-lcp-head">
-              <div class="cmu-lcp-title">로그 캡처 미리보기</div>
-              <button type="button" class="cmu-lcp-btn" data-lc-ui="undo">실행 취소</button>
-              <button type="button" class="cmu-lcp-btn" data-lc-ui="restore">전체 복원</button>
-              <button type="button" class="cmu-lcp-btn" data-lc-ui="reselect">선택 수정</button>
-              <button type="button" class="cmu-lcp-btn" data-lc-ui="close">닫기</button>
-            </div>
-            <div class="cmu-lcp-scroll">
-              <div class="cmu-lcp-note">×는 로그 전체, −는 문단, ‘이미지 제외’와 ‘코드 제외’는 해당 블록만 뺍니다.</div>
-              <div class="cmu-lcp-stage-wrap">
-                ${lcThemeFrameHtml(theme, lcBuildStageHtml(state, true), true)}
-              </div>
-            </div>
-            <div class="cmu-lcp-foot">
-              <div class="cmu-lcp-bulk-row">
-                <button type="button" class="cmu-lcp-btn" data-lc-ui="toggle-code-all"${codeMeta.disabled ? ' disabled aria-disabled="true"' : ''}>${codeMeta.label}</button>
-                <button type="button" class="cmu-lcp-btn" data-lc-ui="toggle-image-all"${imageMeta.disabled ? ' disabled aria-disabled="true"' : ''}>${imageMeta.label}</button>
-              </div>
-              <label class="cmu-lcp-theme-row"><span>테마</span><select class="cmu-lcp-select" data-lc-ui="theme-select">${getLogCaptureThemeOptionsHtml(theme)}</select></label>
-              <div class="cmu-lcp-inline-status"></div>
-              <button type="button" class="cmu-lcp-btn" data-lc-ui="save" data-format="png">PNG 이미지 만들기</button>
-              <button type="button" class="cmu-lcp-btn" data-lc-ui="save" data-format="webp">WebP 이미지 만들기</button>
-            </div>
-          </div>`;
-        cmuLogCaptureBindPreviewEvents(root);
-        syncLogCaptureToolbarButton();
-        cmuLogCaptureUpdateSaveButtons();
-        cmuLogCaptureSyncBulkButtons(root);
-    }
-    function cmuLogCapturePreviewChangeHandler(e) {
-        const select = e.target?.closest?.('[data-lc-ui="theme-select"]');
-        if (!(select instanceof HTMLSelectElement))
-            return;
-        e.preventDefault();
-        settings.logCaptureTheme = normalizeLogCaptureTheme(select.value);
-        saveSettings();
-        cmuLogCaptureRefreshStage(true);
-    }
-    function cmuLogCapturePreviewClickHandler(e) {
-        const ui = e.target?.closest?.('[data-lc-ui]');
-        if (ui) {
-            const type = ui.dataset.lcUi || '';
-            if (type === 'theme-select')
-                return;
-            e.preventDefault();
-            e.stopPropagation();
-            if (type === 'close') {
-                cmuLogCaptureClosePreview();
-                return;
-            }
-            if (type === 'undo') {
-                lcUndo();
-                return;
-            }
-            if (type === 'restore') {
-                lcRestoreAll();
-                return;
-            }
-            if (type === 'reselect') {
-                cmuLogCaptureClosePreview(false);
-                cmuLogCaptureStartSelection({ preserve: true });
-                return;
-            }
-            if (type === 'back-output') {
-                const top = Number(LOG_CAPTURE.outputReturnScroll || 0);
-                renderLogCapturePreview();
-                cmuLogCaptureRestoreScroll(document.querySelector(`#${ID.logCapturePreview} .cmu-lcp-scroll`), top);
-                return;
-            }
-            if (type === 'toggle-code-all') {
-                cmuLogCaptureToggleAllBlocks('code');
-                return;
-            }
-            if (type === 'toggle-image-all') {
-                cmuLogCaptureToggleAllBlocks('image');
-                return;
-            }
-            if (type === 'save') {
-                void cmuLogCaptureRenderLongImage(String(ui.dataset.format || 'png').toLowerCase());
-                return;
-            }
-        }
-        const edit = e.target?.closest?.('[data-lc-edit]');
-        if (!edit || !LOG_CAPTURE.previewState || LOG_CAPTURE.outputMode)
-            return;
-        e.preventDefault();
-        e.stopPropagation();
-        const msgIndex = Number(edit.dataset.lcMsg || -1);
-        const msg = LOG_CAPTURE.previewState.messages?.[msgIndex];
-        if (!msg)
-            return;
-        if (edit.dataset.lcEdit === 'message') {
-            lcPushUndoOps([{ m: msgIndex, b: null, off: msg.off }]);
-            msg.off = !msg.off;
-            cmuLogCapturePatchEditedNode(msgIndex, null);
-        }
-        else if (edit.dataset.lcEdit === 'block') {
-            const blockIndex = Number(edit.dataset.lcBlock || -1);
-            const block = msg.blocks?.[blockIndex];
-            if (!block)
-                return;
-            lcPushUndoOps([{ m: msgIndex, b: blockIndex, off: block.off }]);
-            block.off = !block.off;
-            cmuLogCapturePatchEditedNode(msgIndex, blockIndex);
-        }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    function lcFreeOutputs() {
+        (LOG_CAPTURE.out || []).forEach(o => { try { URL.revokeObjectURL(o.url); } catch (_) { } });
+        LOG_CAPTURE.out = [];
     }
     function cmuLogCaptureClosePreview(clear = false) {
-        cmuLogCaptureResetOutput();
-        LOG_CAPTURE.previewOpen = false;
+        LOG_CAPTURE.renderSeq++;
         LOG_CAPTURE.rendering = false;
+        LOG_CAPTURE.previewOpen = false;
+        clearTimeout(LOG_CAPTURE.toastT);
+        lcFreeOutputs();
         const root = document.getElementById(ID.logCapturePreview);
         if (root) {
             root.classList.remove('open');
-            if (clear)
-                root.innerHTML = '';
+            root.innerHTML = '';
         }
+        document.documentElement.classList.remove('cmu-lcp-lock');
+        LOG_CAPTURE.ui = null;
+        LOG_CAPTURE.ed = null;
+        LOG_CAPTURE.undo = [];
         if (clear) {
-            LOG_CAPTURE.previewState = null;
-            LOG_CAPTURE.undoStack = [];
-            LOG_CAPTURE.selectedModels.clear();
-            LOG_CAPTURE.selectedIds = [];
-            LOG_CAPTURE.selectionSeq = 0;
+            LOG_CAPTURE.sel.clear();
+            LOG_CAPTURE.models.clear();
         }
         syncLogCaptureToolbarButton();
     }
+    function lcBindTap(el, handler) {
+        let press = null;
+        let handledAt = 0;
+        el.addEventListener('pointerdown', (e) => {
+            if (e.isPrimary === false || (e.button !== undefined && e.button !== 0))
+                return;
+            press = { id: e.pointerId, x: e.clientX, y: e.clientY, at: Date.now() };
+        });
+        el.addEventListener('pointercancel', () => { press = null; });
+        el.addEventListener('pointerup', (e) => {
+            const p = press;
+            press = null;
+            if (!p || (p.id && e.pointerId && p.id !== e.pointerId))
+                return;
+            if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 12 || Date.now() - p.at > 700)
+                return;
+            if (handler(e) === false)
+                return;
+            handledAt = Date.now();
+        });
+        el.addEventListener('click', (e) => {
+            if (Date.now() - handledAt < 700) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
+            handler(e);
+        });
+    }
+    function lcToast(text, undo = false) {
+        const ui = LOG_CAPTURE.ui;
+        if (!ui)
+            return;
+        ui.toastText.textContent = text;
+        ui.toastUndo.hidden = !undo;
+        ui.toast.classList.toggle('low', LOG_CAPTURE.view !== 'edit');
+        ui.toast.hidden = false;
+        clearTimeout(LOG_CAPTURE.toastT);
+        LOG_CAPTURE.toastT = setTimeout(() => { if (LOG_CAPTURE.ui) LOG_CAPTURE.ui.toast.hidden = true; }, 3200);
+    }
+    function lcBuildEditorUi() {
+        const root = ensureLogCapturePreviewRoot();
+        const themeOptions = getLogCaptureThemeOptionsHtml(settings.logCaptureTheme);
+        const save = lcIsIOSDevice() ? '사진에 저장' : '기기에 저장';
+        const saveHint = lcIsIOSDevice()
+            ? "공유 창이 뜨면 '이미지 N개 저장'을 누르세요. 사진 앱에 바로 들어가요. 공유 창이 안 뜨면 그림을 길게 눌러 저장하는 화면이 대신 떠요."
+            : '그림 파일로 내려받아요. 안 받아지면 한 장씩 보기에서 그림을 길게 누르거나 오른쪽 클릭으로 저장하세요.';
+        root.innerHTML = `
+          <div class="cmu-lcp-panel">
+            <section class="cmu-lcp-view" data-view="edit">
+              <div class="cmu-lcp-top"><button type="button" class="cmu-lcp-tb" data-lc-ui="back">‹ 다시 고르기</button><b class="cmu-lcp-etitle">미리보기</b><button type="button" class="cmu-lcp-tb cmu-lcp-x" data-lc-ui="close" aria-label="닫기">×</button></div>
+              <div class="cmu-lcp-hint"><span>문단 앞 − 를 누르면 그 문단이, 이름표 옆 × 를 누르면 메시지 전체가 빠져요. 뺀 것은 + 로 다시 넣어요.</span><button type="button" class="cmu-lcp-restore" data-lc-ui="restore" hidden></button></div>
+              <div class="cmu-lcp-scroll"><div class="cmu-lcp-wrap"><div class="cmu-lcp-size"><div class="cmu-lcp-scale"></div></div><div class="cmu-lcp-eds"></div></div></div>
+              <div class="cmu-lcp-bottom">
+                <div class="cmu-lcp-row"><label class="cmu-lcp-theme"><span>테마</span><select class="cmu-lcp-select" data-lc-ui="theme">${themeOptions}</select></label><span class="cmu-lcp-seg"><button type="button" data-lc-ui="fmt" data-f="png">PNG</button><button type="button" data-lc-ui="fmt" data-f="webp">WebP</button></span></div>
+                <div class="cmu-lcp-row"><button type="button" class="cmu-lcp-tg" data-lc-ui="img">이미지 넣기</button><button type="button" class="cmu-lcp-tg" data-lc-ui="code">코드블록 넣기</button><span class="cmu-lcp-seg"><button type="button" data-lc-ui="split" data-v="0">나눠서</button><button type="button" data-lc-ui="split" data-v="1">한 장</button></span></div>
+                <button type="button" class="cmu-lcp-make" data-lc-ui="make">이미지 만들기</button>
+              </div>
+            </section>
+            <section class="cmu-lcp-view" data-view="result" hidden>
+              <div class="cmu-lcp-top"><button type="button" class="cmu-lcp-tb" data-lc-ui="toEdit">‹ 편집으로</button><b class="cmu-lcp-rtitle"></b><button type="button" class="cmu-lcp-tb cmu-lcp-x" data-lc-ui="close" aria-label="닫기">×</button></div>
+              <div class="cmu-lcp-rsub"></div>
+              <div class="cmu-lcp-rgrid"></div>
+              <div class="cmu-lcp-rfoot"><button type="button" class="cmu-lcp-save" data-lc-ui="save">${save}</button><p class="cmu-lcp-rhint">${saveHint}</p><button type="button" class="cmu-lcp-vbtn" data-lc-ui="viewer">한 장씩 보기</button></div>
+            </section>
+            <section class="cmu-lcp-view" data-view="viewer" hidden>
+              <div class="cmu-lcp-top"><button type="button" class="cmu-lcp-tb" data-lc-ui="toResult">‹ 돌아가기</button><b>한 장씩 보기</b><span class="cmu-lcp-gap"></span></div>
+              <div class="cmu-lcp-vhint">그림을 길게 눌러 저장하세요. PC는 오른쪽 클릭 → 이미지 저장.</div>
+              <div class="cmu-lcp-vlist"></div>
+            </section>
+            <div class="cmu-lcp-toast" hidden><span></span><button type="button" data-lc-ui="undo" hidden>되돌리기</button></div>
+          </div>`;
+        const q = sel => root.querySelector(sel);
+        const scaleHost = q('.cmu-lcp-scale');
+        const ui = {
+            root,
+            views: { edit: q('[data-view="edit"]'), result: q('[data-view="result"]'), viewer: q('[data-view="viewer"]') },
+            title: q('.cmu-lcp-etitle'),
+            restore: q('[data-lc-ui="restore"]'),
+            scroll: q('.cmu-lcp-scroll'),
+            size: q('.cmu-lcp-size'),
+            wrap: q('.cmu-lcp-wrap'),
+            eds: q('.cmu-lcp-eds'),
+            s: 1,
+            scale: scaleHost,
+            pages: lcMakeShadowPages(scaleHost),
+            make: q('[data-lc-ui="make"]'),
+            tgImg: q('[data-lc-ui="img"]'),
+            tgCode: q('[data-lc-ui="code"]'),
+            select: q('[data-lc-ui="theme"]'),
+            rtitle: q('.cmu-lcp-rtitle'),
+            rsub: q('.cmu-lcp-rsub'),
+            rgrid: q('.cmu-lcp-rgrid'),
+            vlist: q('.cmu-lcp-vlist'),
+            toast: q('.cmu-lcp-toast'),
+            toastText: q('.cmu-lcp-toast span'),
+            toastUndo: q('[data-lc-ui="undo"]'),
+        };
+        LOG_CAPTURE.ui = ui;
+        lcBindTap(root, lcOnUiTap);
+        ui.select.addEventListener('change', () => {
+            settings.logCaptureTheme = normalizeLogCaptureTheme(ui.select.value);
+            saveSettings();
+            lcRenderPreview(false);
+        });
+        lcSyncFormatButtons();
+        return ui;
+    }
+    function lcShowView(view) {
+        const ui = LOG_CAPTURE.ui;
+        if (!ui)
+            return;
+        LOG_CAPTURE.view = view;
+        Object.entries(ui.views).forEach(([k, el]) => { el.hidden = k !== view; });
+        ui.toast.hidden = true;
+    }
+    function lcSyncFormatButtons() {
+        const ui = LOG_CAPTURE.ui;
+        if (!ui)
+            return;
+        const want = settings.logCaptureImageFormat === 'webp' && lcCanWebp() ? 'webp' : 'png';
+        ui.root.querySelectorAll('[data-lc-ui="fmt"]').forEach(b => {
+            b.classList.toggle('on', b.dataset.f === want);
+            b.classList.toggle('na', b.dataset.f === 'webp' && !lcCanWebp());
+        });
+    }
+    function lcRenderPreview(toTop = false) {
+        const ui = LOG_CAPTURE.ui;
+        const ed = LOG_CAPTURE.ed;
+        if (!ui || !ed)
+            return;
+        const theme = normalizeLogCaptureTheme(settings.logCaptureTheme);
+        ui.select.value = theme;
+        const keep = ui.scroll.scrollTop;
+        const pages = lcBuildPages(ui.pages, theme, ed.msgs, lcPageMaxCss());
+        pages.slice(1).forEach((pg, k) => pg.el.insertAdjacentHTML('beforebegin', `<div class="brk"><span>${k + 2}쪽</span></div>`));
+        lcAddFrames(pages, theme);
+        const avail = Math.max(200, (ui.scroll.clientWidth || 360) - 24);
+        const pageW = lcW();
+        const s = Math.min(1, avail / pageW);
+        const viewW = Math.floor(pageW * s);
+        ui.s = s;
+        ui.scale.style.width = `${pageW}px`;
+        ui.scale.style.transform = `scale(${s})`;
+        ui.wrap.style.width = `${viewW}px`;
+        ui.size.style.width = `${viewW}px`;
+        ui.size.style.height = `${Math.ceil(ui.pages.offsetHeight * s)}px`;
+        ui.scroll.scrollTop = toTop ? 0 : keep;
+        lcPlaceEditButtons();
+        ui.title.textContent = settings.logCaptureOneImage ? '미리보기 · 한 장' : `미리보기 · ${pages.length}장`;
+        ui.root.querySelectorAll('[data-lc-ui="split"]').forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === !!settings.logCaptureOneImage));
+        const offCount = ed.msgs.reduce((a, m) => a + (m.off ? 1 : m.blocks.filter(b => b.off).length), 0);
+        ui.restore.hidden = !offCount;
+        ui.restore.textContent = `빠진 것 ${offCount}개 · 모두 되살리기`;
+        [['img', ui.tgImg], ['code', ui.tgCode]].forEach(([t, el]) => {
+            const all = ed.msgs.flatMap(m => m.blocks.filter(b => b.t === t));
+            el.disabled = !all.length;
+            el.classList.toggle('on', all.some(b => !b.off));
+        });
+    }
+    function lcApplyOps(ops) {
+        const ed = LOG_CAPTURE.ed;
+        ops.forEach(o => {
+            const m = ed?.msgs?.[o.m];
+            if (!m)
+                return;
+            if (o.b === null || o.b === undefined)
+                m.off = !!o.off;
+            else if (m.blocks[o.b])
+                m.blocks[o.b].off = !!o.off;
+        });
+    }
+    function lcEdit(ops, text) {
+        if (!ops.length)
+            return;
+        const ed = LOG_CAPTURE.ed;
+        const before = ops.map(o => {
+            const m = ed.msgs[o.m];
+            return { m: o.m, b: o.b, off: o.b === null ? m.off : m.blocks[o.b].off };
+        });
+        lcApplyOps(ops);
+        LOG_CAPTURE.undo.push(before);
+        if (LOG_CAPTURE.undo.length > 40)
+            LOG_CAPTURE.undo.shift();
+        lcRenderPreview(false);
+        lcToast(text, true);
+    }
+    function lcPlaceEditButtons() {
+        const ui = LOG_CAPTURE.ui;
+        const ed = LOG_CAPTURE.ed;
+        if (!ui || !ed)
+            return;
+        const B = 22;
+        const base = ui.wrap.getBoundingClientRect();
+        const range = document.createRange();
+        const seenMsg = new Set();
+        const seenBlk = new Set();
+        let html = '';
+        let lastY = -Infinity;
+        const btn = (cls, act, attrs, x, y, label, text) => `<button type="button" class="cmu-lcp-eb${cls}" data-lc-ui="${act}" ${attrs} style="left:${Math.round(x)}px;top:${Math.round(y)}px" aria-label="${label}">${text}</button>`;
+        ui.pages.querySelectorAll('.lc-card').forEach(card => {
+            const mi = card.dataset.mi;
+            if (!ed.msgs[Number(mi)])
+                return;
+            const ghost = card.classList.contains('x');
+            const role = card.querySelector('.lc-role');
+            if (role && !seenMsg.has(mi)) {
+                seenMsg.add(mi);
+                const rr = role.getBoundingClientRect();
+                range.selectNodeContents(role);
+                let tr = range.getBoundingClientRect();
+                if (!tr.width)
+                    tr = rr;
+                // 이름표가 오른쪽에 붙은 카드(내 메시지)는 이름표 왼쪽, 아니면 오른쪽
+                const right = (tr.left + tr.right) / 2 > (rr.left + rr.right) / 2;
+                const x = (right ? tr.left - 6 - B : tr.right + 6) - base.left;
+                const y = (tr.top + tr.bottom) / 2 - B / 2 - base.top;
+                html += btn(ghost ? ' msg add' : ' msg', ghost ? 'msgOn' : 'msgOff', `data-mi="${mi}"`, x, y, ghost ? '메시지 다시 넣기' : '메시지 전체 빼기', ghost ? '+' : '×');
+            }
+            if (ghost)
+                return;
+            card.querySelectorAll('[data-bi]').forEach(el => {
+                const key = `${mi}:${el.dataset.bi}`;
+                if (seenBlk.has(key))
+                    return;
+                seenBlk.add(key);
+                const r = el.getBoundingClientRect();
+                if (!r.height)
+                    return;
+                const off = el.classList.contains('x');
+                // 첫 줄 가운데에 맞춘다(그림은 위쪽 모서리). 글 바로 앞에 두되 미리보기 왼쪽 여백 안까지만
+                const lh = el.classList.contains('lc-img') ? B + 8 : Math.min(r.height, (parseFloat(getComputedStyle(el).lineHeight) || 27) * ui.s);
+                const x = Math.max(r.left - base.left - 4 - B, -10);
+                const y = Math.max(r.top - base.top + lh / 2 - B / 2, lastY + B + 2);
+                lastY = y;
+                html += btn(off ? ' add' : '', off ? 'blkOn' : 'blkOff', `data-mi="${mi}" data-bi="${el.dataset.bi}"`, x, y, off ? '다시 넣기' : '이 문단 빼기', off ? '+' : '−');
+            });
+        });
+        range.detach?.();
+        ui.eds.innerHTML = html;
+    }
+    function lcEditButton(btn, act) {
+        const ed = LOG_CAPTURE.ed;
+        const mi = Number(btn.dataset.mi);
+        const m = ed?.msgs?.[mi];
+        if (!m)
+            return;
+        if (act === 'msgOff') {
+            lcEdit([{ m: mi, b: null, off: true }], '메시지 하나를 뺐어요');
+        }
+        else if (act === 'msgOn') {
+            // 통째로 뺀 메시지든, 문단을 다 빼서 비어 버린 메시지든 다시 넣는다
+            const ops = m.off ? [{ m: mi, b: null, off: false }] : m.blocks.map((b, bi) => ({ m: mi, b: bi, off: false })).filter(o => m.blocks[o.b].off);
+            lcEdit(ops, '메시지를 다시 넣었어요');
+        }
+        else {
+            const bi = Number(btn.dataset.bi);
+            const b = m.blocks[bi];
+            if (!b)
+                return;
+            const off = act === 'blkOff';
+            lcEdit([{ m: mi, b: bi, off }], off ? (b.t === 'img' ? '이미지를 뺐어요' : (b.t === 'code' ? '코드블록을 뺐어요' : '문단 1개 뺐어요')) : '다시 넣었어요');
+        }
+    }
+    function lcOnUiTap(e) {
+        const target = e.target instanceof Element ? e.target : null;
+        const btn = target?.closest('[data-lc-ui]');
+        if (!btn || btn.matches('select'))
+            return false;
+        // 공유 창은 click에서 열어야 아이폰이 '사람이 누른 것'으로 확실히 받아 준다
+        if (btn.dataset.lcUi === 'save' && e.type !== 'click')
+            return false;
+        e.preventDefault?.();
+        const ui = LOG_CAPTURE.ui;
+        const ed = LOG_CAPTURE.ed;
+        const act = btn.dataset.lcUi;
+        if (act === 'msgOff' || act === 'msgOn' || act === 'blkOff' || act === 'blkOn') {
+            lcEditButton(btn, act);
+            return true;
+        }
+        if (act === 'close') {
+            cmuLogCaptureClosePreview(true);
+        }
+        else if (act === 'back') {
+            cmuLogCaptureClosePreview(false);
+            cmuLogCaptureStartSelection({ preserve: true });
+        }
+        else if (act === 'undo') {
+            const ops = LOG_CAPTURE.undo.pop();
+            if (ops) {
+                lcApplyOps(ops);
+                lcRenderPreview(false);
+                lcToast('되돌렸어요');
+            }
+        }
+        else if (act === 'restore' && ed) {
+            const ops = [];
+            ed.msgs.forEach((m, mi) => {
+                if (m.off)
+                    ops.push({ m: mi, b: null, off: false });
+                m.blocks.forEach((b, bi) => { if (b.off) ops.push({ m: mi, b: bi, off: false }); });
+            });
+            lcEdit(ops, '모두 되살렸어요');
+        }
+        else if ((act === 'img' || act === 'code') && ed && !btn.disabled) {
+            const t = act;
+            const turnOn = !btn.classList.contains('on');
+            const ops = [];
+            ed.msgs.forEach((m, mi) => m.blocks.forEach((b, bi) => { if (b.t === t && b.off === turnOn) ops.push({ m: mi, b: bi, off: !turnOn }); }));
+            lcEdit(ops, `${t === 'img' ? '이미지' : '코드블록'}${turnOn ? '를 다시 넣었어요' : '를 다 뺐어요'}`);
+        }
+        else if (act === 'fmt') {
+            const f = btn.dataset.f === 'webp' ? 'webp' : 'png';
+            if (f === 'webp' && !lcCanWebp()) {
+                lcToast('이 브라우저는 WebP로 못 만들어서 PNG로 만들어요');
+                return true;
+            }
+            settings.logCaptureImageFormat = f;
+            saveSettings();
+            lcSyncFormatButtons();
+        }
+        else if (act === 'split') {
+            settings.logCaptureOneImage = btn.dataset.v === '1';
+            saveSettings();
+            lcRenderPreview(true);
+        }
+        else if (act === 'make') {
+            void lcMakeImages();
+        }
+        else if (act === 'toEdit') {
+            lcShowView('edit');
+        }
+        else if (act === 'viewer') {
+            lcOpenViewer();
+        }
+        else if (act === 'toResult') {
+            lcShowView('result');
+        }
+        else if (act === 'save') {
+            lcSaveImages();
+        }
+        else {
+            return false;
+        }
+        return true;
+    }
     function cmuLogCaptureOpenPreview() {
-        if (!LOG_CAPTURE.selectedIds.length) {
-            showToast('캡처할 로그를 먼저 선택해 주세요');
+        const ids = lcEffectiveIds();
+        if (!ids.length) {
+            showToast('캡처할 메시지를 먼저 골라 주세요');
             return;
         }
-        const messages = LOG_CAPTURE.selectedIds.map(id => LOG_CAPTURE.selectedModels.get(id)?.model).filter(Boolean).map(model => lcCloneState(model));
-        if (!messages.length) {
-            showToast('캡처할 로그가 없어요');
+        const msgs = ids.map(lcModelFor).filter(Boolean).map(lcEditableCopy);
+        if (!msgs.length) {
+            showToast('고른 메시지의 글을 읽지 못했어요');
             return;
         }
-        LOG_CAPTURE.previewState = { messages };
-        LOG_CAPTURE.undoStack = [];
-        cmuLogCaptureExitMode(false);
-        renderLogCapturePreview();
+        LOG_CAPTURE.ed = { msgs };
+        LOG_CAPTURE.undo = [];
+        cmuLogCaptureExitMode(false, true);
+        lcFreeOutputs();
+        const ui = lcBuildEditorUi();
+        ui.root.classList.add('open');
+        document.documentElement.classList.add('cmu-lcp-lock');
+        LOG_CAPTURE.previewOpen = true;
+        syncLogCaptureToolbarButton();
+        lcShowView('edit');
+        requestAnimationFrame(() => lcRenderPreview(true));
     }
     function cmuLogCaptureHandleGroupPick(group) {
         const id = groupMessageId(group);
         if (!id)
             return;
-        if (LOG_CAPTURE.selectedModels.has(id)) {
-            LOG_CAPTURE.selectedModels.delete(id);
+        if (settings.logCaptureNoUser && isUserGroupByDom(group))
+            return;
+        if (LOG_CAPTURE.range === 1) {
+            LOG_CAPTURE.rangeStart = id;
+            LOG_CAPTURE.range = 2;
+            LOG_CAPTURE.sel.add(id);
+            cmuLogCaptureRefresh();
+            return;
         }
-        else {
-            const model = lcBuildMessageModel(group);
-            if (!model) {
-                showToast('이 로그의 본문을 찾지 못했어요');
-                return;
+        if (LOG_CAPTURE.range === 2) {
+            const order = lcChronoGroups().map(groupMessageId);
+            const a = order.indexOf(LOG_CAPTURE.rangeStart), b = order.indexOf(id);
+            if (a >= 0 && b >= 0) {
+                for (let k = Math.min(a, b); k <= Math.max(a, b); k++)
+                    LOG_CAPTURE.sel.add(order[k]);
             }
-            const seq = ++LOG_CAPTURE.selectionSeq;
-            LOG_CAPTURE.selectedModels.set(id, {
-                model,
-                orderKey: lcMessageOrderKey(id, seq),
-            });
+            LOG_CAPTURE.range = 0;
+            LOG_CAPTURE.rangeStart = '';
+            cmuLogCaptureRefresh();
+            return;
         }
-        cmuLogCaptureSyncSelectedIds();
-        cmuLogCaptureMarkSelection();
-        cmuLogCaptureRefreshBar();
+        if (LOG_CAPTURE.sel.has(id))
+            LOG_CAPTURE.sel.delete(id);
+        else
+            LOG_CAPTURE.sel.add(id);
+        cmuLogCaptureRefresh();
     }
-    function cmuLogCaptureGetLoadedImageLib() {
-        // 다른 스크립트가 이미 불러온 전역이 있으면 재사용하고, 없으면 캡처 시점에만 지연 로딩한다.
-        try {
-            if (typeof htmlToImage !== 'undefined' && htmlToImage?.toCanvas)
-                return htmlToImage;
-        }
-        catch (_) { }
-        try {
-            if (globalThis?.htmlToImage?.toCanvas)
-                return globalThis.htmlToImage;
-        }
-        catch (_) { }
-        try {
-            const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-            return window.htmlToImage || page?.htmlToImage || null;
-        }
-        catch (_) {
-            return window.htmlToImage || null;
-        }
-    }
-    function loadHtmlToImageLib() {
-        const loaded = cmuLogCaptureGetLoadedImageLib();
-        if (loaded?.toCanvas)
-            return Promise.resolve(loaded);
-        if (cmuLogCaptureLibPromise)
-            return cmuLogCaptureLibPromise;
-        const libraryUrl = 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/dist/html-to-image.js';
-        cmuLogCaptureLibPromise = new Promise((resolve, reject) => {
-            const finish = (lib) => {
-                if (!lib?.toCanvas)
-                    throw new Error('html-to-image unavailable');
-                try { window.htmlToImage = lib; } catch (_) { }
-                resolve(lib);
-            };
-            if (cmuGmXhrAvailable()) {
-                cmuGmXhr({
-                    method: 'GET',
-                    url: libraryUrl,
-                    timeout: 18000,
-                    onload: (response) => {
-                        try {
-                            if (Number(response.status) < 200 || Number(response.status) >= 300)
-                                throw new Error(`library HTTP ${response.status}`);
-                            const source = String(response.responseText || '');
-                            const runner = new Function(`${source}\n;return (typeof htmlToImage !== 'undefined' && htmlToImage) || (typeof module !== 'undefined' && module.exports) || null;`);
-                            finish(runner());
-                        }
-                        catch (error) {
-                            reject(error);
-                        }
-                    },
-                    ontimeout: () => reject(new Error('html-to-image load timeout')),
-                    onerror: () => reject(new Error('html-to-image load failed')),
-                });
-                return;
-            }
-            const existing = document.querySelector('script[data-cmu-html-to-image="1"]');
-            if (existing) {
-                existing.addEventListener('load', () => {
-                    try { finish(cmuLogCaptureGetLoadedImageLib()); } catch (error) { reject(error); }
-                }, { once: true });
-                existing.addEventListener('error', () => reject(new Error('html-to-image load failed')), { once: true });
-                return;
-            }
-            const script = document.createElement('script');
-            script.src = libraryUrl;
-            script.async = true;
-            script.dataset.cmuHtmlToImage = '1';
-            script.onload = () => {
-                try { finish(cmuLogCaptureGetLoadedImageLib()); } catch (error) { reject(error); }
-            };
-            script.onerror = () => reject(new Error('html-to-image load failed'));
-            document.head.appendChild(script);
-        }).finally(() => {
-            if (!cmuLogCaptureGetLoadedImageLib()?.toCanvas)
-                cmuLogCaptureLibPromise = null;
-        });
-        return cmuLogCaptureLibPromise;
-    }
-    function lcGetExportBackground(theme) {
-        return LOG_CAPTURE_THEME_META[normalizeLogCaptureTheme(theme)]?.bg || '#FAFAF8';
-    }
-    function lcCreateExportShell(theme) {
-        const cleanTheme = normalizeLogCaptureTheme(theme);
-        const template = document.createElement('template');
-        template.innerHTML = lcThemeFrameHtml(cleanTheme, '', false).trim();
-        const root = template.content.firstElementChild;
-        return {
-            root,
-            content: root?.querySelector('.cmu-lc-content') || null,
-        };
-    }
-    function lcBuildExportMessageElements(state) {
-        const tmp = document.createElement('div');
-        tmp.innerHTML = lcBuildStageHtml(state, false);
-        return Array.from(tmp.children || []);
-    }
+    
+    
+    
+    
+    
     function lcIsIOSDevice() {
         const ua = String(navigator.userAgent || '');
         return /iPad|iPhone|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && Number(navigator.maxTouchPoints) > 1);
     }
-    function lcGetExportConfig() {
-        const coarse = window.matchMedia?.('(pointer: coarse)')?.matches || window.innerWidth < 800;
-        if (lcIsIOSDevice())
-            return { width: 680, pixelRatio: 1.2, maxPixels: 14000000, maxDimension: 16000 };
-        if (coarse)
-            return { width: 720, pixelRatio: 1.35, maxPixels: 14000000, maxDimension: 20000 };
-        return { width: 840, pixelRatio: 1.8, maxPixels: 60000000, maxDimension: 32000 };
-    }
-    function lcFitSingleImageConfig(base, node) {
-        const width = Math.max(1, Number(base.width) || 700);
-        const height = Math.max(1, Number(node?.scrollHeight || node?.offsetHeight || 1));
-        const maxPixels = Math.max(1, Number(base.maxPixels) || 14000000);
-        const maxDimension = Math.max(1, Number(base.maxDimension) || 16000);
-        const pixelRatio = Math.min(Math.max(.5, Number(base.pixelRatio) || 1),
-            Math.sqrt(maxPixels / (width * height)), maxDimension / width, maxDimension / height);
-        // Keep readable output; reject oversized selections instead of violating the memory limit.
-        if (!Number.isFinite(pixelRatio) || pixelRatio < .5)
-            throw new Error('canvas size exceeds limit');
-        return { ...base, pixelRatio: Math.floor(pixelRatio * 100) / 100 };
-    }
-    function lcCanvasToBlob(canvas, mime, quality) {
-        return new Promise((resolve, reject) => {
-            try {
-                if (typeof canvas.toBlob === 'function') {
-                    canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('이미지 변환 실패')), mime, quality);
-                    return;
-                }
-                const dataUrl = canvas.toDataURL(mime, quality);
-                const parts = dataUrl.split(',');
-                const binary = atob(parts[1] || '');
-                const bytes = new Uint8Array(binary.length);
-                for (let i = 0; i < binary.length; i += 1)
-                    bytes[i] = binary.charCodeAt(i);
-                resolve(new Blob([bytes], { type: mime }));
-            }
-            catch (error) {
-                reject(error);
-            }
-        });
-    }
-    function lcBlobAsDataUrl(blob) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result || ''));
-            reader.onerror = () => reject(new Error('이미지 data URL 변환 실패'));
-            reader.readAsDataURL(blob);
-        });
-    }
+    
+    
+    
+    
     async function lcRequestImageBlob(url) {
         const source = String(url || '').trim();
-        if (!source || /^data:/i.test(source))
-            return null;
-
-        // blob: URL도 캡처 직전에 data URL로 고정해 Safari/Firefox의 clone 시점 만료를 피한다.
-        if (/^blob:/i.test(source)) {
+        if (!source)
+            throw new Error('이미지 주소 없음');
+        if (/^(blob|data):/i.test(source)) {
             const response = await fetch(source);
             if (!response.ok)
                 throw new Error(`이미지 요청 실패 ${response.status}`);
             return response.blob();
         }
-
         let gmError = null;
         if (cmuGmXhrAvailable()) {
             try {
@@ -8313,9 +8484,8 @@ function cmuMain() {
                 gmError = error;
             }
         }
-
         // 일부 모바일 userscript 엔진에서 GM 응답이 막힐 때 사이트 자체 CORS 허용 경로도 한 번 시도한다.
-        for (const credentials of ['include', 'omit']) {
+        for (const credentials of ['omit', 'include']) {
             try {
                 const response = await fetch(source, { credentials, cache: 'force-cache' });
                 if (!response.ok)
@@ -8326,277 +8496,327 @@ function cmuMain() {
         }
         throw gmError || new Error('이미지 요청 실패');
     }
-    async function lcPrepareCaptureImages(root, isCurrent = () => true) {
-        if (!(root instanceof HTMLElement))
-            return;
-        const images = Array.from(root.querySelectorAll('img'));
-        const prepare = async img => {
-            if (!isCurrent())
-                return;
-            const source = lcCaptureImageSource(img);
-            if (!source)
-                return;
-            img.removeAttribute('srcset');
-            img.removeAttribute('sizes');
-            img.removeAttribute('loading');
-            img.removeAttribute('crossorigin');
-            delete img.dataset.cmuCaptureImageReady;
-            delete img.dataset.cmuCaptureImageFailed;
-            try {
-                if (!/^data:/i.test(source)) {
-                    const blob = await lcRequestImageBlob(source);
-                    if (blob instanceof Blob && /^image\//i.test(blob.type || ''))
-                        img.src = await lcBlobAsDataUrl(blob);
-                }
-                if (typeof img.decode === 'function')
-                    await Promise.race([img.decode().catch(() => {}), new Promise(resolve => setTimeout(resolve, 3000))]);
-                else if (!img.complete)
-                    await Promise.race([new Promise(resolve => { img.onload = img.onerror = resolve; }), new Promise(resolve => setTimeout(resolve, 3000))]);
-                img.dataset.cmuCaptureImageReady = '1';
-            }
-            catch (_) {
-                // 원본 URL은 첫 렌더에서 한 번 더 시도하되, 실패 이미지만 식별해 전체 이미지가 빠지는 것을 막는다.
-                img.src = source;
-                img.dataset.cmuCaptureImageFailed = '1';
-            }
-        };
-        let next = 0;
-        await Promise.all(Array.from({ length: Math.min(4, images.length) }, async () => {
-            while (isCurrent() && next < images.length)
-                await prepare(images[next++]);
-        }));
-    }
-    async function lcRenderCaptureCanvas(lib, page, config, theme) {
-        const options = {
-            pixelRatio: config.pixelRatio,
-            backgroundColor: lcGetExportBackground(theme),
-            cacheBust: false,
-            includeQueryParams: false,
-            skipAutoScale: false,
-        };
-        // Safari에서는 외부 웹폰트 인라인 과정이 실패 원인이 되기 쉬워 시스템 폰트 폴백을 사용한다.
-        if (lcIsIOSDevice())
-            options.fontEmbedCSS = '';
-        try {
-            return await lib.toCanvas(page, options);
-        }
-        catch (firstError) {
-            const hasMedia = !!page.querySelector?.('img,video,canvas,svg image');
-            if (!hasMedia)
-                throw firstError;
-
-            // 한 이미지가 실패해도 성공적으로 data URL화된 나머지 이미지까지 전부 버리지 않는다.
-            const partialFallback = page.cloneNode(true);
-            partialFallback.querySelectorAll?.('img[data-cmu-capture-image-failed="1"],video,canvas,svg image').forEach(el => el.remove());
-            page.parentElement?.appendChild(partialFallback);
-            try {
-                const canvas = await lib.toCanvas(partialFallback, { ...options, fontEmbedCSS: '' });
-                if (partialFallback.querySelector?.('[data-cmu-capture-image-failed="1"]') || page.querySelector?.('[data-cmu-capture-image-failed="1"]'))
-                    canvas.cmuMediaOmitted = true;
-                return canvas;
-            }
-            catch (_) {
-                // 마지막 안전장치: 기존 동작처럼 미디어 전체를 제외하되, 이 단계까지 온 경우에만 사용한다.
-                const fallback = page.cloneNode(true);
-                fallback.querySelectorAll?.('img,video,canvas,svg image').forEach(el => el.remove());
-                page.parentElement?.appendChild(fallback);
-                try {
-                    const canvas = await lib.toCanvas(fallback, { ...options, fontEmbedCSS: '' });
-                    canvas.cmuMediaOmitted = true;
-                    return canvas;
-                }
-                catch (_) {
-                    throw firstError;
-                }
-                finally {
-                    fallback.remove?.();
-                }
-            }
-            finally {
-                partialFallback.remove?.();
-            }
-        }
-    }
-    function cmuLogCaptureUpdateSaveButtons() {
-        const root = document.getElementById(ID.logCapturePreview);
-        if (!root)
-            return;
-        ['png', 'webp'].forEach(format => {
-            const button = root.querySelector(`[data-lc-ui="save"][data-format="${format}"]`);
-            if (!(button instanceof HTMLButtonElement))
-                return;
-            button.disabled = !!LOG_CAPTURE.rendering;
-            button.textContent = LOG_CAPTURE.rendering ? '이미지 만드는 중…' : `${format.toUpperCase()} 이미지 만들기`;
+    
+    
+    
+    
+    
+    
+    
+    function lcLoadImage(src) {
+        return new Promise((resolve, reject) => {
+            const im = new Image();
+            im.decoding = 'async';
+            im.onload = () => resolve(im);
+            im.onerror = () => reject(new Error('그림을 읽지 못했어요'));
+            im.src = src;
         });
     }
-    function cmuLogCaptureResetOutput() {
-        cmuLogCaptureClearOutput();
-        cmuLogCaptureUpdateSaveButtons();
+    function lcSvgUrl(xhtml, W, H, y0, h) {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${h}" viewBox="0 ${y0} ${W} ${h}"><foreignObject x="0" y="0" width="${W}" height="${H}"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${W}px;height:${H}px;margin:0;padding:0"><style><![CDATA[${LC_THEME_CSS}]]></style>${xhtml}</div></foreignObject></svg>`;
+        return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
     }
-    function cmuLogCaptureMountOutputFrame(panel, output) {
-        const wrap = panel?.querySelector?.('.cmu-lcp-output-wrap');
-        if (!(wrap instanceof HTMLElement) || !output?.url)
-            return;
-        const img = document.createElement('img');
-        img.className = 'cmu-lcp-output-img';
-        img.alt = '완성된 로그 캡처 이미지';
-        img.decoding = 'async';
-        img.src = output.url;
-        wrap.replaceChildren(img);
+    function lcDrawPics(ctx, rects, scale, rowStart, rows) {
+        rects.forEach(r => {
+            const x = r.x * scale, y = r.y * scale - rowStart, w = r.w * scale, h = r.h * scale, rad = r.rad * scale;
+            if (y + h <= 0 || y >= rows)
+                return;
+            ctx.save();
+            ctx.beginPath();
+            if (rad > 0 && typeof ctx.roundRect === 'function')
+                ctx.roundRect(x, y, w, h, rad);
+            else
+                ctx.rect(x, y, w, h);
+            ctx.clip();
+            ctx.drawImage(r.im, x, y, w, h);
+            ctx.restore();
+        });
     }
-    function cmuLogCaptureShowOutput() {
-        const root = document.getElementById(ID.logCapturePreview);
-        const output = LOG_CAPTURE.output;
-        if (!root || !output?.url)
-            return;
-        const scroll = root.querySelector('.cmu-lcp-scroll');
-        LOG_CAPTURE.outputReturnScroll = scroll instanceof HTMLElement ? scroll.scrollTop : 0;
-        LOG_CAPTURE.outputMode = true;
-        const panel = root.querySelector('.cmu-lcp-panel');
-        if (!(panel instanceof HTMLElement))
-            return;
-        panel.innerHTML = `
-          <div class="cmu-lcp-head">
-            <div class="cmu-lcp-title">완성 이미지</div>
-            <button type="button" class="cmu-lcp-btn" data-lc-ui="back-output">편집으로</button>
-            <button type="button" class="cmu-lcp-btn" data-lc-ui="close">닫기</button>
-          </div>
-          <div class="cmu-lcp-scroll">
-            <div class="cmu-lcp-output-wrap"></div>
-            <div class="cmu-lcp-output-help">이미지를 길게 눌러 저장하세요.</div>
-          </div>
-          <div class="cmu-lcp-foot">
-            <div class="cmu-lcp-inline-status">${output.width} × ${output.height}px${output.mediaOmitted ? ' · 일부 이미지 제외됨' : ''}</div>
-          </div>`;
-        cmuLogCaptureBindPreviewEvents(root);
-        cmuLogCaptureMountOutputFrame(panel, output);
+    const LC_CRC_TABLE = (() => {
+        const t = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) {
+            let c = n;
+            for (let k = 0; k < 8; k++)
+                c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+            t[n] = c >>> 0;
+        }
+        return t;
+    })();
+    function lcPngChunk(type, data) {
+        const head = new Uint8Array(8);
+        new DataView(head.buffer).setUint32(0, data.length);
+        for (let i = 0; i < 4; i++)
+            head[4 + i] = type.charCodeAt(i);
+        let c = 0xFFFFFFFF;
+        for (let i = 4; i < 8; i++)
+            c = LC_CRC_TABLE[(c ^ head[i]) & 0xFF] ^ (c >>> 8);
+        for (let i = 0; i < data.length; i++)
+            c = LC_CRC_TABLE[(c ^ data[i]) & 0xFF] ^ (c >>> 8);
+        const tail = new Uint8Array(4);
+        new DataView(tail.buffer).setUint32(0, (c ^ 0xFFFFFFFF) >>> 0);
+        return [head, data, tail];
     }
-    async function cmuLogCaptureRenderLongImage(format = 'png') {
-        if (!LOG_CAPTURE.previewState || !LOG_CAPTURE.previewOpen || LOG_CAPTURE.rendering)
-            return;
-        const renderSeq = LOG_CAPTURE.renderSeq = (LOG_CAPTURE.renderSeq || 0) + 1;
-        const isCurrent = () => shouldRun() && LOG_CAPTURE.previewOpen && LOG_CAPTURE.renderSeq === renderSeq;
-        const cleanFormat = format === 'webp' ? 'webp' : 'png';
-        const stateSnapshot = lcCloneState(LOG_CAPTURE.previewState);
-        const theme = normalizeLogCaptureTheme(settings.logCaptureTheme);
-        const baseConfig = lcGetExportConfig();
-        LOG_CAPTURE.rendering = true;
-        cmuLogCaptureSetInlineStatus('긴 이미지 만드는 중…');
-        cmuLogCaptureUpdateSaveButtons();
-        let host = null;
-        let canvas = null;
+    async function lcRenderLongPng(xhtml, W, H, rects, progress) {
+        const scale = LC_OUT_W / W;
+        const outW = Math.round(W * scale);
+        const outH = Math.round(H * scale);
+        const STRIP = 2048;
+        const stream = new CompressionStream('deflate');
+        const writer = stream.writable.getWriter();
+        const reader = stream.readable.getReader();
+        const idat = [];
+        const pump = (async () => {
+            for (;;) {
+                const { value, done } = await reader.read();
+                if (done)
+                    break;
+                idat.push(value);
+            }
+        })();
+        const canvas = document.createElement('canvas');
+        canvas.width = outW;
+        canvas.height = STRIP;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const strips = Math.ceil(outH / STRIP);
         try {
-            const lib = await loadHtmlToImageLib();
-            if (!isCurrent())
-                return;
-            host = document.createElement('div');
-            LOG_CAPTURE.renderHost = host;
-            host.style.position = 'fixed';
-            host.style.left = '0';
-            host.style.top = '0';
-            host.style.transform = 'translateX(-220vw)';
-            host.style.pointerEvents = 'none';
-            host.style.width = `${baseConfig.width}px`;
-            host.style.zIndex = '-1';
-            document.body.appendChild(host);
-            const elements = lcBuildExportMessageElements(stateSnapshot);
-            if (!elements.length)
-                throw new Error('내보낼 로그가 없음');
-            const shell = lcCreateExportShell(theme);
-            if (!(shell.root instanceof HTMLElement) || !(shell.content instanceof HTMLElement))
-                throw new Error('캡처 테마 생성 실패');
-            shell.root.style.width = `${baseConfig.width}px`;
-            elements.forEach(el => shell.content.appendChild(el));
-            host.appendChild(shell.root);
-            try {
-                await Promise.race([
-                    document.fonts?.ready || Promise.resolve(),
-                    new Promise(resolve => setTimeout(resolve, 1200)),
-                ]);
+            for (let k = 0; k < strips; k++) {
+                progress?.(k + 1, strips);
+                const rowStart = k * STRIP;
+                const rows = Math.min(STRIP, outH - rowStart);
+                if (canvas.height !== rows)
+                    canvas.height = rows;
+                else
+                    ctx.clearRect(0, 0, outW, rows);
+                const img = await lcLoadImage(lcSvgUrl(xhtml, W, H, rowStart / scale, rows / scale));
+                if (lcIsIOSDevice())
+                    await lcSleep(40);
+                ctx.drawImage(img, 0, 0, outW, rows);
+                lcDrawPics(ctx, rects, scale, rowStart, rows);
+                const px = ctx.getImageData(0, 0, outW, rows).data;
+                const line = outW * 4;
+                const buf = new Uint8Array(rows * (line + 1));
+                for (let y = 0; y < rows; y++)
+                    buf.set(px.subarray(y * line, (y + 1) * line), y * (line + 1) + 1);
+                await writer.write(buf);
             }
-            catch (_) { }
-            if (!isCurrent())
-                return;
-            await lcPrepareCaptureImages(shell.root, isCurrent);
-            if (!isCurrent())
-                return;
-            const config = lcFitSingleImageConfig(baseConfig, shell.root);
-            canvas = await lcRenderCaptureCanvas(lib, shell.root, config, theme);
-            if (!isCurrent())
-                return;
-            if (canvas.width > baseConfig.maxDimension || canvas.height > baseConfig.maxDimension || canvas.width * canvas.height > baseConfig.maxPixels)
-                throw new Error('canvas size exceeds limit');
-            const quality = clamp(Number(settings.logCaptureWebpQuality || 90) / 100, 0.1, 1);
-            let mime = cleanFormat === 'webp' ? 'image/webp' : 'image/png';
-            let blob = await lcCanvasToBlob(canvas, mime, cleanFormat === 'webp' ? quality : 1);
-            if (cleanFormat === 'webp' && blob.type !== 'image/webp') {
-                mime = 'image/png';
-                blob = await lcCanvasToBlob(canvas, mime, 1);
-            }
-            if (!isCurrent())
-                return;
-            cmuLogCaptureClearOutput(false);
-            const ext = mime === 'image/webp' ? 'webp' : 'png';
-            const name = `crack_log_capture_${new Date().toISOString().slice(0,19).replace(/[-:T]/g, '')}.${ext}`;
-            const url = URL.createObjectURL(blob);
-            if (!isCurrent()) {
-                try { URL.revokeObjectURL(url); } catch (_) { }
-                canvas.width = 1;
-                canvas.height = 1;
-                return;
-            }
-            if (lcIsIOSDevice()) {
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = name;
-                document.body.appendChild(a);
-                a.click();
-                cmuLogCaptureSetInlineStatus(canvas.cmuMediaOmitted ? '일부 이미지를 제외한 캡처를 저장했어요. 원본 이미지가 필요하면 선택을 줄여 다시 만들어 주세요.' : '이미지 저장을 시작했어요.');
-                const releaseDownload = () => {
-                    try { URL.revokeObjectURL(url); } catch (_) { }
-                    a.remove();
-                    const index = CMU_RESOURCES.cleanups.indexOf(releaseDownload);
-                    if (index >= 0)
-                        CMU_RESOURCES.cleanups.splice(index, 1);
-                };
-                CMU_RESOURCES.cleanups.push(releaseDownload);
-                setTimeout(releaseDownload, 900);
-                canvas.width = 1;
-                canvas.height = 1;
-                return;
-            }
-            LOG_CAPTURE.output = { url, width: canvas.width, height: canvas.height, mediaOmitted: !!canvas.cmuMediaOmitted };
-            canvas.width = 1;
-            canvas.height = 1;
-            cmuLogCaptureShowOutput();
+            await writer.close();
         }
         catch (err) {
-            if (!isCurrent())
+            try { writer.abort(err); } catch (_) { }
+            throw err;
+        }
+        await pump;
+        canvas.width = canvas.height = 1;
+        const ihdr = new Uint8Array(13);
+        const dv = new DataView(ihdr.buffer);
+        dv.setUint32(0, outW);
+        dv.setUint32(4, outH);
+        ihdr[8] = 8; // 8비트
+        ihdr[9] = 6; // RGBA
+        const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), ...lcPngChunk('IHDR', ihdr)];
+        idat.forEach(chunk => parts.push(...lcPngChunk('IDAT', chunk)));
+        parts.push(...lcPngChunk('IEND', new Uint8Array(0)));
+        return { blob: new Blob(parts, { type: 'image/png' }), size: [outW, outH] };
+    }
+    async function lcRenderPage(pageEl, theme, loaded, mime, quality, progress = null) {
+        const measure = lcMeasurePages();
+        measure.innerHTML = '';
+        const clone = pageEl.cloneNode(true);
+        clone.querySelectorAll('.x, .sj-frame').forEach(n => n.remove());
+        const pics = [];
+        clone.querySelectorAll('.lc-img img').forEach(img => {
+            const got = loaded.get(img.getAttribute('src') || '');
+            const fig = img.closest('.lc-img');
+            if (!got) {
+                fig?.remove();
                 return;
+            }
+            const ph = document.createElement('div');
+            ph.className = 'lc-ph';
+            ph.setAttribute('style', img.getAttribute('style') || '');
+            img.replaceWith(ph);
+            pics.push({ ph, im: got.im });
+        });
+        measure.appendChild(clone);
+        const W = parseFloat(pageEl.style.width) || lcW();
+        const H = Math.max(1, Math.ceil(clone.offsetHeight));
+        if (LC_THEMES[theme]?.frame)
+            clone.insertAdjacentHTML('beforeend', lcSjFrame(W, H));
+        const base = clone.getBoundingClientRect();
+        const rects = pics.map(({ ph, im }) => {
+            const r = ph.getBoundingClientRect();
+            let rad = 0;
+            try { rad = parseFloat(getComputedStyle(ph.parentElement).borderTopLeftRadius) || 0; } catch (_) { }
+            return { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height, rad, im };
+        });
+        const xhtml = new XMLSerializer().serializeToString(clone);
+        measure.innerHTML = '';
+        const ios = lcIsIOSDevice();
+        const maxPixels = ios ? 14000000 : 60000000;
+        const maxDim = ios ? 16000 : 32000;
+        const full = LC_OUT_W / W;
+        const outH = H * full;
+        const fitsOne = W * full * outH <= maxPixels && outH <= maxDim && (mime !== 'image/webp' || outH <= 16383);
+        // 그림 한 장의 한도(아이폰은 약 1,400만 화소)보다 긴 '한 장': 토막으로 그려 PNG 하나로 잇는다(해상도를 깎지 않음)
+        if (!fitsOne && typeof CompressionStream === 'function')
+            return lcRenderLongPng(xhtml, W, H, rects, progress);
+        const svgImg = await lcLoadImage(lcSvgUrl(xhtml, W, H, 0, H));
+        if (ios)
+            await lcSleep(60);
+        const scale = Math.min(full, Math.sqrt(maxPixels / (W * H)), maxDim / H);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(W * scale));
+        canvas.height = Math.max(1, Math.round(H * scale));
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(svgImg, 0, 0, canvas.width, canvas.height);
+        lcDrawPics(ctx, rects, scale, 0, canvas.height);
+        const blob = await new Promise((resolve, reject) => {
+            try {
+                canvas.toBlob(b => b ? resolve(b) : reject(new Error('그림 변환 실패')), mime, quality);
+            }
+            catch (err) {
+                reject(err);
+            }
+        });
+        const size = [canvas.width, canvas.height];
+        canvas.width = 1;
+        canvas.height = 1;
+        return { blob, size };
+    }
+    async function lcMakeImages() {
+        const ui = LOG_CAPTURE.ui;
+        if (!ui || LOG_CAPTURE.rendering)
+            return;
+        const seq = ++LOG_CAPTURE.renderSeq;
+        const alive = () => LOG_CAPTURE.renderSeq === seq && LOG_CAPTURE.previewOpen && LOG_CAPTURE.ui === ui;
+        LOG_CAPTURE.rendering = true;
+        ui.make.disabled = true;
+        ui.make.textContent = '만드는 중…';
+        const loaded = new Map();
+        try {
+            const theme = normalizeLogCaptureTheme(settings.logCaptureTheme);
+            const fmt = settings.logCaptureImageFormat === 'webp' && lcCanWebp() ? 'webp' : 'png';
+            const mime = fmt === 'webp' ? 'image/webp' : 'image/png';
+            const quality = clamp(Number(settings.logCaptureWebpQuality || 90) / 100, 0.5, 1);
+            const pages = Array.from(ui.pages.querySelectorAll(':scope > .lc')).filter(el => el.querySelector('.lc-card:not(.x)'));
+            if (!pages.length) {
+                lcToast('넣을 메시지가 없어요');
+                return;
+            }
+            const srcs = new Set();
+            pages.forEach(p => p.querySelectorAll('.lc-img:not(.x) img').forEach(img => srcs.add(img.getAttribute('src') || '')));
+            let omitted = 0;
+            let n = 0;
+            for (const src of srcs) {
+                n++;
+                ui.make.textContent = `이미지 불러오는 중 ${n} / ${srcs.size}`;
+                try {
+                    const blob = await lcRequestImageBlob(src);
+                    const url = URL.createObjectURL(blob);
+                    const im = await lcLoadImage(url);
+                    loaded.set(src, { im, url });
+                }
+                catch (_) {
+                    loaded.set(src, null);
+                    omitted++;
+                }
+                if (!alive())
+                    return;
+            }
+            const outs = [];
+            for (let k = 0; k < pages.length; k++) {
+                ui.make.textContent = `만드는 중 ${k + 1} / ${pages.length}`;
+                const r = await lcRenderPage(pages[k], theme, loaded, mime, quality, (i, n) => {
+                    if (alive())
+                        ui.make.textContent = pages.length > 1 ? `만드는 중 ${k + 1} / ${pages.length} (${i}/${n})` : `긴 한 장 만드는 중 ${i} / ${n}`;
+                });
+                if (!alive())
+                    return;
+                outs.push(r);
+            }
+            lcFreeOutputs();
+            const d = new Date();
+            const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+            const ext = outs.every(r => r.blob?.type === 'image/webp') ? 'webp' : 'png';
+            LOG_CAPTURE.out = outs.map((r, k) => {
+                const e = r.blob?.type === 'image/webp' ? 'webp' : 'png';
+                return { ...r, url: URL.createObjectURL(r.blob), name: `crack-log-${stamp}${outs.length > 1 ? `-${String(k + 1).padStart(2, '0')}` : ''}.${e}` };
+            });
+            lcShowResult(ext);
+            if (omitted)
+                lcToast(`이미지 ${omitted}개를 못 불러와서 빼고 만들었어요`);
+            else if (fmt === 'webp' && ext !== 'webp')
+                lcToast('너무 길어서 WebP 대신 PNG로 만들었어요');
+        }
+        catch (err) {
             try { console.warn(`${LOG} log capture render failed`, err); } catch (_) { }
-            const message = String(err?.message || '');
-            if (/load|library|html-to-image|unavailable/i.test(message))
-                cmuLogCaptureSetInlineStatus('캡처 도구를 불러오지 못했어요.');
-            else if (/fetch|cors|network|security/i.test(message))
-                cmuLogCaptureSetInlineStatus('외부 이미지를 불러오지 못했어요. 이미지 포함을 꺼 보세요.');
-            else if (/image|canvas|convert|변환|dataurl|size|memory/i.test(message))
-                cmuLogCaptureSetInlineStatus('이미지가 너무 길거나 기기 메모리가 부족해요.');
-            else
-                cmuLogCaptureSetInlineStatus('이미지 생성에 실패했어요. 다시 눌러 주세요.');
+            if (alive())
+                lcToast('그림을 못 만들었어요. 쪽 길이를 짧게 하거나 다시 눌러 주세요.');
         }
         finally {
-            host?.remove?.();
-            if (canvas) {
-                canvas.width = 1;
-                canvas.height = 1;
-            }
-            if (LOG_CAPTURE.renderHost === host)
-                LOG_CAPTURE.renderHost = null;
-            if (LOG_CAPTURE.renderSeq === renderSeq) {
+            loaded.forEach(v => { if (v?.url) { try { URL.revokeObjectURL(v.url); } catch (_) { } } });
+            if (LOG_CAPTURE.renderSeq === seq) {
                 LOG_CAPTURE.rendering = false;
-                cmuLogCaptureUpdateSaveButtons();
+                if (LOG_CAPTURE.ui === ui) {
+                    ui.make.disabled = false;
+                    ui.make.textContent = '이미지 만들기';
+                }
             }
         }
+    }
+    function lcShowResult(ext) {
+        const ui = LOG_CAPTURE.ui;
+        const out = LOG_CAPTURE.out;
+        if (!ui || !out.length)
+            return;
+        const kb = out.reduce((a, o) => a + o.blob.size, 0) / 1024;
+        ui.rtitle.textContent = `${out.length}장 만들었어요`;
+        ui.rsub.textContent = `${ext === 'webp' ? 'WebP' : 'PNG'} · ${out[0].size[0]}px · ${kb > 1024 ? `${(kb / 1024).toFixed(1)}MB` : `${Math.round(kb)}KB`}`;
+        ui.rgrid.innerHTML = out.map((o, k) => `<div class="cmu-lcp-rpg"><img src="${o.url}" alt="${k + 1}쪽"><span>${k + 1}</span></div>`).join('');
+        lcShowView('result');
+    }
+    function lcOpenViewer(message = '') {
+        const ui = LOG_CAPTURE.ui;
+        if (!ui)
+            return;
+        ui.vlist.innerHTML = LOG_CAPTURE.out.map((o, k) => `<img src="${o.url}" alt="${k + 1}쪽">`).join('');
+        lcShowView('viewer');
+        if (message)
+            lcToast(message);
+    }
+    function lcSaveImages() {
+        const out = LOG_CAPTURE.out;
+        if (!out.length)
+            return;
+        if (lcIsIOSDevice()) {
+            let files = null;
+            try {
+                files = out.map(o => new File([o.blob], o.name, { type: o.blob.type }));
+            }
+            catch (_) { }
+            if (files && typeof navigator.share === 'function' && (!navigator.canShare || navigator.canShare({ files }))) {
+                navigator.share({ files }).catch(err => {
+                    if (err?.name !== 'AbortError')
+                        lcOpenViewer('공유 창을 열 수 없어서 길게 눌러 저장하는 화면을 열었어요');
+                });
+                return;
+            }
+            lcOpenViewer('이 브라우저는 공유 창이 없어서 길게 눌러 저장하는 화면을 열었어요');
+            return;
+        }
+        out.forEach((o, k) => {
+            setTimeout(() => {
+                const a = document.createElement('a');
+                a.href = o.url;
+                a.download = o.name;
+                a.rel = 'noopener';
+                a.style.display = 'none';
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => a.remove(), 1000);
+            }, k * 400);
+        });
+        lcToast(`${out.length}장 받기를 시작했어요`);
     }
     function installLogCaptureHandlers() {
         if (!settings.logCapture || LOG_CAPTURE.clickHandler)
@@ -8604,11 +8824,9 @@ function cmuMain() {
         LOG_CAPTURE.clickHandler = (e) => {
             if (!LOG_CAPTURE.active)
                 return;
-            if (e.target?.closest?.(`#${ID.logCaptureBar}`))
+            if (e.target?.closest?.(`#${ID.logCaptureBar}, #${ID.panel}, #${ID.logCapturePreview}, #${ID.toolbarWrapper}`))
                 return;
-            if (e.target?.closest?.(`#${ID.panel}, #${ID.logCapturePreview}, #${ID.toolbarWrapper}`))
-                return;
-            const group = e.target?.closest?.('[data-message-group-id]');
+            const group = e.target?.closest?.('main [data-message-group-id]');
             if (!(group instanceof HTMLElement))
                 return;
             e.preventDefault();
@@ -10468,6 +10686,7 @@ function cmuMain() {
     function sortRsModels(models) {
         const groupOrder = new Map(RS_GROUPS.map(([id], index) => [id, index]));
         return [...models].sort((a, b) => {
+            if (Number.isInteger(a.crackOrder) && Number.isInteger(b.crackOrder)) return a.crackOrder - b.crackOrder;
             const ag = rsModelGroup(a);
             const bg = rsModelGroup(b);
             const groupDiff = (groupOrder.get(ag) ?? 999) - (groupOrder.get(bg) ?? 999);
@@ -10494,7 +10713,12 @@ function cmuMain() {
             const allOn = count === members.length;
             const partialOn = anyOn && !allOn;
             const groupSwitch = `<button type="button" class="sw ${anyOn ? 'on' : ''} ${partialOn ? 'partial' : ''} ${disabled ? 'disabled' : ''}" data-action="q-rs-group" data-key="${id}" data-cmu-dep="radiosonde" role="switch" aria-checked="${anyOn ? 'true' : 'false'}" aria-disabled="${disabled ? 'true' : 'false'}" ${disabled ? 'disabled' : ''} title="${anyOn ? '이 그룹 전체 끄기' : '이 그룹 전체 켜기'}"></button>`;
-            const chips = members.map(m => qChip('q-rs-chip', escapeHtml(m.slug), escapeHtml(m.label || m.short || m.slug), visibility[m.slug] !== false, disabled)).join('');
+            // 크랙 모델과 이은 줄: 크랙 아이콘 + 크랙 모델 이름(엔진 이름은 작게)
+            const chipLabel = m => m.crackLabel
+                ? `${escapeHtml(m.crackLabel)}<small class="cmu-rs-eng">${escapeHtml(m.engine || '')}</small>`
+                : escapeHtml(m.label || m.short || m.slug);
+            const chipIcon = m => m.icon ? `<img class="ci cmu-model-filter-icon" src="${escapeHtml(m.icon)}" alt="" aria-hidden="true" loading="lazy" decoding="async">` : undefined;
+            const chips = members.map(m => qChip('q-rs-chip', escapeHtml(m.slug), chipLabel(m), visibility[m.slug] !== false, disabled, chipIcon(m))).join('');
             return `<div class="subrow cmu-rs-setting-group" data-rs-group="${id}"><div class="cmu-rs-setting-head"><div class="lbl cmu-rs-setting-title"><strong>${label}</strong><small>${count}/${members.length}개 표시</small></div>${groupSwitch}</div><div class="cmu-rs-setting-models" data-cmu-dep-box="radiosonde">${chips}</div></div>`;
         }).join('');
     }
@@ -10567,6 +10791,13 @@ function cmuMain() {
         ${qStepper('fontScale', '글씨 크기', 80, 130, 1)}
         ${qStepper('imageScale', '이미지 크기', 50, 100, 1)}
         ${qSwitch('pauseAnimatedThumbs', '썸네일 움짤 정지', '목록의 움직이는 이미지를 정적 썸네일로 표시')}
+      `)}
+
+      <div class="sec">긴 방 가볍게</div>
+      ${qCard(`
+        ${qSwitch('foldOldTurns', '오래된 대화 숨기기', '최근 대화만 그림 · 맨 위까지 올리고 손을 떼면 다 펼침')}
+        ${qStepper('foldKeepTurns', '남길 최근 대화', 3, 50, 1, '턴')}
+        ${qSwitch('renderSkip', '화면 밖 메시지 그리기 생략', '자리 잡은 메시지만 · 스크롤이 가벼워짐')}
       `)}
 
       <div class="sec">제스처 · 입력</div>
@@ -11148,6 +11379,8 @@ function cmuMain() {
         ${qSwitch('editPasteFix', '붙여넣기 줄바꿈 보존', '수정창에 여러 줄을 붙여넣을 때 빈 줄이 늘어나지 않게 해요.')}
         ${qSwitch('editTextCleaner', '수정창 단어 정리', '수정 완료 옆에서 치환·삭제 · 미리보기 · 되돌리기')}
       `)}
+      <div class="sec">다시 생성</div>
+      ${qCard(qSwitch('skipRegenerateGuide', '재생성 지침 창 건너뛰기', '답변의 ↻ 버튼을 누르면 지침 입력 없이 바로 다시 생성해요. 기본은 꺼짐.'))}
       <div class="sec">메시지 길게 누르기</div>
       ${qCard(qSwitch('messageLongPressMenu', '길게 누르기 메뉴', '말풍선을 약 0.4초 누르면 메시지 메뉴 표시'))}
 
@@ -11334,13 +11567,23 @@ function cmuMain() {
         return qPage('capture', `
       <div class="sec">기본</div>
       ${qCard(`
-        ${qSwitch('logCapture', '로그 캡처', '끄면 버튼·선택 이벤트·미리보기·내보내기를 전부 비활성화')}
+        ${qSwitch('logCapture', '로그 캡처', '끄면 카메라 버튼·고르기·미리보기·이미지 만들기를 전부 꺼요')}
       `)}
 
       <div class="sec">출력</div>
       ${qCard(`
-        ${qSwitch('logCaptureIncludeImages', '메시지 이미지 포함', '채팅에 포함된 이미지를 캡처 결과에도 포함', { dep: 'logCapture' })}
-        ${qSwitch('logCaptureIncludeCodeBlocks', '코드블록 포함', '끄면 코드블록은 선택·미리보기·캡처 결과에서 제외', { dep: 'logCapture' })}
+        ${qSwitch('logCaptureIncludeImages', '메시지 이미지 넣기', '미리보기에서 처음부터 이미지를 넣어 둘지 (미리보기에서도 바꿀 수 있어요)', { dep: 'logCapture' })}
+        ${qSwitch('logCaptureIncludeCodeBlocks', '코드블록 넣기', '미리보기에서 처음부터 코드블록(상태창)을 넣어 둘지 (미리보기에서도 바꿀 수 있어요)', { dep: 'logCapture' })}
+        ${qChoice('q-lc-page', 'logCapturePageLength', '쪽 길이', [
+            { value: 'short', label: '짧게' },
+            { value: 'normal', label: '보통' },
+            { value: 'long', label: '길게' }
+        ], String(settings.logCapturePageLength || 'normal'), "'나눠서'로 만들 때 한 장의 길이예요. 미리보기에서 '한 장'을 고르면 나누지 않고 한 장으로 만들어요. 그림 폭은 1080px")}
+        ${qChoice('q-lc-width', 'logCaptureWidth', '글 폭', [
+            { value: 'narrow', label: '좁게' },
+            { value: 'normal', label: '보통' },
+            { value: 'wide', label: '넓게' }
+        ], String(settings.logCaptureWidth || 'normal'), '넓을수록 한 줄에 글이 많이 들어가요. 그림 폭은 그대로 1080px이라 글씨는 조금 작아져요')}
         ${qChoice('q-lc-webp', 'logCaptureWebpQuality', 'WebP 품질', [
             { value: '82', label: '보통' },
             { value: '90', label: '높음' },
@@ -11650,6 +11893,20 @@ function cmuMain() {
                 settings.logCaptureWebpQuality = value;
                 saveSettings();
                 target.parentElement?.querySelectorAll?.('[data-action="q-lc-webp"]').forEach(el => el.classList.toggle('ck', el === target));
+                return true;
+            }
+            if (action === 'q-lc-page' && key) {
+                const value = String(key).split('::').slice(1).join('::');
+                settings.logCapturePageLength = ['short', 'normal', 'long'].includes(value) ? value : 'normal';
+                saveSettings();
+                target.parentElement?.querySelectorAll?.('[data-action="q-lc-page"]').forEach(el => el.classList.toggle('ck', el === target));
+                return true;
+            }
+            if (action === 'q-lc-width' && key) {
+                const value = String(key).split('::').slice(1).join('::');
+                settings.logCaptureWidth = ['narrow', 'normal', 'wide'].includes(value) ? value : 'normal';
+                saveSettings();
+                target.parentElement?.querySelectorAll?.('[data-action="q-lc-width"]').forEach(el => el.classList.toggle('ck', el === target));
                 return true;
             }
             if (action === 'lc-rule-add') {
@@ -14461,7 +14718,7 @@ function cmuMain() {
         return !!button && (compactModelFreeChatSignal(button) || !compactModelButtonToken(button));
     }
     function compactModelComposerRowTrigger(button) {
-        const selector = 'main .flex.items-center.justify-between > .flex.min-w-0 > button[aria-haspopup="dialog"]';
+        const selector = 'main .flex.items-center.justify-between > div > button[aria-haspopup="dialog"], main .group\\/header button[aria-haspopup="dialog"]';
         return button.matches(selector) && Array.from(button.parentElement.children)
             .filter(el => el.matches('button[aria-haspopup="dialog"]')).length === 1;
     }
@@ -14516,7 +14773,7 @@ function cmuMain() {
         for (const button of editorCandidates) {
             if (compactModelTriggerScore(button, composer, known, true) >= 0) return button;
         }
-        const rowButtons = document.querySelectorAll('main .flex.items-center.justify-between > .flex.min-w-0 > button[aria-haspopup="dialog"]');
+        const rowButtons = document.querySelectorAll('main .flex.items-center.justify-between > div > button[aria-haspopup="dialog"], main .group\\/header button[aria-haspopup="dialog"]');
         for (const button of rowButtons) {
             if (compactModelTriggerScore(button, composer, known) >= 0) return button;
         }
@@ -16324,10 +16581,131 @@ function cmuMain() {
         }
     }
 
+    function cmuEpisodeBridgeMain() {
+        const root = document.documentElement;
+        if (root.hasAttribute('data-cmu-episode-bridge'))
+            return;
+        // 찾는 기준(넓게 잡지 않음): 훅 상태가 SWR 응답이고 그 안에 data.data.uiSetting.isEpisodeBubbleEnabled(불리언)가 있는 컴포넌트,
+        // 그 훅 바로 뒤 6칸 안의 의존성 없는 useCallback 중 '(...인자)=>' 모양인 것 = useSWR이 돌려주는 mutate
+        const findMutate = () => {
+            const start = document.querySelector('main [data-message-group-id]') || document.querySelector('main');
+            const fk = start ? Object.keys(start).find(k => k.startsWith('__reactFiber$')) : '';
+            let top = fk ? start[fk] : null;
+            while (top && top.return)
+                top = top.return;
+            const stack = top ? [top] : [];
+            for (let n = 0; stack.length && n < 20000; n++) {
+                const x = stack.pop();
+                let h = x.memoizedState;
+                for (let i = 0; h && typeof h === 'object' && 'next' in h && i < 80; i++, h = h.next) {
+                    const v = h.memoizedState;
+                    if (!(v && v.data && v.data.data && v.data.data.uiSetting && typeof v.data.data.uiSetting.isEpisodeBubbleEnabled === 'boolean'))
+                        continue;
+                    let g = h.next;
+                    for (let j = 0; g && j < 6; j++, g = g.next) {
+                        const c = g.memoizedState;
+                        if (Array.isArray(c) && typeof c[0] === 'function' && Array.isArray(c[1]) && c[1].length === 0 && c[0].length === 0 && /^\(\.\.\.\w+\)=>/.test(String(c[0])))
+                            return c[0];
+                    }
+                }
+                if (x.sibling)
+                    stack.push(x.sibling);
+                if (x.child)
+                    stack.push(x.child);
+            }
+            return null;
+        };
+        const withBubble = b => cur => (cur && cur.data && cur.data.uiSetting
+            ? Object.assign({}, cur, { data: Object.assign({}, cur.data, { uiSetting: Object.assign({}, cur.data.uiSetting, { isEpisodeBubbleEnabled: b }) }) })
+            : cur);
+        document.addEventListener('cmu-episode-set', (e) => {
+            const want = String(e.detail || '');
+            let res = 'none';
+            try {
+                const mut = findMutate();
+                if (mut && (want === 'chat' || want === 'novel')) {
+                    Promise.resolve(mut(withBubble(want === 'chat'), false)).catch(() => { }); // false = 다시 불러오지 않음
+                    res = 'ok';
+                }
+            }
+            catch (_) {
+                res = 'error';
+            }
+            root.setAttribute('data-cmu-episode-res', res);
+        });
+        root.setAttribute('data-cmu-episode-bridge', '1');
+    }
+    function cmuEnsureEpisodeBridge() {
+        const root = document.documentElement;
+        if (root.hasAttribute('data-cmu-episode-bridge'))
+            return true;
+        try {
+            const probe = document.querySelector('main');
+            if (probe && Object.keys(probe).some(k => k.startsWith('__reactFiber$'))) {
+                cmuEpisodeBridgeMain();
+            }
+            else {
+                const s = document.createElement('script');
+                s.textContent = `(${cmuEpisodeBridgeMain.toString()})();`;
+                (document.head || root).appendChild(s);
+                s.remove();
+            }
+        }
+        catch (_) { }
+        return root.hasAttribute('data-cmu-episode-bridge');
+    }
+    function cmuEpisodeInstant(mode) {
+        if (!cmuEnsureEpisodeBridge())
+            return false;
+        const root = document.documentElement;
+        root.removeAttribute('data-cmu-episode-res');
+        try {
+            document.dispatchEvent(new CustomEvent('cmu-episode-set', { detail: mode }));
+        }
+        catch (_) { }
+        const ok = root.getAttribute('data-cmu-episode-res') === 'ok';
+        root.removeAttribute('data-cmu-episode-res');
+        if (ok) {
+            // 크랙 설정 화면에서 바꿨을 때와 같은 뒷정리(모델 아이콘·테마·배지·설정 창). 크랙이 다시 그린 뒤에 한다
+            CMI.uiMode = mode;
+            CMI.uiModeAt = Date.now();
+            setTimeout(cmuQueueNativeUiModeChange, 250);
+        }
+        return ok;
+    }
     async function toggleQuickEpisodeMode() {
         if (!shouldRun() || quickEpisodeSaveBusy) return;
         cmuDraftFlush('ui-mode-switch');
-        const next = getQuickEpisodeMode() === 'chat' ? 'novel' : 'chat';
+        const prev = getQuickEpisodeMode();
+        const next = prev === 'chat' ? 'novel' : 'chat';
+        if (cmuEpisodeInstant(next)) {
+            // 화면은 이미 바뀌었다. 서버에 저장하고, 안 되면 화면을 되돌린다
+            quickEpisodeSaveBusy = true;
+            syncCmuQuickButtons();
+            try {
+                await requestQuickEpisodeMode(next);
+                if (CMU_RUNTIME.disposed) return;
+                // 저장이 끝나기 전에 크랙이 프로필을 다시 불러오면(창 포커스 등) 옛 값으로 덮인다. 한 번 더 맞춘다(같은 값이면 그대로)
+                cmuEpisodeInstant(next);
+                try {
+                    localStorage.setItem('chud_episode_ui_mode', next);
+                    localStorage.setItem('crack_ui_episode_ui_mode', next);
+                    localStorage.removeItem('crack_ui_pending_episode_ui_mode');
+                } catch (e) {}
+                window.dispatchEvent(new CustomEvent('crack-ui-episode-ui-mode-change', {
+                    detail: { mode: next, isEpisodeBubbleEnabled: next === 'chat' }
+                }));
+            } catch (error) {
+                if (CMU_RUNTIME.disposed) return;
+                cmuEpisodeInstant(prev);
+                showToast(`작품 UI를 바꾸지 못했어요 · ${error.message || error}`);
+            } finally {
+                quickEpisodeSaveBusy = false;
+                syncCmuQuickButtons();
+                setTimeout(syncCmuQuickButtons, 300);
+            }
+            return;
+        }
         const uiPlusChoice = document.querySelector(`#crack-ui-settings-panel [data-crack-ui-episode-ui-mode="${next}"]`);
         if (uiPlusChoice?.dataset.crackUiBound === '1') {
             // UI Plus의 API 저장·실패 안내·재로드 흐름을 그대로 사용한다.
@@ -18257,8 +18635,8 @@ function cmuMain() {
             const cached = igxMetricCache.get(slug);
             return force || !cached || now - cached.at >= 15000;
         });
-        for (let i = 0; i < want.length; i += 30) {
-            const part = want.slice(i, i + 30);
+        for (let i = 0; i < want.length; i += 20) {
+            const part = want.slice(i, i + 20);
             try {
                 const data = await igxRequestJson('simple/bulk?models=' + part.map(encodeURIComponent).join(','));
                 if (!data || typeof data !== 'object') continue;
@@ -18307,11 +18685,110 @@ function cmuMain() {
     cmuListen(window, 'pagehide', cancelIgxRequests);
     CMU_RESOURCES.cleanups.push(cancelIgxRequests);
 
+    const RS_CHECK_KEY = 'cmu_rs_slug_check_v1';
+    const RS_CHECK_OK_MS = 7 * 864e5, RS_CHECK_BAD_MS = 864e5;
+    let rsCheckCache = null;
+    function rsCheckLoad() {
+        if (rsCheckCache) return rsCheckCache;
+        try {
+            const parsed = JSON.parse(localStorage.getItem(RS_CHECK_KEY) || '{}');
+            rsCheckCache = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch (_) { rsCheckCache = {}; }
+        return rsCheckCache;
+    }
+    function rsCheckSave() {
+        try { localStorage.setItem(RS_CHECK_KEY, JSON.stringify(rsCheckCache || {})); } catch (_) {}
+    }
+    function rsKnownIgxSlugs() {
+        const set = new Set(FALLBACK_MODELS.map(model => model.slug));
+        for (const slug of (Array.isArray(igxV2Models) ? igxV2Models : igxLoadCachedModels()?.slugs || [])) set.add(slug);
+        return set;
+    }
+    function rsCheckState(slug, known) {
+        const c = rsCheckLoad()[slug];
+        if (c && Date.now() - Number(c.at || 0) < (c.ok ? RS_CHECK_OK_MS : RS_CHECK_BAD_MS)) return c.ok ? 'ok' : 'bad';
+        return known.has(slug) ? 'ok' : 'unknown';
+    }
+    function rsEngineCandidates(engine) {
+        const e = String(engine || '').toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!e) return [];
+        let m;
+        if ((m = e.match(/^(?:claude )?(fable|opus|sonnet|haiku) (\d+(?:\.\d+)?)$/))) return ['claude-' + m[1] + '-' + m[2]];
+        if ((m = e.match(/^gemini (\d+(?:\.\d+)?) (pro|flash)( lite)?$/))) {
+            const base = 'gemini-' + m[1] + '-' + m[2] + (m[3] ? '-lite' : '');
+            return [base, base + '-preview'];
+        }
+        if ((m = e.match(/^(?:chat)?gpt (\d+(?:\.\d+)?) ([a-z]+)$/))) return ['gpt-' + m[1] + '-' + m[2]];
+        if ((m = e.match(/^deepseek v?(\d+(?:\.\d+)?) ([a-z]+)$/))) return ['deepseek-v' + m[1] + '-' + m[2]];
+        return [e.replace(/\s+/g, '-')];
+    }
+    const rsNormVer = value => String(value || '').toLowerCase().replace(/\bclaude\b/g, ' ').replace(/[-_]/g, ' ').replace(/(\d+)\.0\b/g, '$1').replace(/\s+/g, ' ').trim();
+    function rsCrackModelList() {
+        const known = rsKnownIgxSlugs();
+        const list = [], pending = [], used = new Set();
+        let anyEngine = false;
+        for (const [token, meta] of Object.entries(cmuLoadModelMeta())) {
+            if (!meta?.engine) continue;
+            anyEngine = true;
+            const states = rsEngineCandidates(meta.engine).map(slug => [slug, rsCheckState(slug, known)]);
+            const okSlug = states.find(([, state]) => state === 'ok')?.[0];
+            let base = okSlug ? { slug: okSlug, apiId: okSlug, source: 'igx', short: MODEL_OVERRIDES.get(okSlug)?.short || autoShort(okSlug) } : null;
+            if (!okSlug) {
+                const unknown = states.filter(([, state]) => state === 'unknown').map(([slug]) => slug);
+                pending.push(...unknown);
+                // IGX에 없다고 확인된 엔진만 예전 자체 측정 서버로(지금은 Fable 5뿐)
+                const yame = !unknown.length && YAME_MODELS.find(model => rsNormVer(model.label) === rsNormVer(meta.engine));
+                if (yame) base = { slug: yame.slug, apiId: yame.apiId, source: 'yame', short: yame.short };
+            }
+            if (!base || used.has(base.slug)) continue;
+            used.add(base.slug);
+            const crackLabel = meta.label || token;
+            list.push({ ...base, label: `${crackLabel} · ${meta.engine}`, crackLabel, engine: meta.engine, token, icon: cmuCleanModelIconUrl(meta.icon), crackOrder: list.length });
+        }
+        return { anyEngine, list, pending: [...new Set(pending)] };
+    }
+    let rsCheckBusy = false;
+    async function rsCheckPending(slugs) {
+        if (rsCheckBusy || !slugs.length || !igxCanRequest()) return false;
+        rsCheckBusy = true;
+        let changed = false;
+        try {
+            for (const slug of slugs) {
+                try {
+                    const record = metricRecordFromObject(await igxRequestJson('simple/' + encodeURIComponent(slug)), slug);
+                    rsCheckLoad()[slug] = { ok: !!record, at: Date.now() };
+                    if (record) igxMetricCache.set(slug, { at: Date.now(), record });
+                    changed = true;
+                }
+                catch (error) {
+                    if (error.name === 'AbortError') break;
+                    if (/\b(400|404)\b/.test(String(error.message || ''))) { rsCheckLoad()[slug] = { ok: false, at: Date.now() }; changed = true; }
+                }
+            }
+        }
+        finally {
+            rsCheckBusy = false;
+            if (changed) rsCheckSave();
+        }
+        return changed;
+    }
+    function cmuRsCrackListChanged() {
+        RS.listGen = (RS.listGen || 0) + 1;
+        RS.discoveryAt = 0;
+        if (RS.busy) RS.pendingRefresh = true;
+        if (shouldRun() && settings.radiosonde && isChatRoomPath()) scheduleRadiosondeRefresh(true);
+    }
     async function discoverRsModels() {
         if (RS.discoveryPromise) return RS.discoveryPromise;
         RS.discoveryPromise = (async () => {
+            const gen = RS.listGen || 0;
             const previous = JSON.stringify(RS.models);
-            try {
+            let crack = rsCrackModelList();
+            if (crack.pending.length && await rsCheckPending(crack.pending)) crack = rsCrackModelList();
+            if (crack.list.length) {
+                RS.models = ensureUniqueShorts(crack.list);
+            }
+            else try {
                 const slugs = await getIgxOfficialModels();
                 const discovered = ensureUniqueShorts(slugs.filter(looksLikeModelSlug).map(makeModelMeta));
                 if (discovered.length < 1) throw new Error('insufficient model list');
@@ -18322,7 +18799,9 @@ function cmuMain() {
                 // Visibility/route cancellation is not a completed discovery. Resume on the next visible refresh.
                 if (error?.name === 'AbortError') return RS.models;
             }
-            RS.discoveryAt = Date.now();
+            // 도중에 크랙 목록이 바뀌었으면 '다 만들었음'으로 두지 않는다 → 다음 갱신이 새 목록으로 다시 만든다
+            RS.discoveryAt = (RS.listGen || 0) === gen ? Date.now() : 0;
+            if (!RS.discoveryAt) RS.pendingRefresh = true;
             if (previous !== JSON.stringify(RS.models)) {
                 const active = new Set(RS.models.map(model => model.slug));
                 for (const slug of RS.last.keys()) if (!active.has(slug)) RS.last.delete(slug);
@@ -18752,6 +19231,66 @@ function cmuMain() {
         const option = group.querySelector('button[aria-label="메시지 옵션"]');
         return option?.closest('.dropdown-button') || option || null;
     }
+    // 4.9.2 안내 기능: 직접 누른 답변 재생성의 새 지침 창만 한 번 제출한다.
+    // 상시 감시/폴링 없음. 입력한 지침·다른 확인창·기존에 열린 창은 그대로 둔다.
+    let cmuRegenPending = null;
+    function cmuCancelRegenGuide() {
+        const pending = cmuRegenPending;
+        cmuRegenPending = null;
+        if (!pending) return;
+        pending.observer?.disconnect();
+        clearTimeout(pending.timer);
+    }
+    function cmuTrySkipRegenGuide() {
+        const pending = cmuRegenPending;
+        if (!pending) return;
+        if (!shouldRun() || !settings.skipRegenerateGuide || document.hidden ||
+            location.pathname !== pending.path || !pending.group.isConnected) {
+            cmuCancelRegenGuide();
+            return;
+        }
+        for (const dialog of document.querySelectorAll('[role="dialog"], [role="alertdialog"]')) {
+            if (pending.existing.has(dialog) || !dialog.getClientRects().length) continue;
+            const headings = [...dialog.querySelectorAll('h1, h2, h3, [role="heading"]')];
+            const labelled = (dialog.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id)).filter(Boolean);
+            const title = [...headings, ...labelled].some(el => /^재생성\s*지침$/.test(normalizeText(el.textContent || '')))
+                || /^재생성\s*지침$/.test(normalizeText(dialog.getAttribute('aria-label') || ''));
+            if (!title) continue;
+            const edited = [...dialog.querySelectorAll('textarea, input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), [contenteditable="true"]')]
+                .some(el => String('value' in el ? el.value : el.textContent || '').trim());
+            if (edited) { cmuCancelRegenGuide(); return; }
+            const candidates = [...dialog.querySelectorAll('button')].filter(button =>
+                !button.disabled && button.getAttribute('aria-disabled') !== 'true' && button.getClientRects().length &&
+                /^(?:다시\s*생성|재생성)(?:하기)?$/.test(normalizeText(button.textContent || button.getAttribute('aria-label') || '')));
+            if (candidates.length !== 1) continue;
+            cmuCancelRegenGuide(); // 클릭 전에 해제하여 중복 제출/재진입 방지
+            candidates[0].click();
+            return;
+        }
+    }
+    function cmuArmRegenGuide(event) {
+        if (!shouldRun() || !settings.skipRegenerateGuide || !isChatRoomPath() || event.defaultPrevented) return;
+        if ('button' in event && event.button !== 0) return;
+        const target = event.target instanceof Element ? event.target : event.target?.parentElement;
+        const button = target?.closest('button');
+        const group = button?.closest('[data-message-group-id]');
+        if (!button || !group || isOwnElement(button) || button.disabled || button.closest('[role="dialog"], [role="alertdialog"]')) return;
+        const label = normalizeText([button.textContent, button.getAttribute('aria-label'), button.title].filter(Boolean).join(' '));
+        if (button !== findRerollButtonAnchor(group) && !/^(?:다시\s*생성|재생성|리롤)(?:하기)?$/.test(label)) return;
+        cmuCancelRegenGuide();
+        cmuRegenPending = {
+            path: location.pathname, group,
+            existing: new Set([...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].filter(el => el.getClientRects().length)),
+            observer: new MutationObserver(cmuTrySkipRegenGuide), timer: 0,
+        };
+        cmuRegenPending.observer.observe(document.body, { childList: true, subtree: true });
+        cmuRegenPending.timer = setTimeout(cmuCancelRegenGuide, 2000);
+        queueMicrotask(cmuTrySkipRegenGuide);
+    }
+    cmuListen(document, 'click', cmuArmRegenGuide, true);
+    cmuListen(window, 'pagehide', cmuCancelRegenGuide);
+    CMU_RESOURCES.cleanups.push(cmuCancelRegenGuide);
+
     function findRerollButtonAnchor(group) {
         const buttons = Array.from(group.querySelectorAll('button'));
         const compare = findCompareButton(group);
@@ -18793,8 +19332,13 @@ function cmuMain() {
             row.className = 'cmu-user-badge-row';
             wrap.appendChild(row);
         }
-        if (badge.parentElement !== row)
+        if (badge.parentElement !== row) {
+            const old = badge.parentElement;
             row.appendChild(badge);
+            // 소설형↔채팅형을 새로고침 없이 바꾸면 예전 자리의 줄이 빈 채로 남는다
+            if (old && old.classList.contains('cmu-user-badge-row') && !old.childElementCount)
+                old.remove();
+        }
         badge.dataset.placement = 'user-flow';
         return badge;
     }
@@ -19465,20 +20009,68 @@ function cmuMain() {
         const token = String(value || '').trim().toLowerCase().replace(/[\s.\-]+/g, '_');
         return /^[a-z][a-z0-9]*(?:_\d+)*$/.test(token) ? token : '';
     }
+    let cmuModelMetaCache = null;
     function cmuLoadModelMeta() {
+        if (cmuModelMetaCache)
+            return cmuModelMetaCache;
         try {
             const parsed = JSON.parse(localStorage.getItem(LS.modelMeta) || '{}');
-            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+            cmuModelMetaCache = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
         }
         catch (_) {
-            return {};
+            cmuModelMetaCache = {};
         }
+        return cmuModelMetaCache;
     }
     function cmuSaveModelMeta(meta) {
+        cmuModelMetaCache = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
         try {
-            localStorage.setItem(LS.modelMeta, JSON.stringify(meta && typeof meta === 'object' ? meta : {}));
+            localStorage.setItem(LS.modelMeta, JSON.stringify(cmuModelMetaCache));
         }
         catch (_) { }
+    }
+    cmuListen(window, 'storage', event => { if (event.key === LS.modelMeta) cmuModelMetaCache = null; });
+    let cmuIconFlatMapSrc = null, cmuIconFlatMap = new Map();
+    function cmuModelTokenByIconFlat(flat) {
+        const meta = cmuLoadModelMeta();
+        if (cmuIconFlatMapSrc !== meta) {
+            cmuIconFlatMapSrc = meta;
+            cmuIconFlatMap = new Map();
+            for (const [token, m] of Object.entries(meta)) {
+                const f = nmfIconFlatTokensFromText(m?.icon || '')[0];
+                if (f && !cmuIconFlatMap.has(f))
+                    cmuIconFlatMap.set(f, token);
+            }
+        }
+        return cmuIconFlatMap.get(String(flat || '').toLowerCase().replace(/[^a-z0-9]/g, '')) || null;
+    }
+    function cmuModelIconFile(token) {
+        const icon = cmuModelMetaByToken(token)?.icon || '';
+        const m = /model-icon\/([^/?#]+)\.(?:webp|png|svg|avif)/i.exec(icon);
+        return m ? m[1] : '';
+    }
+    const CMU_MODEL_FETCH = { story: '', promise: null };
+    function cmuEnsureModelCatalog() {
+        if (!shouldRun() || !isChatRoomPath() || CMU_MODEL_FETCH.promise)
+            return;
+        const m = location.pathname.match(/\/stories\/([^/?#]+)/);
+        const storyId = m ? decodeURIComponent(m[1]) : '';
+        if (!storyId || CMU_MODEL_FETCH.story === storyId ||
+            (CMU_MODEL_FETCH.retryStory === storyId && Date.now() < (CMU_MODEL_FETCH.retryAt || 0))) return;
+        CMU_MODEL_FETCH.story = storyId;
+        const url = 'https://crack-api.wrtn.ai/crack-gen/v3/chat-models?serviceType=story&storyId=' + encodeURIComponent(storyId);
+        CMU_MODEL_FETCH.promise = apiGet(url)
+            .then(json => {
+                CMU_MODEL_FETCH.retryAt = 0;
+                if (CMU_MODEL_FETCH.story === storyId && location.pathname.includes('/stories/' + encodeURIComponent(storyId) + '/'))
+                    cmuObserveModelCatalogResponse({ url, storyId, serviceType: 'story' }, json);
+            })
+            .catch(() => {
+                CMU_MODEL_FETCH.story = '';
+                CMU_MODEL_FETCH.retryStory = storyId;
+                CMU_MODEL_FETCH.retryAt = Date.now() + 30000;
+            })
+            .finally(() => { CMU_MODEL_FETCH.promise = null; });
     }
     function cmuCleanModelIconUrl(value) {
         const raw = String(value || '').trim();
@@ -19586,9 +20178,12 @@ function cmuMain() {
                 continue;
             const label = omfNormalizeText(model?.name) || cmiAutoLabel(token) || token;
             const icon = cmuCleanModelIconUrl(model?.assets?.icon?.default);
+            // 엔진 이름(예: 'Opus 5.5', 'Gemini 4 Argon'): 라존데에서 크랙 모델과 IGX 모델을 잇는 데 쓴다
+            const engine = omfNormalizeText(model?.displayModelName) || omfNormalizeText((String(model?.description || '').match(/^(.+?)(을|를) 활용한/) || [])[1]);
             nextMeta[token] = {
                 label,
                 icon,
+                engine,
                 id: String(model?._id || ''),
                 serviceType: String(model?.serviceType || ''),
             };
@@ -19603,6 +20198,17 @@ function cmuMain() {
         const metaChanged = JSON.stringify(beforeMeta) !== JSON.stringify(nextMeta);
         if (metaChanged)
             cmuSaveModelMeta(nextMeta);
+
+        // 예전 판이 아이콘 파일 이름으로 따로 만든 모델 칸(예: ultrachat)은 진짜 코드(ultrachat_1_0)로 합친다.
+        // 그 칸에 숨김을 걸어 뒀으면 진짜 코드 쪽에 옮겨 둔 뒤 정리한다
+        const vis = nmfLoadVis();
+        let visMoved = false;
+        for (const key of Object.keys(vis)) {
+            if (nextSeen[key]) continue;
+            const real = cmuModelTokenByIconFlat(key);
+            if (real && nextSeen[real] && !(real in vis)) { vis[real] = vis[key]; visMoved = true; }
+        }
+        if (visMoved) nmfSaveVis(vis);
 
         const beforeSeen = nmfLoadSeen();
         const seenChanged = JSON.stringify(beforeSeen) !== JSON.stringify(nextSeen);
@@ -19629,6 +20235,8 @@ function cmuMain() {
             if (metaChanged)
                 cmiRefreshModelBadgeIcons(nextMeta);
         }
+        if (metaChanged)
+            cmuRsCrackListChanged();
         return true;
     }
     // 답변 길이 · 생각 조절 창 모델 필터
@@ -19940,6 +20548,10 @@ function cmuMain() {
         const flat = String(flatToken || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         if (!flat)
             return null;
+        // 크랙이 알려 준 아이콘 파일 이름이 먼저(울트라챗처럼 파일 이름에 판 번호가 없는 모델이 따로 한 칸 더 생기지 않게)
+        const byIcon = cmuModelTokenByIconFlat(flat);
+        if (byIcon)
+            return byIcon;
         try {
             const known = cmiModelOrder().find(token => nmfIconFlatToken(token) === flat);
             if (known)
@@ -20176,8 +20788,10 @@ function cmuMain() {
         ].join(',\n');
         // 순정 Popover의 고정 높이를 숨김 항목이 있는 모델창에만 해제한다.
         // 기존 모델 숨김 선택자/설정 저장 방식은 그대로 유지한다.
+        // 아이콘 파일 이름: 크랙이 알려 준 진짜 이름(예: ultrachat) + 코드로 짐작한 이름 둘 다
+        const iconTokens = m => Array.from(new Set([cmuModelIconFile(m.token), nmfIconUrlToken(m.token), nmfIconFlatToken(m.token)].filter(Boolean)));
         const compactSelectors = hiddenEntries.flatMap(m => {
-            const tokens = Array.from(new Set([nmfIconUrlToken(m.token), nmfIconFlatToken(m.token)].filter(Boolean)));
+            const tokens = iconTokens(m);
             return tokens.flatMap(token => ['src', 'srcset'].map(attr =>
                 `[data-radix-popper-content-wrapper] [role="dialog"]:has(button img[${attr}*="model-icon/${token}.webp"])`));
         });
@@ -20188,11 +20802,7 @@ function cmuMain() {
             overflow-y: auto;
         }` : '';
         const css = compactCss + '\n' + hiddenEntries.map(m => {
-            const urlTokens = Array.from(new Set([
-                nmfIconUrlToken(m.token),
-                nmfIconFlatToken(m.token)
-            ].filter(Boolean)));
-            return urlTokens.map(urlToken => `${buildSelectors(urlToken)} { display: none !important; }`).join('\n');
+            return iconTokens(m).map(urlToken => `${buildSelectors(urlToken)} { display: none !important; }`).join('\n');
         }).join('\n');
         if (el.textContent !== css)
             el.textContent = css;
@@ -20367,7 +20977,7 @@ function cmuMain() {
         // 4.6.3.3: 답변 배지도 설정/선택창과 같은 실제 아이콘 주소를 우선 사용한다.
         const sources = Array.from(new Set([
             cmuCleanModelIconUrl(meta?.icon),
-            token ? cmiIconUrl(token) : '',
+            ...cmiIconCandidates(token),
         ].filter(Boolean)));
         return {
             label,
@@ -20375,6 +20985,19 @@ function cmuMain() {
             sources,
             key: JSON.stringify([label, engine, sources]),
         };
+    }
+    function cmiIconCandidates(token) {
+        const out = [], files = new Set();
+        const add = url => {
+            const file = String(url || '').split('?')[0].split('/').pop();
+            if (url && !files.has(file)) { files.add(file); out.push(url); }
+        };
+        add(cmuCleanModelIconUrl(cmuModelMetaByToken(token)?.icon));
+        add(cmiIconUrl(token));
+        const brand = String(token || '').replace(/(?:_\d+)+$/, '');
+        if (brand && brand !== token)
+            add(`https://cdn-image.wrtn.ai/crack/graphics/model-icon/${brand}.webp`);
+        return out;
     }
     function cmiCreateImg(token, info = cmiModelIconInfo(token)) {
         const img = document.createElement('img');
@@ -21669,6 +22292,187 @@ function cmuMain() {
             modelButton.parentElement.insertBefore(loreButton, modelButton);
         loreButton.dataset.cmuLorePlaced = 'before-model';
     }
+    var CMU_FOLD;
+    CMU_RESOURCES.cleanups.push(() => {
+        if (!CMU_FOLD) return;
+        cmuFoldDetach(true);
+        document.documentElement.removeAttribute('data-cmu-rs');
+    });
+    function cmuFoldState() {
+        if (!CMU_FOLD) {
+            CMU_FOLD = { list: null, sc: null, mo: null, idleT: 0, touching: false, reading: false, count: 0, sig: '', rsReadyAt: 0, rsT: 0, cvRaf: 0, cvLater: 0, cvSeen: new WeakMap() };
+            addStyle(`
+    html.cmu-enabled .flex-col-reverse > [data-message-group-id][data-cmu-fold] { display: none !important; }
+    html.cmu-enabled[data-cmu-rs] .flex-col-reverse > [data-message-group-id][data-cmu-cv]:not(:nth-child(-n+3)):not(:focus-within) { content-visibility: auto; contain-intrinsic-size: auto 600px; }
+  `);
+        }
+        return CMU_FOLD;
+    }
+    function cmuFoldKeep() { return Math.max(3, Math.min(50, Math.round(Number(settings.foldKeepTurns) || 10))); }
+    function cmuFoldWanted() {
+        return shouldRun() && isChatRoomPath() && (!!settings.foldOldTurns || !!settings.renderSkip);
+    }
+    function cmuFoldOnScroll() { cmuFoldSoon(220); }
+    function cmuFoldOnTouchStart() { cmuFoldState().touching = true; }
+    function cmuFoldOnTouchEnd() { cmuFoldState().touching = false; cmuFoldSoon(220); }
+    function cmuFoldSoon(ms = 220) {
+        const st = cmuFoldState();
+        clearTimeout(st.idleT);
+        st.idleT = setTimeout(cmuFoldEval, ms);
+    }
+    function cmuFoldAttach() {
+        const st = cmuFoldState();
+        if (st.list?.isConnected && st.sc?.isConnected) return true;
+        cmuFoldDetach(false);
+        const group = document.querySelector('main .flex-col-reverse > [data-message-group-id]');
+        const list = group?.parentElement;
+        if (!list) return false;
+        let sc = list.parentElement;
+        while (sc && sc !== document.body && !/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) sc = sc.parentElement;
+        if (!sc || sc === document.body) return false;
+        st.list = list;
+        st.sc = sc;
+        st.reading = false;
+        if (!st.mo) st.mo = new MutationObserver(() => { cmuFoldSoon(300); cmuCvSoon(); });
+        st.mo.observe(list, { childList: true });
+        sc.addEventListener('scroll', cmuFoldOnScroll, { passive: true });
+        sc.addEventListener('touchstart', cmuFoldOnTouchStart, { passive: true });
+        sc.addEventListener('touchend', cmuFoldOnTouchEnd, { passive: true });
+        sc.addEventListener('touchcancel', cmuFoldOnTouchEnd, { passive: true });
+        st.rsReadyAt = Date.now() + 1500;
+        return true;
+    }
+    function cmuFoldDetach(unfold = true) {
+        const st = cmuFoldState();
+        st.mo?.disconnect();
+        clearTimeout(st.idleT);
+        clearTimeout(st.rsT);
+        clearTimeout(st.cvLater);
+        cancelAnimationFrame(st.cvRaf);
+        st.idleT = st.rsT = st.cvLater = st.cvRaf = 0;
+        st.cvSeen = new WeakMap();
+        if (st.sc) {
+            st.sc.removeEventListener('scroll', cmuFoldOnScroll);
+            st.sc.removeEventListener('touchstart', cmuFoldOnTouchStart);
+            st.sc.removeEventListener('touchend', cmuFoldOnTouchEnd);
+            st.sc.removeEventListener('touchcancel', cmuFoldOnTouchEnd);
+        }
+        if (unfold && st.list?.isConnected) cmuKeepView(() => cmuUnfoldAll());
+        st.list = st.sc = null;
+        st.count = 0;
+        st.reading = false;
+        st.touching = false;
+    }
+    function cmuUnfoldAll() {
+        const st = cmuFoldState();
+        st.list?.querySelectorAll(':scope > [data-cmu-fold]').forEach(el => el.removeAttribute('data-cmu-fold'));
+        st.count = 0;
+    }
+    function cmuKeepView(fn) {
+        const { sc, list } = cmuFoldState();
+        if (!sc || !list?.isConnected) return fn();
+        const sr = sc.getBoundingClientRect();
+        let ref = null;
+        for (const c of list.children) {
+            if (!c.hasAttribute('data-message-group-id') || c.hasAttribute('data-cmu-fold')) continue;
+            const r = c.getBoundingClientRect();
+            if (r.height > 0 && r.top < sr.bottom && r.bottom > sr.top) { ref = c; break; }
+        }
+        const y = ref ? ref.getBoundingClientRect().top : 0;
+        const out = fn();
+        if (ref?.isConnected && !ref.hasAttribute('data-cmu-fold')) {
+            const d = ref.getBoundingClientRect().top - y;
+            if (Math.abs(d) >= 1) sc.scrollTop += d;
+        }
+        return out;
+    }
+    function cmuFoldApply(canFold) {
+        const st = cmuFoldState();
+        const keep = cmuFoldKeep();
+        const want = !!settings.foldOldTurns && !st.reading && !LOG_CAPTURE.active;
+        const groups = Array.from(st.list.children).filter(c => c.hasAttribute('data-message-group-id'));
+        const anyUser = groups.some(isUserGroupByDom);
+        let turn = 0, prevUser = true, prevAI = false, changed = false, gap = false, foldedSeen = false, count = 0;
+        groups.forEach((group, i) => {
+            const user = anyUser && isUserGroupByDom(group);
+            if (anyUser ? (prevUser || (!user && prevAI)) : i % 2 === 0) turn++;
+            prevUser = user;
+            prevAI = !user;
+            const fold = want && turn > keep;
+            const has = group.hasAttribute('data-cmu-fold');
+            if (fold && !has && canFold) { group.setAttribute('data-cmu-fold', ''); changed = true; }
+            else if (!fold && has) { group.removeAttribute('data-cmu-fold'); changed = true; }
+            if (group.hasAttribute('data-cmu-fold')) { count++; foldedSeen = true; }
+            else if (foldedSeen) gap = true;
+        });
+        st.count = count;
+        return { changed, gap };
+    }
+    function cmuFoldEval() {
+        const st = cmuFoldState();
+        st.idleT = 0;
+        if (!cmuFoldWanted() || !cmuFoldAttach()) return;
+        if (st.touching) return; // 손을 뗄 때 다시 온다
+        const sc = st.sc, view = sc.clientHeight || 1, top = sc.scrollTop, toBottom = sc.scrollHeight - top - view;
+        if (!st.reading && st.count > 0 && top < view * 0.6) st.reading = true; // 보이는 것의 맨 위까지 올라와 멈춤 → 다 펼침
+        else if (st.reading && toBottom < view * 0.5) st.reading = false; // 맨 아래로 돌아와 멈춤 → 다시 접기
+        let result = { changed: false, gap: false };
+        cmuKeepView(() => {
+            result = cmuFoldApply(toBottom < view * 1.5);
+            if (result.gap) {
+                st.reading = true;
+                result = cmuFoldApply(false);
+            }
+        });
+        if (result.changed) cmuCvSoon();
+        cmuRsSync();
+    }
+    function cmuFoldSync() {
+        const st = cmuFoldState();
+        if (!cmuFoldWanted()) {
+            if (st.list) cmuFoldDetach(true);
+            document.documentElement.removeAttribute('data-cmu-rs');
+            st.sig = '';
+            return;
+        }
+        const attached = cmuFoldAttach();
+        const sig = [settings.foldOldTurns, cmuFoldKeep(), settings.renderSkip, attached && st.list ? 1 : 0].join('|') + ':' + location.pathname;
+        if (sig === st.sig) return;
+        st.sig = sig;
+        if (!settings.foldOldTurns && st.count) cmuKeepView(() => cmuUnfoldAll());
+        cmuFoldSoon(150);
+        cmuRsSync();
+    }
+    function cmuRsSync() {
+        const st = cmuFoldState();
+        const want = cmuFoldWanted() && !!settings.renderSkip && !!st.list?.isConnected;
+        const ready = want && Date.now() >= st.rsReadyAt;
+        clearTimeout(st.rsT);
+        if (want && !ready) st.rsT = setTimeout(cmuRsSync, Math.max(50, st.rsReadyAt - Date.now() + 20));
+        if (ready) cmuCvMark();
+        document.documentElement.toggleAttribute('data-cmu-rs', ready);
+    }
+    function cmuCvMark() {
+        const st = cmuFoldState();
+        if (!st.list?.isConnected || !st.sc?.isConnected) return;
+        const now = Date.now();
+        const sr = st.sc.getBoundingClientRect();
+        let wait = 0;
+        for (const c of st.list.children) {
+            if (!c.hasAttribute('data-message-group-id') || c.hasAttribute('data-cmu-fold') || c.hasAttribute('data-cmu-cv')) continue;
+            const t = st.cvSeen.get(c);
+            if (t === undefined) { st.cvSeen.set(c, now); wait = 1200; continue; }
+            if (now - t < 1200) { wait = Math.max(wait, 1200 - (now - t)); continue; }
+            const r = c.getBoundingClientRect();
+            if (r.height > 0 && r.bottom > sr.top && r.top < sr.bottom) c.setAttribute('data-cmu-cv', '');
+        }
+        if (wait && !st.cvLater) st.cvLater = setTimeout(() => { st.cvLater = 0; cmuCvSoon(); }, wait + 50);
+    }
+    function cmuCvSoon() {
+        const st = cmuFoldState();
+        if (!settings.renderSkip || st.cvRaf) return;
+        st.cvRaf = requestAnimationFrame(() => { st.cvRaf = requestAnimationFrame(() => { st.cvRaf = 0; cmuCvMark(); }); });
+    }
     function boot(reason = 'boot') {
         syncCmuMessageTextRoots(reason === 'route' || reason === 'visible-resume' || !CMU_DOM_WATCH.textRoots.size ? null : []);
         const late = /^late-/.test(String(reason || ''));
@@ -21692,6 +22496,8 @@ function cmuMain() {
         scheduleCmuEdgeMenuStateSync();
         scheduleCmuStatBarMark(0);
         applyRadiosondeTheme();
+        if (isChatRoomPath())
+            cmuEnsureModelCatalog();
         applyNativeModelFilterCss();
         omfScanOpenDialogs();
         if (settings.nativeModelFilter && cmuHasNativeModelMenu(document))
@@ -21897,6 +22703,9 @@ function cmuMain() {
                 cmuDraftSync();
                 ensureToolbarButton({ syncInline: false });
                 inlineDirty = true;
+                // 크랙이 입력창 상자를 새로 만들면(보낸 뒤 등) 테마 표시가 빠진다 → 바로 다시
+                if (themeSkinEnabled() && input && !input.closest('[data-cmu-theme-input-box]'))
+                    decorateThemeInputAndRadiosondeBorderless();
             }
             scheduleComposerExpandSync();
             scheduleCmuInputCounterSync();
@@ -22518,6 +23327,7 @@ function cmuMain() {
                 delete md.dataset.cmuThemeLen;
                 delete md.dataset.cmuThemeLenAt;
                 delete md.dataset.cmuThemeQuotedLen;
+                delete md.dataset.cmuThemeQuoteN;
             });
         }
         catch (_) { }
@@ -22739,7 +23549,13 @@ function cmuMain() {
                 md.dataset.cmuThemeLenAt = String(now);
                 continue;
             }
-            if (quotedLen === len || now - Number(md.dataset.cmuThemeLenAt || now) < 450)
+            if (quotedLen === len) {
+                // 글 길이가 같아도 크랙이 안쪽을 새로 그리면(보낸 뒤·다른 탭 다녀온 뒤) 감싼 것이 사라진다. 세어 보고 줄었으면 다시 감싼다
+                const want = Number(md.dataset.cmuThemeQuoteN || 0);
+                if (!want || md.querySelectorAll('[data-cmu-theme-quote]').length >= want)
+                    continue;
+            }
+            else if (now - Number(md.dataset.cmuThemeLenAt || now) < 450)
                 continue;
             const walker = document.createTreeWalker(md, NodeFilter.SHOW_TEXT, {
                 acceptNode(node) {
@@ -22757,6 +23573,7 @@ function cmuMain() {
                 targets.push(node);
             targets.forEach(wrapCmuQuoteTextNode);
             md.dataset.cmuThemeQuotedLen = String(len);
+            md.dataset.cmuThemeQuoteN = String(md.querySelectorAll('[data-cmu-theme-quote]').length);
         }
     }
 
@@ -22933,6 +23750,9 @@ function cmuMain() {
             host.appendChild(popup);
             renderRsLine();
         }
+        // 새로 만들었거나 옮긴 라존데 줄에도 테마 표시를 바로(다음 전체 칠하기까지 테마가 풀려 보이지 않게)
+        if (themeSkinEnabled() && !popup.hasAttribute('data-cmu-theme-radiosonde-skin'))
+            decorateThemeInputAndRadiosondeBorderless();
         popup.classList.toggle('igx-anchor-shell', host === shellAnchor);
         if (host === shellAnchor) {
             popup.style.removeProperty('top');
@@ -32080,7 +32900,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
 }
 
     function startCmuOnce() {
-        delete page.__CMU_4636_BOOT_PENDING__;
+        delete page.__CMU_4921_BOOT_PENDING__;
         try { cmuMain(); }
         catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
     }
