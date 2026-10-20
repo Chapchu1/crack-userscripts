@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.81
+// @version      0.5.82
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.82 · JSON 끝 잘림 분류 및 조회 실패 중복 요청 보완
+ * Chromium EOF 오류도 기존 구간 축소 복구로 연결합니다. 불완전한 응답은 저장하지 않습니다.
+ * 전체 조회 실패 뒤 배경 조회를 겹쳐 실행하지 않고 기존 전면 복구 경로를 유지합니다.
+ * UI·버튼·독립 주기·저장 보호·오류 알림 3초 제한은 변경하지 않습니다.
+ */
 
 /* 0.5.81 · 2.0.5 반영 재대조 및 누락 보완
  * 일반 자동 정리와 외부 답 적용의 저장 전 조회를 보낸 구간·연속성 참고·두 정리 기준까지로 줄입니다.
@@ -735,7 +741,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.81'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.82'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49790,7 +49796,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.81-suite';
+  const SCRIPT_VERSION = '0.5.82-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -51988,7 +51994,7 @@ const WLOG=(()=>{
   // without that last '}': the parse already ended at the object's own close, so nothing is guessed. Anything else fails as before.
   function parseJson(value,operation='AI 응답 해석',details={}){
     const raw=String(value??'').replace(/^\uFEFF/,'').trim(),fenced=raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i),text=fenced?fenced[1].trim():raw;
-    try{return JSON.parse(text);}catch(cause){if(text.endsWith('}'))try{const v=JSON.parse(text.slice(0,-1));if(v&&typeof v==='object'&&!Array.isArray(v)){console.info('[Wish] AI 답 끝의 남는 } 하나를 빼고 읽었습니다 · '+operation);return v;}}catch(_){}const e=new Error('AI 응답 JSON 파싱 실패 · '+(text?'JSON 형식이 잘못되었거나 응답이 잘렸습니다.':'응답 본문이 비어 있습니다.'));e.code='AI_JSON_PARSE';e.truncated=!!text&&/Unexpected end of JSON input|Unterminated string/i.test(String(cause?.message||''));e.diagnostic={...details,responseChars:raw.length,stage:'AI 응답 JSON 해석',path:jsonLocation(cause)};fail(operation,e,details);throw e;}
+    try{return JSON.parse(text);}catch(cause){if(text.endsWith('}'))try{const v=JSON.parse(text.slice(0,-1));if(v&&typeof v==='object'&&!Array.isArray(v)){console.info('[Wish] AI 답 끝의 남는 } 하나를 빼고 읽었습니다 · '+operation);return v;}}catch(_){}const e=new Error('AI 응답 JSON 파싱 실패 · '+(text?'JSON 형식이 잘못되었거나 응답이 잘렸습니다.':'응답 본문이 비어 있습니다.'));e.code='AI_JSON_PARSE';e.truncated=!!text&&(/Unexpected end of JSON input|Unterminated string/i.test(String(cause?.message||''))||Number(String(cause?.message||'').match(/\bposition\s+(\d+)/i)?.[1])===text.length);e.diagnostic={...details,responseChars:raw.length,stage:'AI 응답 JSON 해석',path:jsonLocation(cause)};fail(operation,e,details);throw e;}
   }
   return {tag,kindOf,once,ringOn,viewed,settle,ringMark,ringOk,crackOk,tails:WTAIL,entry:entryOf,run,show,fail,notice,inline,dialogLabel,short,describe,parseJson,jsonLocation,clean,current,view:()=>{const e=[...active.values()].at(-1);return e?{label:e.label}:null;},list:()=>rows.slice().reverse(),find:id=>rows.find(r=>r.id===id)||null,clear(){rows=[];seen=new WeakMap();GM_setValue(KEY,[]);paint();},exportText:()=>JSON.stringify({version:SCRIPT_VERSION,errors:rows.map(r=>({...r,...describe(r)}))},null,2)};
 })();
@@ -66163,7 +66169,8 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)wishHistor
     // RECHECK_MS-WARM_AHEAD_MS old (WARM_AHEAD_MS=0: at expiry, so an idle room reads no more often than 2.0.4's 5-min re-check).
     // Not while the tab is hidden (the return expires the copy anyway), not during a generation or a replay (seed would refuse),
     // not for a room too large to keep a copy, never a second flight for the same room and scope.
-    function warm(room){const rid=String(apiChatIdOf(room)||'');if(!rid||document.hidden||generationPending(rid)||ExternalReplay.pending(rid)||oversize.has(rid))return;
+    // After a failed full read, the foreground path owns retries until a read succeeds.
+    function warm(room){const rid=String(apiChatIdOf(room)||'');if(!rid||document.hidden||generationPending(rid)||ExternalReplay.pending(rid)||oversize.has(rid)||failed.has(rid))return;
       const stamp=scope(rid),r=records.get(rid);if(r&&r.scope===stamp&&Date.now()-r.verifiedAt<RECHECK_MS-WARM_AHEAD_MS)return;
       start(rid,stamp).flight.catch(e=>{if(!isWishHistoryStale(e))console.warn('[Wish] background full-history read held',e);});}
     function freezeMessage(value,seen=new WeakSet()){
