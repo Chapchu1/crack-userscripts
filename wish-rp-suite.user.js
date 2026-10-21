@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.85
+// @version      0.5.86
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.86 · 홈에서 대화 응답교정 다시하기
+ * 기억 정리 버튼 바로 아래에서 기존 최신 응답 검수 경로를 실행합니다.
+ * 중복 실행·방 이동·원문 검증을 유지하며 자동 재시도나 AI 호출을 추가하지 않습니다.
+ * 서버 429/시간 초과 및 실제 휴대폰 발열 해결은 이 변경의 검증 결과가 아닙니다.
+ */
 
 /* 0.5.85 · 통합 정리 형식 복구 및 INFO 알림 안정화
  * 유효하고 충돌 없는 scene_changes 위치만 observe 안으로 교정하며 기존 근거 검증을 유지합니다.
@@ -762,7 +768,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.85'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.86'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49817,7 +49823,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.85-suite';
+  const SCRIPT_VERSION = '0.5.86-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -74998,7 +75004,8 @@ const ta = (k, v, ph = '', h = '', x = '') => `<textarea data-bind="${esc(k)}" p
     const error=!isSuite&&u.error?`<p class="m3-error-detail">${busy?'이전 정리 오류: ':''}${esc(errorText)}</p>`:'';
     const recovery=!isSuite&&u.draft&&!restartRequired?`<p class="m3-muted">임시 결과를 버리고 원문부터 다시 처리해야 할 때만 사용하세요. 현재 적용된 기억은 유지됩니다.</p>${btn('임시 결과를 버리고 다시 시작','draftRestart',{cls:'quiet mini',dis:busy||!ready,icon:'refresh'})}`:'';
     const details=fold('home-memory-details','설정·작업 상세',controls+error+`<div class="m3-card-actions">${btn('실패·주의 기록','errorLogs',{cls:'quiet mini',icon:'doc'})}</div>`+recovery);
-    return `<section class="m3-panel m3-home-auto m3-memory-work${!isSuite&&(u.error||u.draft)?' m3-alert':''}" data-key="home-automation"><div class="m3-row m3-sp"><b>기억 정리</b>${tag(busy?'진행 중':autoOn?'자동 켜짐':'자동 꺼짐',autoOn?'ok':'')}</div>${cadence}${cadenceHelp}<p class="m3-compact-status"${isSuite?'':' data-unified-retry-status'}>${esc(status)}</p>${draftNote}${requestStatusCard(true)}<div class="m3-memory-primary-row">${btn(label,action,{arg,cls:'mini m3-memory-primary',dis:busy,icon})}</div>${details}<small class="m3-muted">${isSuite?'최신 턴 처리 범위는 자동 정리 설정을 따릅니다.':'최신 1턴은 다음 답변 뒤 확정됩니다.'}</small></section>`;
+    const refinerRetry=`<div class="m3-card-actions">${btn('대화 응답교정 다시하기','suiteRefinerRetry',{cls:'mini',icon:'edit',dis:busy||!!WSUITE.coreRefiner?.getState?.().busy||typeof window.__WISH_RP_MANAGER_REFINER__?.reviewLatest!=='function'})}</div>`;
+    return `<section class="m3-panel m3-home-auto m3-memory-work${!isSuite&&(u.error||u.draft)?' m3-alert':''}" data-key="home-automation"><div class="m3-row m3-sp"><b>기억 정리</b>${tag(busy?'진행 중':autoOn?'자동 켜짐':'자동 꺼짐',autoOn?'ok':'')}</div>${cadence}${cadenceHelp}<p class="m3-compact-status"${isSuite?'':' data-unified-retry-status'}>${esc(status)}</p>${draftNote}${requestStatusCard(true)}<div class="m3-memory-primary-row">${btn(label,action,{arg,cls:'mini m3-memory-primary',dis:busy,icon})}</div>${refinerRetry}${details}<small class="m3-muted">${isSuite?'최신 턴 처리 범위는 자동 정리 설정을 따릅니다.':'최신 1턴은 다음 답변 뒤 확정됩니다.'}</small></section>`;
   }
   const manualJobPanel=()=>{
     const j=V.ai.job;
@@ -78738,6 +78745,7 @@ const SuiteIntegration=(()=>{
     suiteNative:leave(()=>WSUITE.suite.open('records','summary')),
     suiteLore:leave(()=>WSUITE.openLore?.()),
     suiteRefiner:leave(()=>WSUITE.coreRefiner?.open()),
+    suiteRefinerRetry:async()=>{const refiner=window.__WISH_RP_MANAGER_REFINER__;if(typeof refiner?.reviewLatest!=='function')throw Error('응답교정이 아직 준비되지 않았어요. 잠시 뒤 다시 눌러 주세요.');return refiner.reviewLatest();},
     suiteLegacy:leave(()=>WSUITE.suite.details()),
     managerUpdate:leave(()=>WSUITE.suite.openWork('update')),
     managerCompression:leave(()=>WSUITE.suite.openWork('compression')),
