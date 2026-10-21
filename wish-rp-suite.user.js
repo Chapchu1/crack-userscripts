@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.87
+// @version      0.5.88
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -768,7 +768,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.87'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.88'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49823,7 +49823,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.87-suite';
+  const SCRIPT_VERSION = '0.5.88-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -51042,13 +51042,16 @@ function normalizeRoomSlots(room) {
     room.autoLogPinnedKeys = Array.isArray(room.autoLogPinnedKeys) ? [...new Set(room.autoLogPinnedKeys.map(String))] : [];
     room.autoLogExcludedKeys = Array.isArray(room.autoLogExcludedKeys) ? [...new Set(room.autoLogExcludedKeys.map(String))] : [];
     room.manualLogSelectedKeys = Array.isArray(room.manualLogSelectedKeys) ? [...new Set(room.manualLogSelectedKeys.map(String))] : [];
-    const legacyDateUpgrade=restoreLegacyDateFallbacks(logSummary.content);
-    if(legacyDateUpgrade.restored){
-      // The AI's hash follows the upgraded text only when the log was still the AI's: a log the user changed keeps that mark.
-      const oldBlocks=parseDatedLogBlocks(logSummary.content),aiText=room.aiAppliedContent?.logSummary===aiHashTiny(logSummary.content);
-      logSummary.content=legacyDateUpgrade.text;
-      remapLogSelectionKeysByIndex(room,oldBlocks,parseDatedLogBlocks(logSummary.content));
-      if(aiText)room.aiAppliedContent.logSummary=aiHashTiny(logSummary.content);
+    if(legacyCheckedLog.get(logSummary)!==logSummary.content){
+      const legacyDateUpgrade=restoreLegacyDateFallbacks(logSummary.content);
+      if(legacyDateUpgrade.restored){
+        // The AI's hash follows the upgraded text only when the log was still the AI's: a log the user changed keeps that mark.
+        const oldBlocks=parseDatedLogBlocks(logSummary.content),aiText=room.aiAppliedContent?.logSummary===aiHashTiny(logSummary.content);
+        logSummary.content=legacyDateUpgrade.text;
+        remapLogSelectionKeysByIndex(room,oldBlocks,parseDatedLogBlocks(logSummary.content));
+        if(aiText)room.aiAppliedContent.logSummary=aiHashTiny(logSummary.content);
+      }
+      legacyCheckedLog.set(logSummary,logSummary.content);
     }
 
     room.activeLorePackIds = Array.isArray(room.activeLorePackIds) ? [...new Set(room.activeLorePackIds.map(String).filter(Boolean))] : [];
@@ -51084,10 +51087,15 @@ function normalizeRoomSlots(room) {
     room.loreAutomation.lastError = String(room.loreAutomation.lastError || '');
     room.loreAutomation.failureCount = Math.max(0, Number(room.loreAutomation.failureCount || 0));
     room.loreAutomation.paused = room.loreAutomation.paused === true;
-    room.logSemanticIndex = Array.isArray(room.logSemanticIndex) ? room.logSemanticIndex.filter(row => row && row.key && Array.isArray(row.vector)).map(row => ({
+    // Index writers replace the array. Repeated read access must not copy every
+    // vector again; a freshly loaded/replaced array still gets full validation.
+    if(!normalizedLogIndexes.has(room.logSemanticIndex)){
+      room.logSemanticIndex = Array.isArray(room.logSemanticIndex) ? room.logSemanticIndex.filter(row => row && row.key && Array.isArray(row.vector)).map(row => ({
       key:String(row.key), sourceHash:String(row.sourceHash || ''), model:String(row.model || APP.loreEmbeddingModel),
       dimensions:Number(row.dimensions || row.vector.length || APP.loreEmbeddingDimensions), vector:row.vector.map(Number), updatedAt:Number(row.updatedAt || 0),
-    })) : [];
+      })) : [];
+      normalizedLogIndexes.add(room.logSemanticIndex);
+    }
     room.lastLoreSearch = room.lastLoreSearch && typeof room.lastLoreSearch === 'object' ? room.lastLoreSearch : null;
 
     room.autoScanLastMessageId = String(room.autoScanLastMessageId || '');
@@ -51525,11 +51533,15 @@ const WishRecoveryPolicy=(()=>{
     if(error?.code==='AI_TIMEOUT'&&Number(error?.diagnostic?.requestMs)>0)return 'timeout';
     return '';
   }
-  function smaller(prior,width,error,settingsKey){
-    if(!splitCause(error)||!Number.isInteger(width)||width<2)return null;
+  function smaller(prior,width,error,settingsKey,sourceKey=''){
+    const reason=splitCause(error)||(!error?.noAutoRetry&&error?.code==='AI_JSON_PARSE'&&sourceKey?'json':'');
+    if(!reason||!Number.isInteger(width)||width<(reason==='json'?1:2))return null;
     const old=prior?.version===1&&prior.settingsKey===settingsKey?prior:null;
+    // Syntax errors do not prove truncation. Regenerate that unprocessed start
+    // once, with a smaller scope, and retain the budget across reloads/timeouts.
+    if(reason==='json'&&old?.jsonSourceKey===sourceKey)return null;
     const maxTurns=Math.max(1,Math.min(Math.floor(width/2),Number(old?.maxTurns)||48));
-    return {version:1,settingsKey,maxTurns,reason:splitCause(error),updatedAt:Date.now()};
+    return {version:1,settingsKey,maxTurns,reason,updatedAt:Date.now(),...(old?.jsonSourceKey?{jsonSourceKey:old.jsonSourceKey}:{}),...(reason==='json'?{jsonSourceKey:sourceKey}:{})};
   }
   function width(record,settingsKey){return record?.version===1&&record.settingsKey===settingsKey&&Number.isInteger(record.maxTurns)&&record.maxTurns>=1&&record.maxTurns<=48?record.maxTurns:0;}
   function shortlist(rows,limit=48,charLimit=36000){
@@ -51935,7 +51947,7 @@ const WLOG=(()=>{
     else if(r.level==='주의'){category='주의 안내';cause='작업 중 확인이 필요한 안내입니다. 전체 작업 실패를 의미하지 않을 수 있습니다.';next='아래 문구에 적힌 완료 범위와 남은 작업을 확인하세요.';}
     if(c==='CRACK_SECURITY_CHALLENGE'){category='사이트 보안 확인';cause='서버가 보안 확인 페이지를 반환했습니다.';next='크랙 사이트를 직접 열어 필요한 확인을 완료한 뒤 다시 시도하세요. 다른 서버로 자동 전환하지 않습니다.';}
     else if(service==='크랙'&&http>=500){category='크랙 대화 서버 오류';cause=(r.host?r.host+'에서 ':'크랙 대화 조회·저장 서버에서 ')+'HTTP '+http+'을 받았습니다. 이 오류만으로 탬퍼몽키 차단 여부는 확인할 수 없습니다.';next=r.method==='GET'?'대화 전체 조회는 첫 페이지의 contents-api 장애 때 crack-api로 한 번 전환합니다. 여기까지 실패했다면 대기 후 홈의 [다시 정리] 또는 [서버 재검증]을 한 번 누르세요. 기억 재구축·초기화는 필요하지 않습니다.':'서버 반영 여부를 먼저 재검증합니다. 성공 표시만으로 저장됐다고 처리하지 않으며, 본문 대조를 통과해야 완료됩니다.';}
-    else if(c==='WISH_BATCH_SPLIT'){category='정리 구간 자동 축소';cause='이번 묶음의 AI 응답이 잘렸거나 실제 처리 시간이 한도를 넘었습니다.';next='자동 정리가 켜져 있으면 30초 뒤 더 작은 묶음으로 이어갑니다. 수동 모드라면 [다시 정리]를 누르세요. 이미 완료한 묶음은 다시 요청하지 않습니다.';}
+    else if(c==='WISH_BATCH_SPLIT'){const formatRetry=r.stage==='정리 응답 형식 재요청';category=formatRetry?'정리 응답 형식 재요청':'정리 구간 자동 축소';cause=formatRetry?'이번 묶음의 AI 응답을 완전한 JSON으로 읽지 못했습니다. 실패한 구간만 한 번 다시 요청합니다.':'이번 묶음의 AI 응답이 잘렸거나 실제 처리 시간이 한도를 넘었습니다.';next=formatRetry?'자동 정리가 켜져 있으면 30초 뒤 실패한 구간을 다시 요청합니다. 수동 모드라면 [이어서 정리·검증]을 누르세요. 이미 완료한 묶음은 다시 요청하지 않습니다.':'자동 정리가 켜져 있으면 30초 뒤 더 작은 묶음으로 이어갑니다. 수동 모드라면 [다시 정리]를 누르세요. 이미 완료한 묶음은 다시 요청하지 않습니다.';}
     else if(c==='WISH_BATCH_MINIMUM'){category='한 턴 처리 한도';cause='한 턴까지 줄인 요청도 처리하지 못했습니다. 같은 요청의 자동 반복을 멈췄습니다.';next='AI 연결에서 추론 강도를 낮추거나 모델·출력 한도를 조정한 뒤 [다시 정리]를 누르세요. 기존 기억과 원문은 남아 있습니다.';}
     else if(c==='AI_OUTPUT_LIMIT'||c==='AI_JSON_TRUNCATED'){category='AI 출력 잘림';cause='AI가 완전한 결과를 반환하기 전에 출력이 끝났습니다. 잘린 결과는 적용하지 않습니다.';next='자동 정리는 미완료 묶음만 나눠 다시 처리합니다. 한 턴에서도 반복되면 추론 강도를 낮추거나 모델을 바꿔 주세요. 파일을 붙여넣는 작업이면 완성된 JSON 전체를 다시 받으세요.';}
     else if(c==='AI_TIMEOUT'&&r.requestMs===0&&r.queueWaitMs>0){category='AI 순서 대기 시간 초과';cause='다른 작업의 순서를 기다리다가 제한 시간을 넘었습니다. 이번 요청은 서버 처리에 들어가지 않았습니다.';next='진행 중인 작업이 끝난 뒤 다시 정리하세요. 대기만 한 경우에는 정리할 턴 수를 줄이지 않습니다.';}
@@ -57624,6 +57636,17 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     const processed={memory:0,observe:0};for(const p of d.packets){processed.memory+=p.memory?p.mem.length:0;processed.observe+=p.observe?p.obs.length:0;}
     return {id:d.id,rev:d.rev,phase:d.phase,processed,remaining:{memory:Math.max(0,d.total.memory-processed.memory),observe:Math.max(0,d.total.observe-processed.observe)},reviewIndex:d.reviewIndex,totalReviews:d.packets.length};
   }
+  function draftGoalTotals(d,list){
+    const total={memory:0,observe:0};
+    for(const [kind,goal] of Object.entries(d.goals)){
+      if(!['memory','observe'].includes(kind))return null;
+      const cursor=String(d.baseRoom?.unified?.[kind+'Cursor']||''),start=cursor?turnAt(list,cursor):-1,end=turnAt(list,String(goal.messageId||''));
+      // Do not guess when either end is absent from the freshly checked source.
+      if(cursor&&start<0||end<0||end<=start)return null;
+      total[kind]=end-start;
+    }
+    return total;
+  }
   function restoreDeferredFailure(u,d){if(!d.deferredFailure)return;const f=d.deferredFailure;u.partialFailure=copy(f);u.lastError=f.message||'다른 묶음 검증 보류';u.lastErrorCode=f.code||'';u.failedKind=f.kind;u.retry=null;}
   async function persistDraft(room,d){await writeDraft(room,d);room.unified.draft=draftSummary(d);room.unified.lastError='';room.unified.lastErrorCode='';room.unified.lastErrorNoAutoRetry=false;room.unified.failedKind='';room.unified.retry=null;delete room.unified.partialFailure;restoreDeferredFailure(room.unified,d);room.unified.status='임시 정리 저장 · 최종 검증 전 RP 미반영';await saveRoom(room);}
   function draftStatus(room){
@@ -57879,6 +57902,12 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       d={...d,settingsStamp:settingStamp};await persistDraft(room,d);
     }
     assertBasis(cog,frame);
+    const goalTotals=draftGoalTotals(d,list);
+    if(goalTotals&&(goalTotals.memory!==d.total.memory||goalTotals.observe!==d.total.observe)){
+      // Older drafts counted post-goal RP in their denominator. Correct only
+      // that display metadata after the original source/basis guards pass.
+      d={...d,total:goalTotals};await persistDraft(room,d);assertBasis(cog,frame);
+    }
     if(!force&&!draftAllowed(room,d)){room.unified.draft={...draftSummary(d),phase:'paused'};return false;}
     if(draftFinished(d)&&!sourceStillPresent(d.sourceManifest,frame.stable)){d={...d,phase:'waiting'};await persistDraft(room,d);return false;}
     active.add(room.chatId);quietCheck=false;
@@ -58083,7 +58112,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     if(!sourceStillPresent(d.sourceManifest,latest.stable)){d={...d,phase:'waiting'};await persistDraft(room,d);return false;}
     assertDraftPublishIdle(room);
     const finalRoom=copy(d.room);delete finalRoom.unified.draft;delete finalRoom.unified.catchup;delete finalRoom.unified.partialFailure;delete finalRoom.unified.batchRecovery;
-    Object.assign(finalRoom.unified,{lastError:'',lastErrorCode:'',lastErrorNoAutoRetry:false,failedKind:'',retry:null,status:'원문 대조 '+d.packets.length+'묶음 통과 · 기억·인물 최종 반영 완료',lastRunAt:Date.now()});
+    Object.assign(finalRoom.unified,{lastError:'',lastErrorCode:'',lastErrorNoAutoRetry:false,failedKind:'',retry:null,status:'원문 대조 '+d.packets.length+'묶음 통과 · '+(d.memoryChanged?(d.observeChanged?'기억·인물':'기억'):'인물')+' 이번 목표 반영 완료',lastRunAt:Date.now()});
     restoreDeferredFailure(finalRoom.unified,d);if(d.deferredFailure)finalRoom.unified.status+=' · '+(d.deferredFailure.kind==='memory'?'기억':'인물')+' 검증은 계속 보류';
     const finalCog=d.observeChanged?{...copy(d.cog),rev:(Number(liveCog.rev)||0)+1}:null;
     const relationshipRejectionAudit=draftRelationshipRejectionArchive(d),trajectoryArchives=draftTrajectoryArchives(d),stateRepairAudit=draftStateRepairArchive(d);
@@ -58097,12 +58126,15 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     if(!sourceStillPresent(d.sourceManifest,commitFrame.stable)){d={...d,phase:'waiting'};await persistDraft(room,d);return false;}
     if(!force&&!draftAllowed(room,d)){d={...d,phase:'paused'};await persistDraft(room,d);return false;}
     staged.remainingMemoryTurns=draftRemainingTurns(commitFrame,finalRoom.unified.memoryCursor);
+    const remainingObserve=draftRemainingTurns(commitFrame,finalRoom.unified.observeCursor),savedTurns=draftSummary(d).processed;
+    const savedLabel=[d.memoryChanged?'기억 '+savedTurns.memory+'턴':'',d.observeChanged?'인물 '+savedTurns.observe+'턴':''].filter(Boolean).join(' · ');
+    finalRoom.unified.status+=' · 이번 저장 '+savedLabel+' · 남은 기억 '+staged.remainingMemoryTurns+'턴·인물 '+remainingObserve+'턴';
     assertDraftPublishIdle(room);
     const areaDone=['memory','observe'].filter(kind=>d[kind==='memory'?'memoryChanged':'observeChanged']&&draftRemainingTurns(commitFrame,finalRoom.unified[kind+'Cursor'])===0);areaSettle(finalRoom,areaDone);
     await atomicCommit(room,commitCog,livePacks(),staged);areaSettle(room,areaDone,true);
     try{await bridge().refresh();if(room.pending)await refreshPendingAfterAutomaticMemory(room);}catch(e){WLOG.fail('최종 기억 반영 후 동기화',e);recordPendingSyncError(room,e);notify('검증된 기억은 저장됐습니다. 서버 주입 갱신은 다음 전송 때 재시도합니다.','warn',6000);}
     try{state.v2Cognition=await(bridge().getView||bridge().getRoom).call(bridge(),apiChatIdOf(room));}catch{}
-    updateCounts(room,latest);if(d.notices?.length)WishMemorySafety.reportNotices(d.notices,room.unified.status);else notify(d.deferredFailure?room.unified.status:tidyCompletionText(d.memoryChanged,d.observeChanged),d.deferredFailure?'warn':'success',5000);return true;
+    updateCounts(room,commitFrame);if(d.notices?.length)WishMemorySafety.reportNotices(d.notices,room.unified.status);else notify(room.unified.status,d.deferredFailure?'warn':'success',5000);return true;
   }
 
   function tidyCompletionText(memory,observe){return memory?(observe?'기억·인물 통합 정리 완료':'기억 정리 완료'):observe?'인물 정리 완료':'정리 완료';}
@@ -58123,11 +58155,16 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       return {result,data};
     }catch(error){
       const width=new Set([...(p.memory?p.mem:[]),...(p.observe?p.obs:[])].map(t=>String(t.key))).size;
-      const next=WishRecoveryPolicy.smaller(room.unified?.batchRecovery,width,error,requestKey);
+      const sourceKey=JSON.stringify([p.memory?String(p.mem[0]?.key||''):'',p.observe?String(p.obs[0]?.key||''):'']);
+      const next=WishRecoveryPolicy.smaller(room.unified?.batchRecovery,width,error,requestKey,sourceKey);
       if(next&&state.currentRoom===room&&!localRestoreInProgress()&&restoreEpoch===localRestoreEpoch&&!ExternalReplay.changed(apiChatIdOf(room),replay)&&requestKey===tidyRecoveryKey()){
         room.unified.batchRecovery=next;
-        const reason=next.reason==='timeout'?'AI 응답 시간 초과':'AI 출력 잘림·요청 크기';
-        throw Object.assign(Error(reason+'로 이번 '+width+'턴 묶음을 최대 '+next.maxTurns+'턴씩 나눠 다시 정리합니다. 완료한 묶음·원문·기억은 유지했습니다.'),{code:'WISH_BATCH_SPLIT',retryAfterMs:30000,cause:error,diagnostic:{...error.diagnostic,stage:'정리 구간 자동 축소',outcome:'not-applied',batchTurns:width,nextBatchTurns:next.maxTurns}});
+        const reason=next.reason==='timeout'?'AI 응답 시간 초과':next.reason==='json'?'AI 응답 형식 오류':'AI 출력 잘림·요청 크기';
+        const recovery=next.reason==='json'?'실패한 구간만 최대 '+next.maxTurns+'턴으로 1회 다시 요청합니다.':'이번 '+width+'턴 묶음을 최대 '+next.maxTurns+'턴씩 나눠 다시 정리합니다.';
+        throw Object.assign(Error(reason+'로 '+recovery+' 완료한 묶음·원문·기억은 유지했습니다.'),{code:'WISH_BATCH_SPLIT',retryAfterMs:30000,cause:error,diagnostic:{...error.diagnostic,stage:next.reason==='json'?'정리 응답 형식 재요청':'정리 구간 자동 축소',outcome:'not-applied',batchTurns:width,nextBatchTurns:next.maxTurns}});
+      }
+      if(error?.code==='AI_JSON_PARSE'&&!error.truncated&&room.unified?.batchRecovery?.settingsKey===requestKey&&room.unified.batchRecovery.jsonSourceKey===sourceKey){
+        error.noAutoRetry=true;error.message+=' 같은 구간의 형식 재요청 1회를 마쳐 자동 반복을 멈췄습니다. 완료한 임시 결과는 유지됩니다.';
       }
       if(WishRecoveryPolicy.splitCause(error)&&width===1){
         error.code='WISH_BATCH_MINIMUM';error.noAutoRetry=true;error.message+=' 한 턴까지 줄여도 처리하지 못해 자동 반복을 멈췄습니다. AI 연결에서 추론 강도를 낮추거나 모델을 바꾼 뒤 다시 정리해 주세요.';
@@ -58137,7 +58174,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
   }
 
   function limitLiveBatch(list,p,u,unconfirmed=[],savedWidth=0,adaptiveWidth=0){
-    const ranges={},targets={},total={memory:p.mem.length,observe:p.obs.length};
+    const ranges={},targets={};
     for(const [kind,key] of [['memory','mem'],['observe','obs']]){
       if(!p[kind]){ranges[key]=[];continue;}
       let rows=p[key],target=String(rows.at(-1)?.key||'');
@@ -58149,6 +58186,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       }
       ranges[key]=rows;if(rows.length)targets[kind]=target;
     }
+    const total={memory:ranges.mem.length,observe:ranges.obs.length};
     const wanted=new Set([...ranges.mem,...ranges.obs].map(t=>String(t.key))),selected=new Set();let chars=0;
     const sourceRows=list.filter(row=>wanted.has(String(row.key))).slice(0,16);
     const averageChars=sourceRows.reduce((sum,row)=>sum+JSON.stringify(row).length,0)/Math.max(1,sourceRows.length);
