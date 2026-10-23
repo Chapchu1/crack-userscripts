@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.9.2.1
-// @description  4.9.2.1: 원작자 4.7~4.9.1 라존데·모델 호환·긴 방 경량화·로그 캡처·즉시 소설/채팅 전환 통합. 업데이트 글의 재생성 지침 건너뛰기 추가. 기존 UI·버튼·울트라챗·선물권·통합 부가기능 유지.
+// @version      4.9.2.2
+// @description  4.9.2.2: 라존데 Gemini 4 Argon 누락 수정. 공식 모델 목록 보존·오래된 미지원 판정 복구·Argon 기본 목록 추가. 기존 모델 이름·아이콘·숨김 설정 및 합본 기능 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.9.2.1
-// @description  4.9.2.1: 원작자 4.7~4.9.1 라존데·모델 호환·긴 방 경량화·로그 캡처·즉시 소설/채팅 전환 통합. 업데이트 글의 재생성 지침 건너뛰기 추가. 기존 UI·버튼·울트라챗·선물권·통합 부가기능 유지.
+// @version      4.9.2.2
+// @description  4.9.2.2: 라존데 Gemini 4 Argon 누락 수정. 공식 모델 목록 보존·오래된 미지원 판정 복구·Argon 기본 목록 추가. 기존 모델 이름·아이콘·숨김 설정 및 합본 기능 유지.
 // @author       chu
 // @homepageURL https://github.com/Chapchu1/crack-userscripts
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/crack-mobile-utility.user.js
@@ -45,8 +45,8 @@
     'use strict';
     if (window.top !== window.self) return;
     const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.9.2.1' || page.__CMU_4921_BOOT_PENDING__) return;
-    page.__CMU_4921_BOOT_PENDING__ = true;
+    if (page.__CRACK_MOBILE_UTILITY_RUNTIME__?.version === '4.9.2.2' || page.__CMU_4922_BOOT_PENDING__) return;
+    page.__CMU_4922_BOOT_PENDING__ = true;
     function earlySorterEnabled() {
         for (const key of ['cmu_settings_v010_beta', 'cmu_settings_v010_beta_backup']) {
             try {
@@ -1070,7 +1070,7 @@ function createCmuShortcutSorter({ isEnabled = () => true, notify = () => {}, on
 
 function cmuMain() {
     'use strict';
-    const VERSION = '4.9.2.1';
+    const VERSION = '4.9.2.2';
     // Selective merge: custom 4.5.0.4.15 + upstream 4.5.5 + Dashboard 3.4.7 quick controls + Memory UI 2.2.1.
     // Author 4.5.7 update: theme persistence, sidebar SVGs, heading typography, fullscreen input.
     // Preserve custom model selection, CDN radiosonde and external-extension bridges.
@@ -10686,7 +10686,10 @@ function cmuMain() {
     function sortRsModels(models) {
         const groupOrder = new Map(RS_GROUPS.map(([id], index) => [id, index]));
         return [...models].sort((a, b) => {
-            if (Number.isInteger(a.crackOrder) && Number.isInteger(b.crackOrder)) return a.crackOrder - b.crackOrder;
+            const aMapped = Number.isInteger(a.crackOrder);
+            const bMapped = Number.isInteger(b.crackOrder);
+            if (aMapped !== bMapped) return aMapped ? -1 : 1;
+            if (aMapped && bMapped) return a.crackOrder - b.crackOrder;
             const ag = rsModelGroup(a);
             const bg = rsModelGroup(b);
             const groupDiff = (groupOrder.get(ag) ?? 999) - (groupOrder.get(bg) ?? 999);
@@ -18223,12 +18226,13 @@ function cmuMain() {
     const YAME_MODELS = [
         { slug: 'yame-fable5', apiId: 'fable5', source: 'yame', label: 'Fable 5.0', short: 'F5' },
     ];
-    // Built-in list for offline discovery (rs.igx.kr dashboard, 2026-10-01); live discovery adds newer models.
+    // Built-in list for offline discovery; Gemini 4 Argon verified on rs.igx.kr on 2026-10-23.
     const FALLBACK_MODELS = [
         ['claude-fable-5.1', 'Claude Fable 5.1', 'F5.1'], ['claude-opus-5.5', 'Claude Opus 5.5', 'O5.5'],
         ['claude-opus-5', 'Claude Opus 5', 'O5'], ['claude-opus-4.8', 'Claude Opus 4.8', 'O4.8'],
         ['claude-opus-4.7', 'Claude Opus 4.7', 'O4.7'], ['claude-opus-4.6', 'Claude Opus 4.6', 'O4.6'],
         ['claude-sonnet-5.5', 'Claude Sonnet 5.5', 'S5.5'], ['claude-sonnet-5', 'Claude Sonnet 5', 'S5'],
+        ['gemini-4-argon', 'Gemini 4 Argon', 'G4A'],
         ['gemini-3.1-pro-preview', 'Gemini 3.1 Pro (Preview)', 'G3.1P'], ['gemini-2.5-pro', 'Gemini 2.5 Pro', 'G2.5P'],
         ['gemini-3.8-flash', 'Gemini 3.8 Flash', 'G3.8F'], ['gemini-3.7-flash', 'Gemini 3.7 Flash', 'G3.7F'],
         ['gemini-3.6-flash', 'Gemini 3.6 Flash', 'G3.6F'], ['gemini-3.5-flash', 'Gemini 3.5 Flash', 'G3.5F'],
@@ -18401,7 +18405,7 @@ function cmuMain() {
     // The CDN sends `Access-Control-Allow-Origin: *`; the igx host stays as an extension-only fallback.
     const IGX_API_BASES = ['https://igx-radiosonde-api-striker.b-cdn.net/v2/', `${IGX_BASE_URL}/api/v2/`];
     // The CDN pins /v2/models (query strings are ignored); only the dashboard lists newly added models.
-    const IGX_MODEL_CACHE_KEY = 'cmu_rs_models_v1';
+    const IGX_MODEL_CACHE_KEY = 'cmu_rs_models_v2'; // Refresh old catalogs once; keep visibility/settings keys unchanged.
     const IGX_MODEL_CACHE_MS = 6 * 60 * 60 * 1000;
     var igxV2Models = null;
     let igxModelListPromise = null;
@@ -18705,9 +18709,11 @@ function cmuMain() {
         return set;
     }
     function rsCheckState(slug, known) {
+        // A confirmed catalog entry wins over a cached transient 400/404.
+        if (known.has(slug)) return 'ok';
         const c = rsCheckLoad()[slug];
         if (c && Date.now() - Number(c.at || 0) < (c.ok ? RS_CHECK_OK_MS : RS_CHECK_BAD_MS)) return c.ok ? 'ok' : 'bad';
-        return known.has(slug) ? 'ok' : 'unknown';
+        return 'unknown';
     }
     function rsEngineCandidates(engine) {
         const e = String(engine || '').toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -18783,22 +18789,47 @@ function cmuMain() {
         RS.discoveryPromise = (async () => {
             const gen = RS.listGen || 0;
             const previous = JSON.stringify(RS.models);
-            let crack = rsCrackModelList();
-            if (crack.pending.length && await rsCheckPending(crack.pending)) crack = rsCrackModelList();
-            if (crack.list.length) {
-                RS.models = ensureUniqueShorts(crack.list);
-            }
-            else try {
+            // Crack metadata supplies names/icons; a partial catalog must not remove IGX models.
+            let officialModels = [];
+            try {
                 const slugs = await getIgxOfficialModels();
-                const discovered = ensureUniqueShorts(slugs.filter(looksLikeModelSlug).map(makeModelMeta));
-                if (discovered.length < 1) throw new Error('insufficient model list');
-                RS.models = [...YAME_MODELS, ...discovered];
+                const discovered = slugs.filter(looksLikeModelSlug).map(makeModelMeta);
+                if (!discovered.length) throw new Error('insufficient model list');
+                officialModels = [...YAME_MODELS, ...discovered];
             }
             catch (error) {
                 if (!RS.models.length) RS.models = DEFAULT_RS_MODELS.map(model => ({ ...model }));
                 // Visibility/route cancellation is not a completed discovery. Resume on the next visible refresh.
                 if (error?.name === 'AbortError') return RS.models;
+                officialModels = RS.models;
             }
+            let crack = rsCrackModelList();
+            if (crack.pending.length && await rsCheckPending(crack.pending)) crack = rsCrackModelList();
+            const officialByEngine = new Map(officialModels.filter(model => model.source !== 'yame')
+                .map(model => [rsNormVer(model.slug), model]));
+            const merged = new Map();
+            for (const model of crack.list) {
+                const official = model.source === 'yame' ? officialByEngine.get(rsNormVer(model.engine)) : null;
+                const entry = official ? { ...model, slug: official.slug, apiId: official.apiId,
+                    source: official.source, short: official.short } : model;
+                if (!merged.has(entry.slug)) merged.set(entry.slug, entry);
+            }
+            const visibility = loadRsVisibility();
+            let visibilityChanged = false;
+            for (const model of officialModels) {
+                // The legacy measurement is a fallback for the same engine, not a second model.
+                const official = model.source === 'yame' ? officialByEngine.get(rsNormVer(model.label)) : null;
+                if (official) {
+                    if (!Object.prototype.hasOwnProperty.call(visibility, official.slug) && typeof visibility[model.slug] === 'boolean') {
+                        visibility[official.slug] = visibility[model.slug];
+                        visibilityChanged = true;
+                    }
+                    continue;
+                }
+                if (!merged.has(model.slug)) merged.set(model.slug, model);
+            }
+            if (visibilityChanged) saveRsVisibility(visibility);
+            RS.models = ensureUniqueShorts([...merged.values()]);
             // 도중에 크랙 목록이 바뀌었으면 '다 만들었음'으로 두지 않는다 → 다음 갱신이 새 목록으로 다시 만든다
             RS.discoveryAt = (RS.listGen || 0) === gen ? Date.now() : 0;
             if (!RS.discoveryAt) RS.pendingRefresh = true;
@@ -32900,7 +32931,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
 }
 
     function startCmuOnce() {
-        delete page.__CMU_4921_BOOT_PENDING__;
+        delete page.__CMU_4922_BOOT_PENDING__;
         try { cmuMain(); }
         catch (error) { CMU_EARLY_SORTER.destroy(); console.error('[CMU] 초기화 실패', error); }
     }
