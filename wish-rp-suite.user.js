@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.90
+// @version      0.5.91
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -768,7 +768,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.90'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.91'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49823,7 +49823,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.90-suite';
+  const SCRIPT_VERSION = '0.5.91-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -79170,8 +79170,13 @@ Object.assign(WSUITE.host, {
         expectedRaw=raw;
       };
       await beforeWrite();
-      await patchMessage(chatId,target.id,nextRaw,expectedRaw,{beforeWrite});
-      await verifyRefinerMessage(chatId,target.id,nextRaw,expectedRaw,()=>{assertScope();if(state.currentRoom!==room)throw stale();});
+      let patchError=null;
+      try{await patchMessage(chatId,target.id,nextRaw,expectedRaw,{beforeWrite});}
+      catch(error){if(isCrackAuthError(error))throw error;patchError=error;}
+      // A saved PATCH can outlive its acknowledgement or stale GETs. Reconcile
+      // only by reading the exact correction; never replay it after a conflict.
+      try{await verifyRefinerMessage(chatId,target.id,nextRaw,expectedRaw,()=>{assertScope();if(state.currentRoom!==room||(patchError&&generationPending(chatId)))throw stale();});}
+      catch(error){throw patchError||error;}
       let pendingSaveError='';
       if(parts?.found&&String(room.pending?.messageId)===String(target.id)){
         const p=room.pending;p.originalText=String(newText);p.originalChars=String(newText).length;p.carrierChars=nextRaw.length;p.serverChars=nextRaw.length;p.verified=true;p.verifiedAt=Date.now();
