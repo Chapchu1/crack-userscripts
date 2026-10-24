@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🖼️ Crack Custom Room Image Background (배경 이미지&테마)
 // @namespace    crack-custom-room-background
-// @version      4.3.1.1
+// @version      4.3.1.2
 // @description  4.3.1.1: 원작자 4.3.1 전송 버튼 모양 선택·렌더링 최적화 통합. 기존/추가 테마 분류·사용자 테마 44종·장식선·따옴표 강조·기존 UI 유지.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
@@ -55,7 +55,7 @@
   }
 
   const SCRIPT_NAME = 'Custom Room Image Background';
-  const VERSION = '4.3.1.1';
+  const VERSION = '4.3.1.2';
 
   // User artwork: original filenames are the visible theme names.
   const USER_THEME_PACK = Object.freeze([
@@ -1025,6 +1025,160 @@
     return '#' + a.map((n, i) => Math.round(n + (b[i] - n) * amount).toString(16).padStart(2, '0')).join('');
   }
 
+  // Added themes: artwork-derived pastel tones; no runtime image sampling.
+  const ADDED_THEME_TONES = Object.freeze({
+    pearlwave: ['#b7dbe7','#d7c9e7','#eee0bf','droplet'],
+    blueknot: ['#b7cce9','#d5c9e4','#e6e4ef','ribbon'],
+    cinnamusic: ['#b5d0ed','#efd3dc','#f0e5c9','softstar'],
+    cinnaboard: ['#bdd8e6','#e6d3b9','#f2e4cd','cloud'],
+    cinnadream: ['#bdcfeb','#d9ccec','#f1d8e2','crescent'],
+    cinnacushion: ['#c5deee','#ead7bf','#f2e7d3','cloud'],
+    cinnaribbon: ['#bdd8ed','#ebcbdc','#ede4c9','ribbon'],
+    cinnawizard: ['#c8c5e8','#bcd9ed','#eddfb3','softstar'],
+    cinnapuff: ['#b8dcec','#eecad9','#e6d7ed','softheart'],
+    chiiv: ['#bfd9e7','#efced7','#efe3ba','softstar'],
+    chiijudy: ['#bacce7','#d4c6e4','#ebd9bf','softstar'],
+    chiihula: ['#c2dcb5','#edccbf','#f0dfad','blossom'],
+    chiifairy: ['#d9c7e9','#edcbdc','#c4dfcb','blossom'],
+    xiaocard: ['#c0dbaf','#dfc7e8','#eadcb4','card'],
+    xiaosanta: ['#e8bfc4','#d9d7e5','#ead5b5','softstar'],
+    cherrystaff: ['#e9bfd7','#d8c9e9','#edddac','wingheart'],
+    kerodream: ['#e9d292','#e6bdaf','#e9dfc9','cloud'],
+    kiraramono: ['#d9d5cf','#bfc5d3','#e9dcca','blossom'],
+    sailormoon: ['#e8d29e','#e1bdc9','#c3ccea','crescent'],
+    cherryxiaolang: ['#edc3d5','#c2dbcb','#ebdbaf','wingheart']
+  });
+
+  function getAddedThemeTones(style) {
+    const theme = USER_THEME_INDEX.get(style);
+    if (theme) return [theme.accent, theme.secondary, theme.highlight, theme.motif];
+    return ADDED_THEME_TONES[style] || null;
+  }
+
+  function getAddedThemePalette(style, light = false, tones = null) {
+    const t = tones || getAddedThemeTones(style);
+    if (!t) return null;
+    const a = userPackMix(t[0], '#fffaf8', .12);
+    const b = userPackMix(t[1], '#fffaf8', .10);
+    const ink = userPackMix(a, light ? '#202a35' : '#fffdf9', light ? .87 : .84);
+    const muted = userPackMix(b, light ? '#38434d' : '#939daa', light ? .82 : .48);
+    return {
+      textColor: ink, emColor: muted, italicTextColor: muted,
+      strongColor: userPackMix(a, light ? '#344451' : '#fffdf9', light ? .76 : .20),
+      strongBgTextColor: light ? userPackMix(a, '#26313d', .84) : ink,
+      dialogueTextColor: '#ffffff', dialogueBg: userPackMix(a, '#26333d', .70),
+      thoughtBg: b,
+      thoughtTextColor: userPackMix(b, light ? '#344451' : '#fffdf9', light ? .78 : .42),
+      italicBg: b, strongBg: a, codeAccent: a
+    };
+  }
+
+  function getEffectiveThemeColors(settings = CONFIG, light = document.documentElement.getAttribute('data-sgb-theme') === 'light') {
+    const colors = { ...settings };
+    if (getAddedThemeTones(settings.uiStyle)) {
+      if (settings.themeRecommendedColorsEnabled) {
+        const palettes = getUiStylePaletteDefinitions(settings.uiStyle);
+        const p = palettes[Math.max(0, Math.min(palettes.length - 1, Number(settings.uiPaletteIndex) || 0))];
+        Object.assign(colors, p?.patch, light ? p?.lightPatch : null);
+      }
+      colors.dialogueTextColor = '#ffffff';
+    } else if (settings === CONFIG) {
+      Object.assign(colors, getActivePaletteLightPatch() || {});
+    }
+    return colors;
+  }
+
+  function applyAddedCodeColors(values, colors, light) {
+    const t = getAddedThemeTones(CONFIG.uiStyle);
+    if (!t) return;
+    const a = colors.codeAccent, b = colors.thoughtBg;
+    values.set('--sgb-added-code-surface', userPackMix(b, light ? '#fffdf8' : '#10151c', light ? .91 : .94));
+    values.set('--sgb-added-code-head', userPackMix(a, light ? '#fffdf8' : '#202832', light ? .58 : .84));
+    values.set('--sgb-added-code-line', userPackMix(a, light ? '#84909a' : '#343c48', light ? .20 : .63));
+    values.set('--sgb-added-code-ink', light ? userPackMix(a, '#26333f', .82) : userPackMix(a, '#fffdf9', .72));
+    values.set('--sgb-added-code-mark', userPackSvgUrl(userPackMotif(t[3] || 'softstar', a, b, t[2])));
+  }
+
+  function buildAddedCodeblockCss() {
+    const s = `html.${CLS_ACTIVE}[data-sgb-added-theme="on"][data-sgb-ui-style]`;
+    const c = `${s}[data-sgb-code-decor="on"] main`;
+    const filled = `${s}[data-sgb-code-decor="on"][data-sgb-code-bg="on"] main`;
+    return `
+      ${s} main [data-sgb-message-group] .wrtn-markdown {color:var(--sgb-readable-text)!important;}
+      ${s} main [data-sgb-message-group] [data-sgb-quote="double"],
+      ${s} main [data-sgb-message-group] [data-sgb-quote="double"] * {
+        color:#fff!important;-webkit-text-fill-color:#fff!important;
+      }
+      ${s}[data-sgb-dialogue-bg="on"] main [data-sgb-message-group] [data-sgb-quote="double"] {
+        background:rgb(var(--sgb-dialogue-rgb))!important;border-radius:5px!important;
+        padding:.04em .22em!important;text-shadow:none!important;
+      }
+      ${s}[data-sgb-dialogue-bg="off"] main [data-sgb-message-group] [data-sgb-quote="double"] {
+        background:none!important;padding:0!important;
+        text-shadow:0 1px 2px #202832,0 0 2px #202832!important;
+      }
+      ${c} [data-sgb-codeblock] {
+        border:1px solid var(--sgb-added-code-line)!important;border-radius:16px!important;
+        overflow:hidden;box-shadow:0 3px 12px rgba(18,25,34,.07)!important;
+        backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+      }
+      ${c} [data-sgb-codeblock-head] {
+        position:relative!important;padding-left:36px!important;min-height:38px;
+        border-bottom:1px solid var(--sgb-added-code-line)!important;
+      }
+      ${c} [data-sgb-codeblock-head]::before {
+        content:""!important;position:absolute!important;left:12px!important;top:50%!important;
+        width:15px!important;height:15px!important;transform:translateY(-50%)!important;
+        background:var(--sgb-added-code-mark) center/contain no-repeat!important;pointer-events:none!important;
+      }
+      ${filled} [data-sgb-codeblock], ${filled} [data-sgb-codeblock-body] {
+        background:var(--sgb-added-code-surface)!important;
+      }
+      ${filled} [data-sgb-codeblock-head] {background:var(--sgb-added-code-head)!important;}
+      ${filled} [data-sgb-codeblock-head], ${filled} [data-sgb-codeblock-head] * {
+        color:var(--sgb-added-code-ink)!important;-webkit-text-fill-color:currentColor!important;
+      }
+      ${filled} [data-sgb-codeblock-body], ${filled} [data-sgb-codeblock-body] * {
+        color:var(--sgb-readable-text)!important;-webkit-text-fill-color:currentColor!important;text-shadow:none!important;
+      }
+    `;
+  }
+
+  function wrapAddedThemeDialogue(md) {
+    // Retain each original Text node through the existing restoration records.
+    // Read across inline elements, but never move or replace React-owned elements.
+    const blocks = new Map();
+    const walker = document.createTreeWalker(md, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        return node.parentElement?.closest('[data-sgb-quote],code,pre,.not-wrtn-markdown')
+          ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    let node;
+    while ((node = walker.nextNode())) {
+      const block = node.parentElement?.closest('p,li,blockquote,h1,h2,h3,h4,h5,h6,td,th') || md;
+      if (!blocks.has(block)) blocks.set(block, []);
+      blocks.get(block).push(node);
+    }
+    for (const nodes of blocks.values()) {
+      const segments = buildQuoteSegments(nodes.map(n => n.nodeValue).join(''));
+      if (!segments.some(s => s.type === 'double')) continue;
+      let index = 0, offset = 0;
+      for (const text of nodes) {
+        let remaining = text.nodeValue.length;
+        const pieces = [];
+        while (remaining > 0 && index < segments.length) {
+          const seg = segments[index], count = Math.min(remaining, seg.text.length - offset);
+          if (count) pieces.push({ type: seg.type, text: seg.text.slice(offset, offset + count) });
+          remaining -= count; offset += count;
+          if (offset === seg.text.length) { index++; offset = 0; }
+        }
+        replaceTextNodeWithSegments(text, pieces);
+      }
+    }
+  }
+
+
   function userPackTextPatch(theme, light = false) {
     const a = theme.accent, b = theme.secondary;
     return {
@@ -1462,6 +1616,7 @@
     italicBgEnabled: true,
     strongBgEnabled: true,
     codeBlockBgEnabled: true,
+    codeBlockDecorEnabled: true,
 
     dialogueBg: '#b29aa6',
     dialogueTextColor: '#fdfbfc',
@@ -2745,6 +2900,12 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     let cached = UI_STYLE_PALETTE_CACHE.get(style);
     if (!cached) {
       cached = buildUiStylePaletteDefinitions(style);
+    if (getAddedThemeTones(style)) cached = cached.map((p, index) => ({
+      ...p,
+      colors: index ? p.colors : getAddedThemeTones(style).slice(0, 3),
+      patch: { ...p.patch, ...getAddedThemePalette(style, false, index ? p.colors : null) },
+      lightPatch: { ...p.lightPatch, ...getAddedThemePalette(style, true, index ? p.colors : null) }
+    }));
       UI_STYLE_PALETTE_CACHE.set(style, cached);
     }
     return cached;
@@ -3601,13 +3762,14 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
       { key: 'thoughtBgEnabled', label: '생각 배경', desc: "' ' / ‘ ’ 작은따옴표를 감지해요." },
       { key: 'italicBgEnabled', label: '이탤릭 배경', desc: '*이탤릭*으로 렌더된 부분만 감지해요.' },
       { key: 'strongBgEnabled', label: '굵게 배경', desc: '**굵게**로 렌더된 부분만 감지해요.' },
+      { key: 'codeBlockDecorEnabled', label: '코드블럭 꾸미기', desc: '추가테마의 코드블럭 테두리·헤더·작은 장식을 켜거나 꺼요.' },
       { key: 'codeBlockBgEnabled', label: '코드블록 배경', desc: '코드블록 박스 배경을 켜거나 꺼요.' },
       { key: 'markdownDecorEnabled', label: '마크다운 꾸미기', desc: '제목·인용문·목록·구분선·링크·표 등 렌더된 마크다운을 테마톤으로 꾸며요.' }
     ];
   }
 
   function isAnyQuoteHighlightEnabled() {
-    return !!(CONFIG.dialogueBgEnabled || CONFIG.thoughtBgEnabled);
+    return !!(getAddedThemeTones(CONFIG.uiStyle) || CONFIG.dialogueBgEnabled || CONFIG.thoughtBgEnabled);
   }
 
 
@@ -3625,6 +3787,140 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     'strongBg',
     'codeAccent'
   ]);
+
+  function getColorEditingContext() {
+    const profile = typeof getActiveAppearanceProfileKey === 'function'
+      ? getActiveAppearanceProfileKey() : document.documentElement.getAttribute('data-sgb-theme');
+    return [profile, CONFIG.uiStyle, CONFIG.uiPaletteIndex].join('|');
+  }
+
+  function getEditableThemeColors(settings = CONFIG) {
+    const colors = getEffectiveThemeColors(settings);
+    // Settings controls must show the currently rendered builtin light/dark colors.
+    // Keep computed-style reads out of the CSS-generation palette resolver.
+    if (settings.themeRecommendedColorsEnabled && !getAddedThemeTones(settings.uiStyle)) {
+      const css = getComputedStyle(document.documentElement);
+      const variables = ['--sgb-readable-text','--sgb-muted-text','--sgb-strong-text','--sgb-italic-text','--sgb-strong-highlight-text','--sgb-dialogue-rgb','--sgb-dialogue-text','--sgb-thought-rgb','--sgb-thought-text','--sgb-italic-rgb','--sgb-strongbg-rgb','--sgb-code-rgb'];
+      THEME_COLOR_SETTING_KEYS.forEach((name, i) => {
+        const raw = css.getPropertyValue(variables[i]).trim();
+        if (/^#[\da-f]{6}$/i.test(raw)) colors[name] = raw;
+        else if (/^\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?$/.test(raw)) {
+          colors[name] = '#' + raw.split(',').map(n => Math.max(0, Math.min(255, Math.round(Number(n)))).toString(16).padStart(2, '0')).join('');
+        }
+      });
+    }
+    return colors;
+  }
+
+  function getManualColorPatch(settings, key, value) {
+    if (!THEME_COLOR_SETTING_KEYS.includes(key) || !/^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(String(value).trim())) return null;
+    if (key === 'dialogueTextColor' && getAddedThemeTones(settings.uiStyle)) return null;
+    const colors = getEditableThemeColors(settings);
+    return { ...createCustomColorBackup(colors), [key]: normalizeHexColor(String(value).trim(), colors[key]), themeRecommendedColorsEnabled: false };
+  }
+
+  function clearPendingColorEdits() {
+    for (const timer of state.colorApplyTimers.values()) clearTimeout(timer);
+    state.colorApplyTimers.clear();
+  }
+
+  const INLINE_COLOR_PALETTE_CSS = `
+    [data-sgb-liquid][data-sgb-manual-ready] [data-locked] .lockable {opacity:1;filter:none;}
+    [data-sgb-liquid][data-sgb-manual-ready] [data-locked] .lockable * {pointer-events:auto;}
+    [data-sgb-liquid][data-sgb-manual-ready] [data-color-card][data-locked="true"] > :not([data-sgb-theme-color-toggle]) {display:revert;}
+    [data-sgb-liquid][data-sgb-manual-ready] .hl-c .inner {opacity:1;}
+    [data-sgb-liquid][data-sgb-manual-ready] .cpick input {display:none;}
+    [data-sgb-liquid][data-sgb-manual-ready] .crow .cl[role="button"],
+    [data-sgb-liquid][data-sgb-manual-ready] .cpick[role="button"] {cursor:pointer;}
+    [data-sgb-liquid] [data-sgb-fixed-white] .cl {font-size:12px;}
+    [data-sgb-liquid] [data-sgb-inline-palette] {
+      box-sizing:border-box;min-width:0;margin:8px 0 12px;padding:13px;border:1px solid var(--bdr,rgba(170,170,190,.25));
+      border-radius:14px;background:var(--tint,rgba(35,37,48,.94));color:var(--ink);box-shadow:0 5px 16px rgba(0,0,0,.10);
+    }
+    [data-sgb-liquid] [data-sgb-inline-palette][hidden] {display:none!important;}
+    [data-sgb-liquid] .sgb-palette-top {display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;font-size:13px;}
+    [data-sgb-liquid] .sgb-palette-grid {display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:9px;}
+    [data-sgb-liquid] [data-sgb-palette-color] {width:100%;height:32px;min-width:0;padding:0;border:1px solid rgba(128,128,140,.3);border-radius:9px;background:var(--swatch);cursor:pointer;box-shadow:inset 0 1px 0 rgba(255,255,255,.2);}
+    [data-sgb-liquid] [data-sgb-palette-color][aria-pressed="true"] {outline:2px solid var(--ink);outline-offset:2px;}
+    [data-sgb-liquid] .sgb-palette-entry {display:flex;gap:8px;align-items:center;margin-top:12px;}
+    [data-sgb-liquid] [data-sgb-palette-hex] {min-width:0;width:100%;flex:1;border:1px solid var(--bdr,rgba(128,128,140,.4));border-radius:9px;background:transparent;color:var(--ink);padding:8px;font:inherit;}
+    [data-sgb-liquid] [data-sgb-palette-apply], [data-sgb-liquid] [data-sgb-palette-close] {min-height:32px;border:0;border-radius:9px;padding:6px 10px;color:var(--ink);background:rgba(145,145,180,.16);cursor:pointer;font:inherit;}
+    [data-sgb-liquid] [data-sgb-palette-error] {font-size:12px;color:var(--ink);margin-top:8px;}
+    [data-sgb-liquid] [data-sgb-palette-error]:empty {display:none;}
+  `;
+
+  function installInlineColorPalette(modal) {
+    modal.setAttribute('data-sgb-manual-ready', '');
+    const panel = document.createElement('div');
+    panel.setAttribute('data-sgb-inline-palette', ''); panel.setAttribute('role', 'group');
+    panel.id = `${modal.id}-color-palette`; panel.hidden = true;
+    panel.innerHTML = '<div class="sgb-palette-top"><b data-sgb-palette-title></b><button type="button" data-sgb-palette-close>닫기</button></div><div class="sgb-palette-grid"></div><div class="sgb-palette-entry"><input type="text" data-sgb-palette-hex maxlength="7" spellcheck="false" aria-label="색상 HEX 코드" placeholder="#aabbcc"><button type="button" data-sgb-palette-apply>적용</button></div><div data-sgb-palette-error role="status"></div>';
+    let key = '', context = '', trigger = null;
+    const hex = panel.querySelector('[data-sgb-palette-hex]');
+    const error = panel.querySelector('[data-sgb-palette-error]');
+    const close = (focus = true) => {
+      panel.hidden = true;
+      trigger?.setAttribute('aria-expanded', 'false');
+      if (focus && trigger?.isConnected) trigger.focus({ preventScroll: true });
+      key = ''; trigger = null;
+    };
+    const commit = value => {
+      if (context !== getColorEditingContext()) { close(false); return; }
+      const patch = getManualColorPatch(CONFIG, key, value);
+      if (!patch) { error.textContent = '#abc 또는 #aabbcc 형식으로 입력해 주세요.'; return; }
+      clearPendingColorEdits();
+      saveBackgroundSettings(patch, { skipRefresh: true });
+      hex.value = patch[key]; error.textContent = '';
+      panel.querySelectorAll('[data-sgb-palette-color]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.sgbPaletteColor === patch[key])));
+    };
+    const open = button => {
+      const row = button.closest('.crow');
+      const nextKey = row?.querySelector('[data-sgb-color-picker]')?.dataset.sgbColorPicker;
+      if (!nextKey || (nextKey === 'dialogueTextColor' && getAddedThemeTones(CONFIG.uiStyle))) return;
+      if (key === nextKey && !panel.hidden) { close(); return; }
+      close(false); key = nextKey; trigger = button; context = getColorEditingContext();
+      const colors = getEditableThemeColors(CONFIG), current = colors[key];
+      const tones = getAddedThemeTones(CONFIG.uiStyle)?.slice(0, 3) || [];
+      const choices = [...new Set([current, ...tones, '#f1c9d6','#e1cdef','#c9d8f1','#c5e3eb','#c9e4d5','#d8e4bd','#f1e2b9','#efd1bd','#e2dbd4','#ffffff','#e9edf2','#b5bdc9','#7e899c','#596579','#354354','#202832'])];
+      panel.querySelector('[data-sgb-palette-title]').textContent = (row.querySelector('.cl')?.textContent || '색상') + ' 선택';
+      panel.setAttribute('aria-label', panel.querySelector('[data-sgb-palette-title]').textContent);
+      const grid = panel.querySelector('.sgb-palette-grid'); grid.replaceChildren();
+      for (const color of choices) {
+        const b = document.createElement('button'); b.type = 'button'; b.dataset.sgbPaletteColor = color;
+        b.style.setProperty('--swatch', color); b.setAttribute('aria-label', color); b.title = color;
+        b.setAttribute('aria-pressed', String(color === current)); grid.appendChild(b);
+      }
+      hex.value = current; error.textContent = ''; row.after(panel); panel.hidden = false;
+      trigger.setAttribute('aria-expanded', 'true');
+    };
+    modal.__sgbColorPaletteClose = close;
+    modal.__sgbColorPaletteSync = () => { if (key && context !== getColorEditingContext()) close(false); };
+    modal.querySelectorAll('.crow').forEach(row => {
+      if (!row.querySelector('[data-sgb-color-picker]')) return;
+      for (const b of row.querySelectorAll('.cpick,.cl')) {
+        b.setAttribute('role', 'button'); b.tabIndex = 0;
+        b.setAttribute('aria-controls', panel.id); b.setAttribute('aria-expanded', 'false');
+      }
+    });
+    modal.addEventListener('click', event => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target) return;
+      if (target.closest('[data-sgb-palette-close]')) { event.preventDefault(); close(); return; }
+      const chip = target.closest('[data-sgb-palette-color]');
+      if (chip) { event.preventDefault(); commit(chip.dataset.sgbPaletteColor); return; }
+      if (target.closest('[data-sgb-palette-apply]')) { event.preventDefault(); commit(hex.value); return; }
+      const button = target.closest('.crow .cpick,.crow .cl');
+      if (button) { event.preventDefault(); open(button); }
+    }, true);
+    modal.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !panel.hidden) { event.preventDefault(); event.stopPropagation(); close(); return; }
+      if (event.target === hex && event.key === 'Enter') { event.preventDefault(); commit(hex.value); return; }
+      if (['Enter', ' '].includes(event.key) && event.target.matches?.('.crow .cpick,.crow .cl')) {
+        event.preventDefault(); open(event.target);
+      }
+    }, true);
+  }
+
 
   function createCustomColorBackup(settings = CONFIG) {
     const defaults = DEFAULT_BACKGROUND_SETTINGS;
@@ -3654,7 +3950,8 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     return {
       uiStyle: normalizedStyle,
       uiPaletteIndex: paletteIndex,
-      ...(palette?.patch || { themeRecommendedColorsEnabled: true })
+      ...(palette?.patch || { themeRecommendedColorsEnabled: true }),
+      ...(getAddedThemeTones(normalizedStyle) && document.documentElement.getAttribute('data-sgb-theme') === 'light' ? palette?.lightPatch : {})
     };
   }
 
@@ -3778,6 +4075,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
       thoughtBgEnabled: raw.thoughtBgEnabled === undefined ? defaults.thoughtBgEnabled : raw.thoughtBgEnabled !== false,
       italicBgEnabled: raw.italicBgEnabled === undefined ? defaults.italicBgEnabled : raw.italicBgEnabled !== false,
       strongBgEnabled: raw.strongBgEnabled === undefined ? defaults.strongBgEnabled : raw.strongBgEnabled !== false,
+      codeBlockDecorEnabled: raw.codeBlockDecorEnabled === undefined ? defaults.codeBlockDecorEnabled : raw.codeBlockDecorEnabled !== false,
       codeBlockBgEnabled: raw.codeBlockBgEnabled === undefined ? defaults.codeBlockBgEnabled : raw.codeBlockBgEnabled !== false,
 
       dialogueBg: normalizeHexColor(raw.dialogueBg, defaults.dialogueBg),
@@ -4789,7 +5087,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     'textScale', 'codeTextScale', 'fontWeight', 'lineHeight', 'letterSpacing', 'paragraphSpacing',
     'dialogueBg', 'dialogueTextColor', 'thoughtBg', 'thoughtTextColor', 'italicBg', 'strongBg', 'codeAccent',
     'uiStyle', 'uiPaletteIndex', 'themeRecommendedColorsEnabled', 'textShadowEnabled',
-    'dialogueBgEnabled', 'thoughtBgEnabled', 'italicBgEnabled', 'strongBgEnabled', 'codeBlockBgEnabled',
+    'dialogueBgEnabled', 'thoughtBgEnabled', 'italicBgEnabled', 'strongBgEnabled', 'codeBlockBgEnabled', 'codeBlockDecorEnabled',
     'markdownDecorEnabled', 'customFontCssUrl', 'customFontFamily', 'inputFontEnabled', 'siteFontEnabled',
     'sendButtonShapeEnabled'
   ]);
@@ -4834,7 +5132,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     state.__sgbCssVarsRoot = root;
 
     const targets = [document.documentElement, root].filter(Boolean);
-    const paletteColors = { ...CONFIG, ...(getActivePaletteLightPatch() || {}) };
+    const paletteColors = getEffectiveThemeColors(CONFIG);
 
     const cssValues = new Map();
     {
@@ -4893,7 +5191,8 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
       cssValues.set('--sgb-strongbg-rgb', hexToRgbTriplet(paletteColors.strongBg, '240,224,232'));
       cssValues.set('--sgb-code-rgb', hexToRgbTriplet(paletteColors.codeAccent, '200,166,182'));
     }
-    applySharedCssValues(targets, cssValues, !CONFIG.themeRecommendedColorsEnabled && normalizeUiStyle(CONFIG.uiStyle) !== 'cyber');
+    applyAddedCodeColors(cssValues, paletteColors, document.documentElement.getAttribute('data-sgb-theme') === 'light');
+    applySharedCssValues(targets, cssValues, !!getAddedThemeTones(CONFIG.uiStyle) || (!CONFIG.themeRecommendedColorsEnabled && normalizeUiStyle(CONFIG.uiStyle) !== 'cyber'));
 
 
     const paletteCount = Math.max(1, getUiStylePaletteDefinitions(normalizeUiStyle(CONFIG.uiStyle)).length);
@@ -4921,6 +5220,8 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     setAttributeIfChanged(document.documentElement, 'data-sgb-italic-bg', CONFIG.italicBgEnabled ? 'on' : 'off');
     setAttributeIfChanged(document.documentElement, 'data-sgb-strong-bg', CONFIG.strongBgEnabled ? 'on' : 'off');
     setAttributeIfChanged(document.documentElement, 'data-sgb-code-bg', CONFIG.codeBlockBgEnabled ? 'on' : 'off');
+    setAttributeIfChanged(document.documentElement, 'data-sgb-code-decor', CONFIG.codeBlockDecorEnabled ? 'on' : 'off');
+    setAttributeIfChanged(document.documentElement, 'data-sgb-added-theme', getAddedThemeTones(CONFIG.uiStyle) ? 'on' : 'off');
     setAttributeIfChanged(document.documentElement, 'data-sgb-markdown-decor', CONFIG.markdownDecorEnabled ? 'on' : 'off');
     // 4.3.1 입력 버튼 변경: 켜져 있을 때만 전송 버튼 모양 규칙(SEND_SHAPE_CSS·NYANG 고양이 머리)이 걸린다.
     setAttributeIfChanged(document.documentElement, 'data-sgb-send-shape', CONFIG.sendButtonShapeEnabled ? 'on' : 'off');
@@ -5743,6 +6044,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     }
   }
   function selectLiquidTab(modal, index, focus=false) {
+    modal.__sgbColorPaletteClose?.(false);
     const buttons=[...modal.querySelectorAll('.tabs [role="tab"]')];
     index=Math.max(0,Math.min(buttons.length-1,index));
     buttons.forEach((b,i)=>{b.setAttribute('aria-selected',String(i===index));b.tabIndex=i===index?0:-1;});
@@ -5754,7 +6056,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
   }
   function installLiquidSettings(modal, customImages) {
     let style=document.getElementById(SGB_UI_IDS.modal+'-liquid-css');
-    if(!style){style=document.createElement('style');style.id=SGB_UI_IDS.modal+'-liquid-css';style.textContent=LIQUID_SETTINGS_CSS;document.head.appendChild(style);}
+    if(!style){style=document.createElement('style');style.id=SGB_UI_IDS.modal+'-liquid-css';style.textContent=LIQUID_SETTINGS_CSS + INLINE_COLOR_PALETTE_CSS;document.head.appendChild(style);}
     modal.dataset.liquidCustom=String(customImages);
     const search=modal.querySelector('input[type="search"]');search.setAttribute('data-liquid-search','');
     const defs=new Map(getSettingsDefinitions().map(d=>[d.key,d]));
@@ -5814,6 +6116,8 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     const auto=!!settings.themeRecommendedColorsEnabled;
     modal.querySelector('[data-color-card]').dataset.locked=String(auto);
     modal.querySelector('[data-sgb-highlight-color-lock-hint]').hidden=!auto;
+    modal.querySelectorAll('.hl-c').forEach(card=>card.dataset.locked='false');
+    modal.__sgbColorPaletteSync?.();
     modal.querySelectorAll('.hl').forEach(card=>{const on=!!settings[card.dataset.hl];card.dataset.on=String(on);const colors=card.querySelector('.hl-c');if(colors){colors.inert=!on;colors.setAttribute('aria-hidden',String(!on));}});
     const shade=modal.querySelector('[data-shade-body]');if(shade)shade.dataset.off=String(!settings.novelShadeEnabled);
     syncLiquidColorSamples(modal);
@@ -5842,7 +6146,8 @@ function createSettingsModal() {
     modal.setAttribute('data-sgb-settings-modal', '');
     modal.setAttribute('data-sgb-settings-layout', 'liquid-glass-3col-v1');
     modal.setAttribute('data-sgb-liquid', '');
-    modal.innerHTML = "<section class=\"lg-panel sgb-settings-panel\" role=\"dialog\" aria-modal=\"true\" aria-label=\"배경·테마 설정\" data-sgb-settings-modal=\"\">\n  <header class=\"hd\" data-sgb-settings-drag-handle=\"\" title=\"드래그해서 이동\">\n    <div class=\"hd-tx\"><b>배경·테마 설정</b><span>방 이미지와 채팅 화면 스타일을 설정해요.</span></div>\n    <button type=\"button\" class=\"ibtn\" aria-label=\"닫기\" data-sgb-settings-close=\"\" data-act=\"close\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"></path></svg></button>\n  </header>\n\n  <nav class=\"seg tabs\" role=\"tablist\" data-seg=\"tabs\" data-ready=\"true\">\n    <span class=\"seg-ind\" aria-hidden=\"true\"></span>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"true\" data-sgb-tab=\"theme\" tabindex=\"0\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4c0-4.4-4-8.2-9-8.2z\"></path><circle cx=\"7.5\" cy=\"11\" r=\"1.1\" fill=\"currentColor\"></circle><circle cx=\"10.5\" cy=\"7.2\" r=\"1.1\" fill=\"currentColor\"></circle><circle cx=\"15\" cy=\"7.6\" r=\"1.1\" fill=\"currentColor\"></circle></svg><span>테마</span></button>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"false\" data-sgb-tab=\"bg\" tabindex=\"-1\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><circle cx=\"9\" cy=\"9.5\" r=\"1.8\"></circle><path d=\"M21 15.5l-4.6-4.6a1.5 1.5 0 0 0-2.1 0L6 19.3\"></path></svg><span>배경</span></button>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"false\" data-sgb-tab=\"text\" tabindex=\"-1\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 19L9 5l5 14M5.8 14h6.4\"></path><path d=\"M20 19v-4.2a2.8 2.8 0 0 0-5.3-1.2M20 16.4c-1.6-.5-4.6-.4-4.6 1.4 0 1.9 3.2 1.8 4.6-.2\"></path></svg><span>글자</span></button>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"false\" data-sgb-tab=\"hl\" tabindex=\"-1\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M14.5 4.5l5 5L10 19H5v-5z\"></path><path d=\"M12.5 6.5l5 5M4 21h16\"></path></svg><span>강조</span></button>\n  </nav>\n\n  <div class=\"body\">\n    <!-- ── 테마 ── -->\n    <div class=\"pane on\" data-pane=\"theme\">\n      <div class=\"tools\">\n        <label class=\"search\" data-has=\"false\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.1\" stroke-linecap=\"round\"><circle cx=\"11\" cy=\"11\" r=\"6.5\"></circle><path d=\"M16 16l4 4\"></path></svg><input type=\"search\" placeholder=\"테마 이름·설명 검색\" aria-label=\"테마 검색\" data-q=\"\"><button type=\"button\" class=\"clr\" aria-label=\"검색어 지우기\" data-clr=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"></path></svg></button></label>\n        <div class=\"seg mini\" data-seg=\"filter\" data-ready=\"true\">\n          <span class=\"seg-ind\" aria-hidden=\"true\"></span>\n          <button type=\"button\" class=\"seg-btn\" aria-selected=\"true\" data-f=\"all\" tabindex=\"0\">전체 <em data-cnt-all=\"\">31</em></button>\n          <button type=\"button\" class=\"seg-btn\" aria-selected=\"false\" data-f=\"fav\" tabindex=\"-1\">★ <em data-cnt-fav=\"\">3</em></button>\n        </div>\n      </div>\n      <div class=\"card\" style=\"padding:0;margin-top:10px\"><div class=\"tlist sgb-style-options\" role=\"radiogroup\" aria-label=\"UI 스타일\" data-tlist=\"\"></div></div>\n      <div class=\"lab\">입력 버튼</div>\n      <div class=\"card\">\n        <div class=\"row\"><span class=\"row-tx\"><b>입력 버튼 변경</b><small>전송 버튼을 테마에 맞는 모양으로 바꿔요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"false\" data-sgb-bool-toggle=\"sendButtonShapeEnabled\" data-def=\"false\"></button></div>\n      </div>\n    </div>\n\n    <!-- ── 배경 ── -->\n    <div class=\"pane\" data-pane=\"bg\">\n      <div class=\"lab\">방 이미지</div>\n      <div class=\"card img-card\">\n        <div class=\"img-hd\">\n          <span class=\"row-tx\"><b>배경 이미지 보기</b><small>꺼도 UI 테마와 글자 설정은 유지돼요.</small></span>\n          <button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-modal-toggle=\"\" data-def=\"true\"></button>\n        </div>\n        <div data-sgb-room-image-card=\"\" data-off=\"false\">\n          <div class=\"thumb\" data-has=\"false\">\n            <span class=\"ph-img\" data-thumb=\"\"></span>\n            <span class=\"meta\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><circle cx=\"9\" cy=\"9.5\" r=\"1.8\"></circle><path d=\"M21 15.5l-4.6-4.6a1.5 1.5 0 0 0-2.1 0L6 19.3\"></path></svg><b data-sgb-room-image-status=\"\">이 방에 선택된 이미지 없음</b></span>\n            <span class=\"empty\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><circle cx=\"9\" cy=\"9.5\" r=\"1.8\"></circle><path d=\"M21 15.5l-4.6-4.6a1.5 1.5 0 0 0-2.1 0L6 19.3\"></path></svg>이 방에 선택된 이미지 없음</span>\n          </div>\n          <div class=\"img-act\">\n            <button type=\"button\" class=\"btn btn-pri\" data-sgb-image-pick=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><path d=\"M12 9v6M9 12h6\"></path></svg>이미지 선택</button>\n            <button type=\"button\" class=\"btn btn-gl danger\" data-sgb-image-remove=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 7h16M9 7V5h6v2M6.5 7l1 12h9l1-12\"></path></svg>제거</button>\n          </div>\n          <input type=\"file\" accept=\"image/*\" data-sgb-image-file=\"\" hidden=\"\">\n        </div>\n      </div>\n\n      <div data-sgb-image-adjust data-open=\"true\"><div><div class=\"lab\">이미지 조절</div>\n      <div class=\"card\">\n        <label class=\"sl\" data-sgb-background-dependent=\"\" data-off=\"false\"><span class=\"sl-hd\"><span>배경 흐림</span><output class=\"val\" data-sgb-setting-output=\"blurPx\">6px</output></span>\n<input class=\"rng\" type=\"range\" min=\"0\" max=\"22\" step=\"1\" value=\"6\" data-sgb-setting-input=\"blurPx\" data-def=\"6\" style=\"--p: 27.27272727272727%;\"></label>\n        <label class=\"sl\" data-sgb-background-dependent=\"\" data-off=\"false\"><span class=\"sl-hd\"><span>이미지 어둡게</span><output class=\"val\" data-sgb-setting-output=\"dim\">34%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0\" max=\"0.78\" step=\"0.01\" value=\"0.34\" data-sgb-setting-input=\"dim\" data-def=\"0.34\" style=\"--p: 43.58974358974359%;\"></label>\n        <label class=\"sl\" data-sgb-background-dependent=\"\" data-off=\"false\"><span class=\"sl-hd\"><span>이미지 확대/축소</span><output class=\"val\" data-sgb-setting-output=\"scale\">100%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.86\" max=\"1.28\" step=\"0.01\" value=\"1.0\" data-sgb-setting-input=\"scale\" data-def=\"1\" style=\"--p: 33.33333333333333%;\"></label>\n      </div>\n\n      </div></div><div class=\"lab\">채팅 UI</div>\n      <div class=\"card\">\n        <label class=\"sl\"><span class=\"sl-hd\"><span>UI 불투명도</span><output class=\"val\" data-sgb-setting-output=\"uiOpacity\">86%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.18\" max=\"1\" step=\"0.01\" value=\"0.86\" data-sgb-setting-input=\"uiOpacity\" data-def=\"0.86\" style=\"--p: 82.92682926829266%;\"></label>\n      </div>\n\n      <div class=\"lab\">소설형 가독성</div>\n      <div class=\"card\" data-sgb-novel-shade-controls=\"\">\n        <div class=\"row\"><span class=\"row-tx\"><b>소설 본문 가독성 배경</b><small>테마 밝기에 맞는 독서 영역을 본문 전체 뒤에 부드럽게 넣어요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"false\" data-sgb-bool-toggle=\"novelShadeEnabled\" data-def=\"false\"></button></div>\n        <div data-shade-body=\"\" data-off=\"true\"><label class=\"sl\"><span class=\"sl-hd\"><span>본문 배경 강도</span><output class=\"val\" data-sgb-setting-output=\"novelShadeOpacity\">45%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.05\" max=\"0.85\" step=\"0.01\" value=\"0.45\" data-sgb-setting-input=\"novelShadeOpacity\" data-def=\"0.45\" style=\"--p: 50.000000000000014%;\" disabled=\"\"></label></div>\n      </div>\n      <div class=\"status\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"></circle><path d=\"M12 11v5M12 7.6v.1\"></path></svg><span data-sgb-novel-shade-status=\"\">검정 음영으로 이미지의 밝은 부분을 눌러 글씨를 또렷하게 보여요.</span></div>\n    </div>\n\n    <!-- ── 글자 ── -->\n    <div class=\"pane\" data-pane=\"text\">\n      <div class=\"lab\" style=\"margin-top:8px\">글자 색상</div>\n      <div class=\"card\" data-color-card=\"\" data-locked=\"true\">\n        <div class=\"row\" data-sgb-theme-color-toggle=\"\"><span class=\"row-tx\"><b>테마 색상 자동 적용<span class=\"lockpill\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><rect x=\"5\" y=\"11\" width=\"14\" height=\"9\" rx=\"2.5\"></rect><path d=\"M8 11V8a4 4 0 0 1 8 0v3\"></path></svg>자동 색상 사용 중</span></b><small>끄면 글자와 강조 색상을 직접 수정할 수 있어요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"themeRecommendedColorsEnabled\" data-def=\"true\"></button></div>\n        <div class=\"row\" style=\"min-height:0;padding:10px 0 4px\"><span class=\"row-tx\"><small style=\"margin:0\">직접 글자색</small></span></div>\n        <div class=\"lockable\" data-sgb-custom-color-controls=\"\" style=\"padding-bottom:6px\">\n          <div class=\"crow\"><span class=\"cl\">본문 글자색</span>\n<label class=\"cpick\" style=\"--c:#fafafa\"><input type=\"color\" value=\"#fafafa\" data-sgb-color-picker=\"textColor\" aria-label=\"본문 글자색\" data-def=\"#fafafa\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fafafa\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"textColor\" aria-label=\"본문 글자색 코드\" data-def=\"#fafafa\" disabled=\"\"></div>\n          <div class=\"crow\"><span class=\"cl\">묘사 글자색</span>\n<label class=\"cpick\" style=\"--c:#85837d\"><input type=\"color\" value=\"#85837d\" data-sgb-color-picker=\"emColor\" aria-label=\"묘사 글자색\" data-def=\"#85837d\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#85837d\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"emColor\" aria-label=\"묘사 글자색 코드\" data-def=\"#85837d\" disabled=\"\"></div>\n          <div class=\"crow\"><span class=\"cl\">강조 글자색</span>\n<label class=\"cpick\" style=\"--c:#fafafa\"><input type=\"color\" value=\"#fafafa\" data-sgb-color-picker=\"strongColor\" aria-label=\"강조 글자색\" data-def=\"#fafafa\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fafafa\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"strongColor\" aria-label=\"강조 글자색 코드\" data-def=\"#fafafa\" disabled=\"\"></div>\n        </div>\n      </div>\n\n      <div class=\"lab\">글자 모양</div>\n      \n<div class=\"card\">\n        <div class=\"grid2\">\n          <label class=\"sl\"><span class=\"sl-hd\"><span>글씨 크기</span><output class=\"val\" data-sgb-setting-output=\"textScale\">100%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.8\" max=\"1.2\" step=\"0.01\" value=\"1.0\" data-sgb-setting-input=\"textScale\" data-def=\"1\" style=\"--p: 50%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>코드블록 크기</span><output class=\"val\" data-sgb-setting-output=\"codeTextScale\">100%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.7\" max=\"1.2\" step=\"0.01\" value=\"1.0\" data-sgb-setting-input=\"codeTextScale\" data-def=\"1\" style=\"--p: 60.00000000000001%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>폰트 두께</span><output class=\"val\" data-sgb-setting-output=\"fontWeight\">400</output></span>\n<input class=\"rng\" type=\"range\" min=\"300\" max=\"900\" step=\"100\" value=\"400\" data-sgb-setting-input=\"fontWeight\" data-def=\"400\" style=\"--p: 16.666666666666664%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>행간</span><output class=\"val\" data-sgb-setting-output=\"lineHeight\">1.65배</output></span>\n<input class=\"rng\" type=\"range\" min=\"1.35\" max=\"2.1\" step=\"0.01\" value=\"1.65\" data-sgb-setting-input=\"lineHeight\" data-def=\"1.65\" style=\"--p: 39.99999999999997%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>자간</span><output class=\"val\" data-sgb-setting-output=\"letterSpacing\">0.00em</output></span>\n<input class=\"rng\" type=\"range\" min=\"-0.03\" max=\"0.08\" step=\"0.01\" value=\"0\" data-sgb-setting-input=\"letterSpacing\" data-def=\"0\" style=\"--p: 27.27272727272727%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>문단 간격</span><output class=\"val\" data-sgb-setting-output=\"paragraphSpacing\">0.70rem</output></span>\n<input class=\"rng\" type=\"range\" min=\"0\" max=\"1.6\" step=\"0.01\" value=\"0.7\" data-sgb-setting-input=\"paragraphSpacing\" data-def=\"0.7\" style=\"--p: 43.74999999999999%;\"></label>\n        </div>\n      </div>\n\n      <div class=\"lab\">웹폰트</div>\n      <div class=\"acc\" data-open=\"false\">\n        <button type=\"button\" class=\"acc-h\" data-acc=\"\" aria-expanded=\"false\"><span class=\"row-tx\"><b>사용자 웹폰트</b><small>@font-face · 폰트 파일 URL · @import</small></span><span class=\"fontval\" data-sgb-font-output=\"\">없음</span><span class=\"chev\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M6 9l6 6 6-6\"></path></svg></span></button>\n        <div class=\"acc-b\"><div class=\"acc-in\"><div class=\"acc-pad\">\n          <label class=\"fld\"><span>웹폰트</span><textarea class=\"ta\" spellcheck=\"false\" rows=\"3\" data-sgb-font-input=\"customFontCssUrl\" placeholder=\"@font-face {...} / .woff2 URL / @import url(...)\"></textarea></label>\n          <label class=\"fld\"><span>폰트 종류</span><select class=\"sel\" data-sgb-font-input=\"customFontFamily\"><option value=\"\">자동 감지</option><option>Mona12</option><option>MonaS12</option><option>MonaS12 Text KR</option></select></label>\n          <p class=\"help\">@font-face·폰트 파일 URL은 자동 적용돼요. @import/CSS URL은 가능한 경우 이름까지 자동 추정하고, Mona 계열은 종류를 직접 고를 수 있어요.</p>\n        </div></div></div>\n      </div>\n\n      <div class=\"lab\">웹폰트 적용 범위</div><div class=\"card\"><div class=\"row\"><span class=\"row-tx\"><b>입력창</b><small data-sgb-input-font-hint=\"\">작성 중인 메시지도 설정한 웹폰트를 사용해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-label=\"입력창 웹폰트\" aria-checked=\"false\" data-sgb-bool-toggle=\"inputFontEnabled\" data-def=\"false\"></button></div><div class=\"row\"><span class=\"row-tx\"><b>사이트 전체</b><small>메뉴·목록·버튼까지 크랙 화면 전체에 적용해요. 설정창·코드·수식은 그대로예요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-label=\"사이트 전체 웹폰트\" aria-checked=\"false\" data-sgb-bool-toggle=\"siteFontEnabled\" data-def=\"false\"></button></div></div>\n<div class=\"lab\">가독성</div>\n      <div class=\"card\">\n        <div class=\"row\"><span class=\"row-tx\"><b>글자 그림자</b><small>본문에 은은한 검정 그림자를 넣어요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"false\" data-sgb-bool-toggle=\"textShadowEnabled\" data-def=\"false\"></button></div>\n      </div>\n    </div>\n\n    <!-- ── 강조 ── -->\n    <div class=\"pane\" data-pane=\"hl\">\n      <div class=\"note\" data-sgb-highlight-color-lock-hint=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><rect x=\"5\" y=\"11\" width=\"14\" height=\"9\" rx=\"2.5\"></rect><path d=\"M8 11V8a4 4 0 0 1 8 0v3\"></path></svg><span>테마 자동 색상 사용 중이에요. 색을 바꾸려면 자동 적용을 꺼 주세요.</span><button type=\"button\" class=\"btn btn-gl\" data-goto=\"text\">글자 탭</button></div>\n      <div class=\"hl\" data-on=\"true\" data-hl=\"dialogueBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"dialogue\" style=\"background: rgba(178, 154, 166, 0.34); color: rgb(253, 251, 252);\">“어서 와.”</span></span><span class=\"row-tx\"><b>대사 배경</b><small>\"\" / “” / 「」 / ❝❞ 대사를 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"dialogueBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"dialogueBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#b29aa6\"><input type=\"color\" value=\"#b29aa6\" data-sgb-color-picker=\"dialogueBg\" aria-label=\"배경색\" data-def=\"#b29aa6\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#b29aa6\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"dialogueBg\" aria-label=\"배경색 코드\" data-def=\"#b29aa6\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"dialogueTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#fdfbfc\"><input type=\"color\" value=\"#fdfbfc\" data-sgb-color-picker=\"dialogueTextColor\" aria-label=\"글자색\" data-def=\"#fdfbfc\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fdfbfc\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"dialogueTextColor\" aria-label=\"글자색 코드\" data-def=\"#fdfbfc\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"thoughtBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"thought\" style=\"background: rgba(168, 154, 166, 0.3); color: rgb(244, 238, 241);\">‘글쎄…’</span></span><span class=\"row-tx\"><b>생각 배경</b><small>' ' / ‘ ’ 작은따옴표를 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"thoughtBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"thoughtBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#a89aa6\"><input type=\"color\" value=\"#a89aa6\" data-sgb-color-picker=\"thoughtBg\" aria-label=\"배경색\" data-def=\"#a89aa6\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#a89aa6\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"thoughtBg\" aria-label=\"배경색 코드\" data-def=\"#a89aa6\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"thoughtTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#f4eef1\"><input type=\"color\" value=\"#f4eef1\" data-sgb-color-picker=\"thoughtTextColor\" aria-label=\"글자색\" data-def=\"#f4eef1\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#f4eef1\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"thoughtTextColor\" aria-label=\"글자색 코드\" data-def=\"#f4eef1\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"italicBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"italic\" style=\"background: rgba(232, 224, 228, 0.26); color: rgb(132, 130, 126);\"><i>흔들렸다</i></span></span><span class=\"row-tx\"><b>이탤릭 배경</b><small>*이탤릭*으로 렌더된 부분만 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"italicBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"italicBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#e8e0e4\"><input type=\"color\" value=\"#e8e0e4\" data-sgb-color-picker=\"italicBg\" aria-label=\"배경색\" data-def=\"#e8e0e4\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#e8e0e4\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"italicBg\" aria-label=\"배경색 코드\" data-def=\"#e8e0e4\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"italicTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#84827e\"><input type=\"color\" value=\"#84827e\" data-sgb-color-picker=\"italicTextColor\" aria-label=\"글자색\" data-def=\"#84827e\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#84827e\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"italicTextColor\" aria-label=\"글자색 코드\" data-def=\"#84827e\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"strongBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"strong\" style=\"background: rgba(240, 224, 232, 0.62); color: rgb(250, 250, 250);\"><b>손상 없음</b></span></span><span class=\"row-tx\"><b>굵게 배경</b><small>**굵게**로 렌더된 부분만 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"strongBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"strongBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#f0e0e8\"><input type=\"color\" value=\"#f0e0e8\" data-sgb-color-picker=\"strongBg\" aria-label=\"배경색\" data-def=\"#f0e0e8\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#f0e0e8\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"strongBg\" aria-label=\"배경색 코드\" data-def=\"#f0e0e8\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"strongBgTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#fafafa\"><input type=\"color\" value=\"#fafafa\" data-sgb-color-picker=\"strongBgTextColor\" aria-label=\"글자색\" data-def=\"#fafafa\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fafafa\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"strongBgTextColor\" aria-label=\"글자색 코드\" data-def=\"#fafafa\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"codeBlockBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span class=\"code\" data-demo=\"code\" style=\"background: rgba(200, 166, 182, 0.24);\">zone: 7-B</span></span><span class=\"row-tx\"><b>코드블록 배경</b><small>코드블록 박스 배경을 켜거나 꺼요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"codeBlockBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"codeAccent\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#c8a6b6\"><input type=\"color\" value=\"#c8a6b6\" data-sgb-color-picker=\"codeAccent\" aria-label=\"배경색\" data-def=\"#c8a6b6\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#c8a6b6\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"codeAccent\" aria-label=\"배경색 코드\" data-def=\"#c8a6b6\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"markdownDecorEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span class=\"md\"><i>◆ 제목</i><u>인용문</u></span></span><span class=\"row-tx\"><b>마크다운 꾸미기</b><small>제목·인용문·목록·구분선·링크·표 등 렌더된 마크다운을 테마톤으로 꾸며요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"markdownDecorEnabled\" data-def=\"true\"></button></div></div>\n    </div>\n  </div>\n\n  <div class=\"selbar\" data-sgb-style-selbar=\"\" aria-live=\"polite\">\n    <span class=\"tsw\" data-sel-sw=\"\"></span>\n    <span class=\"sx\"><small>현재 테마</small><b data-sel-name=\"\"></b></span>\n    <span class=\"pals\" data-sel-pals=\"\" role=\"radiogroup\" aria-label=\"팔레트\"></span>\n  </div>\n  <footer class=\"ft\">\n    <button type=\"button\" class=\"btn btn-gl\" data-sgb-settings-reset=\"\" data-sgb-reset-state=\"idle\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 12a8 8 0 1 0 2.4-5.7M4 4v4.4h4.4\"></path></svg><span>전체 초기화</span></button>\n    <button type=\"button\" class=\"btn btn-pri\" data-sgb-settings-close=\"\" data-act=\"close\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"></circle><path d=\"M8 12.3l2.8 2.8L16.3 9.5\"></path></svg>닫기</button>\n  </footer>\n</section>";
+    modal.innerHTML = "<section class=\"lg-panel sgb-settings-panel\" role=\"dialog\" aria-modal=\"true\" aria-label=\"배경·테마 설정\" data-sgb-settings-modal=\"\">\n  <header class=\"hd\" data-sgb-settings-drag-handle=\"\" title=\"드래그해서 이동\">\n    <div class=\"hd-tx\"><b>배경·테마 설정</b><span>방 이미지와 채팅 화면 스타일을 설정해요.</span></div>\n    <button type=\"button\" class=\"ibtn\" aria-label=\"닫기\" data-sgb-settings-close=\"\" data-act=\"close\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"></path></svg></button>\n  </header>\n\n  <nav class=\"seg tabs\" role=\"tablist\" data-seg=\"tabs\" data-ready=\"true\">\n    <span class=\"seg-ind\" aria-hidden=\"true\"></span>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"true\" data-sgb-tab=\"theme\" tabindex=\"0\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4c0-4.4-4-8.2-9-8.2z\"></path><circle cx=\"7.5\" cy=\"11\" r=\"1.1\" fill=\"currentColor\"></circle><circle cx=\"10.5\" cy=\"7.2\" r=\"1.1\" fill=\"currentColor\"></circle><circle cx=\"15\" cy=\"7.6\" r=\"1.1\" fill=\"currentColor\"></circle></svg><span>테마</span></button>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"false\" data-sgb-tab=\"bg\" tabindex=\"-1\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><circle cx=\"9\" cy=\"9.5\" r=\"1.8\"></circle><path d=\"M21 15.5l-4.6-4.6a1.5 1.5 0 0 0-2.1 0L6 19.3\"></path></svg><span>배경</span></button>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"false\" data-sgb-tab=\"text\" tabindex=\"-1\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 19L9 5l5 14M5.8 14h6.4\"></path><path d=\"M20 19v-4.2a2.8 2.8 0 0 0-5.3-1.2M20 16.4c-1.6-.5-4.6-.4-4.6 1.4 0 1.9 3.2 1.8 4.6-.2\"></path></svg><span>글자</span></button>\n    <button type=\"button\" class=\"seg-btn\" role=\"tab\" aria-selected=\"false\" data-sgb-tab=\"hl\" tabindex=\"-1\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M14.5 4.5l5 5L10 19H5v-5z\"></path><path d=\"M12.5 6.5l5 5M4 21h16\"></path></svg><span>강조</span></button>\n  </nav>\n\n  <div class=\"body\">\n    <!-- ── 테마 ── -->\n    <div class=\"pane on\" data-pane=\"theme\">\n      <div class=\"tools\">\n        <label class=\"search\" data-has=\"false\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.1\" stroke-linecap=\"round\"><circle cx=\"11\" cy=\"11\" r=\"6.5\"></circle><path d=\"M16 16l4 4\"></path></svg><input type=\"search\" placeholder=\"테마 이름·설명 검색\" aria-label=\"테마 검색\" data-q=\"\"><button type=\"button\" class=\"clr\" aria-label=\"검색어 지우기\" data-clr=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"></path></svg></button></label>\n        <div class=\"seg mini\" data-seg=\"filter\" data-ready=\"true\">\n          <span class=\"seg-ind\" aria-hidden=\"true\"></span>\n          <button type=\"button\" class=\"seg-btn\" aria-selected=\"true\" data-f=\"all\" tabindex=\"0\">전체 <em data-cnt-all=\"\">31</em></button>\n          <button type=\"button\" class=\"seg-btn\" aria-selected=\"false\" data-f=\"fav\" tabindex=\"-1\">★ <em data-cnt-fav=\"\">3</em></button>\n        </div>\n      </div>\n      <div class=\"card\" style=\"padding:0;margin-top:10px\"><div class=\"tlist sgb-style-options\" role=\"radiogroup\" aria-label=\"UI 스타일\" data-tlist=\"\"></div></div>\n      <div class=\"lab\">입력 버튼</div>\n      <div class=\"card\">\n        <div class=\"row\"><span class=\"row-tx\"><b>입력 버튼 변경</b><small>전송 버튼을 테마에 맞는 모양으로 바꿔요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"false\" data-sgb-bool-toggle=\"sendButtonShapeEnabled\" data-def=\"false\"></button></div>\n      </div>\n    </div>\n\n    <!-- ── 배경 ── -->\n    <div class=\"pane\" data-pane=\"bg\">\n      <div class=\"lab\">방 이미지</div>\n      <div class=\"card img-card\">\n        <div class=\"img-hd\">\n          <span class=\"row-tx\"><b>배경 이미지 보기</b><small>꺼도 UI 테마와 글자 설정은 유지돼요.</small></span>\n          <button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-modal-toggle=\"\" data-def=\"true\"></button>\n        </div>\n        <div data-sgb-room-image-card=\"\" data-off=\"false\">\n          <div class=\"thumb\" data-has=\"false\">\n            <span class=\"ph-img\" data-thumb=\"\"></span>\n            <span class=\"meta\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><circle cx=\"9\" cy=\"9.5\" r=\"1.8\"></circle><path d=\"M21 15.5l-4.6-4.6a1.5 1.5 0 0 0-2.1 0L6 19.3\"></path></svg><b data-sgb-room-image-status=\"\">이 방에 선택된 이미지 없음</b></span>\n            <span class=\"empty\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><circle cx=\"9\" cy=\"9.5\" r=\"1.8\"></circle><path d=\"M21 15.5l-4.6-4.6a1.5 1.5 0 0 0-2.1 0L6 19.3\"></path></svg>이 방에 선택된 이미지 없음</span>\n          </div>\n          <div class=\"img-act\">\n            <button type=\"button\" class=\"btn btn-pri\" data-sgb-image-pick=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"4\"></rect><path d=\"M12 9v6M9 12h6\"></path></svg>이미지 선택</button>\n            <button type=\"button\" class=\"btn btn-gl danger\" data-sgb-image-remove=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 7h16M9 7V5h6v2M6.5 7l1 12h9l1-12\"></path></svg>제거</button>\n          </div>\n          <input type=\"file\" accept=\"image/*\" data-sgb-image-file=\"\" hidden=\"\">\n        </div>\n      </div>\n\n      <div data-sgb-image-adjust data-open=\"true\"><div><div class=\"lab\">이미지 조절</div>\n      <div class=\"card\">\n        <label class=\"sl\" data-sgb-background-dependent=\"\" data-off=\"false\"><span class=\"sl-hd\"><span>배경 흐림</span><output class=\"val\" data-sgb-setting-output=\"blurPx\">6px</output></span>\n<input class=\"rng\" type=\"range\" min=\"0\" max=\"22\" step=\"1\" value=\"6\" data-sgb-setting-input=\"blurPx\" data-def=\"6\" style=\"--p: 27.27272727272727%;\"></label>\n        <label class=\"sl\" data-sgb-background-dependent=\"\" data-off=\"false\"><span class=\"sl-hd\"><span>이미지 어둡게</span><output class=\"val\" data-sgb-setting-output=\"dim\">34%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0\" max=\"0.78\" step=\"0.01\" value=\"0.34\" data-sgb-setting-input=\"dim\" data-def=\"0.34\" style=\"--p: 43.58974358974359%;\"></label>\n        <label class=\"sl\" data-sgb-background-dependent=\"\" data-off=\"false\"><span class=\"sl-hd\"><span>이미지 확대/축소</span><output class=\"val\" data-sgb-setting-output=\"scale\">100%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.86\" max=\"1.28\" step=\"0.01\" value=\"1.0\" data-sgb-setting-input=\"scale\" data-def=\"1\" style=\"--p: 33.33333333333333%;\"></label>\n      </div>\n\n      </div></div><div class=\"lab\">채팅 UI</div>\n      <div class=\"card\">\n        <label class=\"sl\"><span class=\"sl-hd\"><span>UI 불투명도</span><output class=\"val\" data-sgb-setting-output=\"uiOpacity\">86%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.18\" max=\"1\" step=\"0.01\" value=\"0.86\" data-sgb-setting-input=\"uiOpacity\" data-def=\"0.86\" style=\"--p: 82.92682926829266%;\"></label>\n      </div>\n\n      <div class=\"lab\">소설형 가독성</div>\n      <div class=\"card\" data-sgb-novel-shade-controls=\"\">\n        <div class=\"row\"><span class=\"row-tx\"><b>소설 본문 가독성 배경</b><small>테마 밝기에 맞는 독서 영역을 본문 전체 뒤에 부드럽게 넣어요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"false\" data-sgb-bool-toggle=\"novelShadeEnabled\" data-def=\"false\"></button></div>\n        <div data-shade-body=\"\" data-off=\"true\"><label class=\"sl\"><span class=\"sl-hd\"><span>본문 배경 강도</span><output class=\"val\" data-sgb-setting-output=\"novelShadeOpacity\">45%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.05\" max=\"0.85\" step=\"0.01\" value=\"0.45\" data-sgb-setting-input=\"novelShadeOpacity\" data-def=\"0.45\" style=\"--p: 50.000000000000014%;\" disabled=\"\"></label></div>\n      </div>\n      <div class=\"status\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"></circle><path d=\"M12 11v5M12 7.6v.1\"></path></svg><span data-sgb-novel-shade-status=\"\">검정 음영으로 이미지의 밝은 부분을 눌러 글씨를 또렷하게 보여요.</span></div>\n    </div>\n\n    <!-- ── 글자 ── -->\n    <div class=\"pane\" data-pane=\"text\">\n      <div class=\"lab\" style=\"margin-top:8px\">글자 색상</div>\n      <div class=\"card\" data-color-card=\"\" data-locked=\"true\">\n        <div class=\"row\" data-sgb-theme-color-toggle=\"\"><span class=\"row-tx\"><b>테마 색상 자동 적용<span class=\"lockpill\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><rect x=\"5\" y=\"11\" width=\"14\" height=\"9\" rx=\"2.5\"></rect><path d=\"M8 11V8a4 4 0 0 1 8 0v3\"></path></svg>자동 색상 사용 중</span></b><small>색을 고르면 직접 설정으로 전환돼요. 다시 켜면 테마 색상으로 돌아가요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"themeRecommendedColorsEnabled\" data-def=\"true\"></button></div>\n        <div class=\"row\" style=\"min-height:0;padding:10px 0 4px\"><span class=\"row-tx\"><small style=\"margin:0\">직접 글자색</small></span></div>\n        <div class=\"lockable\" data-sgb-custom-color-controls=\"\" style=\"padding-bottom:6px\">\n          <div class=\"crow\"><span class=\"cl\">본문 글자색</span>\n<label class=\"cpick\" style=\"--c:#fafafa\"><input type=\"color\" value=\"#fafafa\" data-sgb-color-picker=\"textColor\" aria-label=\"본문 글자색\" data-def=\"#fafafa\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fafafa\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"textColor\" aria-label=\"본문 글자색 코드\" data-def=\"#fafafa\" disabled=\"\"></div>\n          <div class=\"crow\"><span class=\"cl\">묘사 글자색</span>\n<label class=\"cpick\" style=\"--c:#85837d\"><input type=\"color\" value=\"#85837d\" data-sgb-color-picker=\"emColor\" aria-label=\"묘사 글자색\" data-def=\"#85837d\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#85837d\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"emColor\" aria-label=\"묘사 글자색 코드\" data-def=\"#85837d\" disabled=\"\"></div>\n          <div class=\"crow\"><span class=\"cl\">강조 글자색</span>\n<label class=\"cpick\" style=\"--c:#fafafa\"><input type=\"color\" value=\"#fafafa\" data-sgb-color-picker=\"strongColor\" aria-label=\"강조 글자색\" data-def=\"#fafafa\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fafafa\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"strongColor\" aria-label=\"강조 글자색 코드\" data-def=\"#fafafa\" disabled=\"\"></div>\n        </div>\n      </div>\n\n      <div class=\"lab\">글자 모양</div>\n      \n<div class=\"card\">\n        <div class=\"grid2\">\n          <label class=\"sl\"><span class=\"sl-hd\"><span>글씨 크기</span><output class=\"val\" data-sgb-setting-output=\"textScale\">100%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.8\" max=\"1.2\" step=\"0.01\" value=\"1.0\" data-sgb-setting-input=\"textScale\" data-def=\"1\" style=\"--p: 50%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>코드블록 크기</span><output class=\"val\" data-sgb-setting-output=\"codeTextScale\">100%</output></span>\n<input class=\"rng\" type=\"range\" min=\"0.7\" max=\"1.2\" step=\"0.01\" value=\"1.0\" data-sgb-setting-input=\"codeTextScale\" data-def=\"1\" style=\"--p: 60.00000000000001%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>폰트 두께</span><output class=\"val\" data-sgb-setting-output=\"fontWeight\">400</output></span>\n<input class=\"rng\" type=\"range\" min=\"300\" max=\"900\" step=\"100\" value=\"400\" data-sgb-setting-input=\"fontWeight\" data-def=\"400\" style=\"--p: 16.666666666666664%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>행간</span><output class=\"val\" data-sgb-setting-output=\"lineHeight\">1.65배</output></span>\n<input class=\"rng\" type=\"range\" min=\"1.35\" max=\"2.1\" step=\"0.01\" value=\"1.65\" data-sgb-setting-input=\"lineHeight\" data-def=\"1.65\" style=\"--p: 39.99999999999997%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>자간</span><output class=\"val\" data-sgb-setting-output=\"letterSpacing\">0.00em</output></span>\n<input class=\"rng\" type=\"range\" min=\"-0.03\" max=\"0.08\" step=\"0.01\" value=\"0\" data-sgb-setting-input=\"letterSpacing\" data-def=\"0\" style=\"--p: 27.27272727272727%;\"></label>\n          <label class=\"sl\"><span class=\"sl-hd\"><span>문단 간격</span><output class=\"val\" data-sgb-setting-output=\"paragraphSpacing\">0.70rem</output></span>\n<input class=\"rng\" type=\"range\" min=\"0\" max=\"1.6\" step=\"0.01\" value=\"0.7\" data-sgb-setting-input=\"paragraphSpacing\" data-def=\"0.7\" style=\"--p: 43.74999999999999%;\"></label>\n        </div>\n      </div>\n\n      <div class=\"lab\">웹폰트</div>\n      <div class=\"acc\" data-open=\"false\">\n        <button type=\"button\" class=\"acc-h\" data-acc=\"\" aria-expanded=\"false\"><span class=\"row-tx\"><b>사용자 웹폰트</b><small>@font-face · 폰트 파일 URL · @import</small></span><span class=\"fontval\" data-sgb-font-output=\"\">없음</span><span class=\"chev\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M6 9l6 6 6-6\"></path></svg></span></button>\n        <div class=\"acc-b\"><div class=\"acc-in\"><div class=\"acc-pad\">\n          <label class=\"fld\"><span>웹폰트</span><textarea class=\"ta\" spellcheck=\"false\" rows=\"3\" data-sgb-font-input=\"customFontCssUrl\" placeholder=\"@font-face {...} / .woff2 URL / @import url(...)\"></textarea></label>\n          <label class=\"fld\"><span>폰트 종류</span><select class=\"sel\" data-sgb-font-input=\"customFontFamily\"><option value=\"\">자동 감지</option><option>Mona12</option><option>MonaS12</option><option>MonaS12 Text KR</option></select></label>\n          <p class=\"help\">@font-face·폰트 파일 URL은 자동 적용돼요. @import/CSS URL은 가능한 경우 이름까지 자동 추정하고, Mona 계열은 종류를 직접 고를 수 있어요.</p>\n        </div></div></div>\n      </div>\n\n      <div class=\"lab\">웹폰트 적용 범위</div><div class=\"card\"><div class=\"row\"><span class=\"row-tx\"><b>입력창</b><small data-sgb-input-font-hint=\"\">작성 중인 메시지도 설정한 웹폰트를 사용해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-label=\"입력창 웹폰트\" aria-checked=\"false\" data-sgb-bool-toggle=\"inputFontEnabled\" data-def=\"false\"></button></div><div class=\"row\"><span class=\"row-tx\"><b>사이트 전체</b><small>메뉴·목록·버튼까지 크랙 화면 전체에 적용해요. 설정창·코드·수식은 그대로예요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-label=\"사이트 전체 웹폰트\" aria-checked=\"false\" data-sgb-bool-toggle=\"siteFontEnabled\" data-def=\"false\"></button></div></div>\n<div class=\"lab\">가독성</div>\n      <div class=\"card\">\n        <div class=\"row\"><span class=\"row-tx\"><b>글자 그림자</b><small>본문에 은은한 검정 그림자를 넣어요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"false\" data-sgb-bool-toggle=\"textShadowEnabled\" data-def=\"false\"></button></div>\n      </div>\n    </div>\n\n    <!-- ── 강조 ── -->\n    <div class=\"pane\" data-pane=\"hl\">\n      <div class=\"note\" data-sgb-highlight-color-lock-hint=\"\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\"><rect x=\"5\" y=\"11\" width=\"14\" height=\"9\" rx=\"2.5\"></rect><path d=\"M8 11V8a4 4 0 0 1 8 0v3\"></path></svg><span>색상칩이나 배경색·글자색을 누르면 팔레트가 열려요. 색을 고르면 직접 설정으로 전환돼요.</span><button type=\"button\" class=\"btn btn-gl\" data-goto=\"text\">글자 탭</button></div>\n      <div class=\"hl\" data-on=\"true\" data-hl=\"dialogueBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"dialogue\" style=\"background: rgba(178, 154, 166, 0.34); color: rgb(253, 251, 252);\">“어서 와.”</span></span><span class=\"row-tx\"><b>대사 배경</b><small>\"\" / “” / 「」 / ❝❞ 대사를 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"dialogueBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"dialogueBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#b29aa6\"><input type=\"color\" value=\"#b29aa6\" data-sgb-color-picker=\"dialogueBg\" aria-label=\"배경색\" data-def=\"#b29aa6\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#b29aa6\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"dialogueBg\" aria-label=\"배경색 코드\" data-def=\"#b29aa6\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"dialogueTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#fdfbfc\"><input type=\"color\" value=\"#fdfbfc\" data-sgb-color-picker=\"dialogueTextColor\" aria-label=\"글자색\" data-def=\"#fdfbfc\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fdfbfc\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"dialogueTextColor\" aria-label=\"글자색 코드\" data-def=\"#fdfbfc\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"thoughtBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"thought\" style=\"background: rgba(168, 154, 166, 0.3); color: rgb(244, 238, 241);\">‘글쎄…’</span></span><span class=\"row-tx\"><b>생각 배경</b><small>' ' / ‘ ’ 작은따옴표를 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"thoughtBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"thoughtBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#a89aa6\"><input type=\"color\" value=\"#a89aa6\" data-sgb-color-picker=\"thoughtBg\" aria-label=\"배경색\" data-def=\"#a89aa6\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#a89aa6\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"thoughtBg\" aria-label=\"배경색 코드\" data-def=\"#a89aa6\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"thoughtTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#f4eef1\"><input type=\"color\" value=\"#f4eef1\" data-sgb-color-picker=\"thoughtTextColor\" aria-label=\"글자색\" data-def=\"#f4eef1\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#f4eef1\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"thoughtTextColor\" aria-label=\"글자색 코드\" data-def=\"#f4eef1\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"italicBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"italic\" style=\"background: rgba(232, 224, 228, 0.26); color: rgb(132, 130, 126);\"><i>흔들렸다</i></span></span><span class=\"row-tx\"><b>이탤릭 배경</b><small>*이탤릭*으로 렌더된 부분만 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"italicBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"italicBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#e8e0e4\"><input type=\"color\" value=\"#e8e0e4\" data-sgb-color-picker=\"italicBg\" aria-label=\"배경색\" data-def=\"#e8e0e4\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#e8e0e4\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"italicBg\" aria-label=\"배경색 코드\" data-def=\"#e8e0e4\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"italicTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#84827e\"><input type=\"color\" value=\"#84827e\" data-sgb-color-picker=\"italicTextColor\" aria-label=\"글자색\" data-def=\"#84827e\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#84827e\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"italicTextColor\" aria-label=\"글자색 코드\" data-def=\"#84827e\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"strongBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span data-demo=\"strong\" style=\"background: rgba(240, 224, 232, 0.62); color: rgb(250, 250, 250);\"><b>손상 없음</b></span></span><span class=\"row-tx\"><b>굵게 배경</b><small>**굵게**로 렌더된 부분만 감지해요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"strongBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"strongBg\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#f0e0e8\"><input type=\"color\" value=\"#f0e0e8\" data-sgb-color-picker=\"strongBg\" aria-label=\"배경색\" data-def=\"#f0e0e8\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#f0e0e8\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"strongBg\" aria-label=\"배경색 코드\" data-def=\"#f0e0e8\" disabled=\"\"></div><div class=\"crow\" data-sgb-highlight-color-row=\"strongBgTextColor\"><span class=\"cl\">글자색</span>\n<label class=\"cpick\" style=\"--c:#fafafa\"><input type=\"color\" value=\"#fafafa\" data-sgb-color-picker=\"strongBgTextColor\" aria-label=\"글자색\" data-def=\"#fafafa\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#fafafa\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"strongBgTextColor\" aria-label=\"글자색 코드\" data-def=\"#fafafa\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"codeBlockDecorEnabled\"><div class=\"hl-top\"><span class=\"demo\"><span class=\"code\">✧ INFO</span></span><span class=\"row-tx\"><b>코드블럭 꾸미기</b><small>추가테마의 테두리·헤더·작은 장식을 켜거나 꺼요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"codeBlockDecorEnabled\" data-def=\"true\"></button></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"codeBlockBgEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span class=\"code\" data-demo=\"code\" style=\"background: rgba(200, 166, 182, 0.24);\">zone: 7-B</span></span><span class=\"row-tx\"><b>코드블록 배경</b><small>코드블록 박스 배경을 켜거나 꺼요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"codeBlockBgEnabled\" data-def=\"true\"></button></div><div class=\"hl-c\" data-locked=\"true\"><div><div class=\"inner lockable\" data-sgb-custom-color-controls=\"\"><div class=\"crow\" data-sgb-highlight-color-row=\"codeAccent\"><span class=\"cl\">배경색</span>\n<label class=\"cpick\" style=\"--c:#c8a6b6\"><input type=\"color\" value=\"#c8a6b6\" data-sgb-color-picker=\"codeAccent\" aria-label=\"배경색\" data-def=\"#c8a6b6\" disabled=\"\"></label>\n<input class=\"chex\" type=\"text\" value=\"#c8a6b6\" spellcheck=\"false\" maxlength=\"7\" data-sgb-color-code=\"codeAccent\" aria-label=\"배경색 코드\" data-def=\"#c8a6b6\" disabled=\"\"></div></div></div></div></div>\n<div class=\"hl\" data-on=\"true\" data-hl=\"markdownDecorEnabled\">\n<div class=\"hl-top\"><span class=\"demo\"><span class=\"md\"><i>◆ 제목</i><u>인용문</u></span></span><span class=\"row-tx\"><b>마크다운 꾸미기</b><small>제목·인용문·목록·구분선·링크·표 등 렌더된 마크다운을 테마톤으로 꾸며요.</small></span><button type=\"button\" class=\"sw\" role=\"switch\" aria-checked=\"true\" data-sgb-bool-toggle=\"markdownDecorEnabled\" data-def=\"true\"></button></div></div>\n    </div>\n  </div>\n\n  <div class=\"selbar\" data-sgb-style-selbar=\"\" aria-live=\"polite\">\n    <span class=\"tsw\" data-sel-sw=\"\"></span>\n    <span class=\"sx\"><small>현재 테마</small><b data-sel-name=\"\"></b></span>\n    <span class=\"pals\" data-sel-pals=\"\" role=\"radiogroup\" aria-label=\"팔레트\"></span>\n  </div>\n  <footer class=\"ft\">\n    <button type=\"button\" class=\"btn btn-gl\" data-sgb-settings-reset=\"\" data-sgb-reset-state=\"idle\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 12a8 8 0 1 0 2.4-5.7M4 4v4.4h4.4\"></path></svg><span>전체 초기화</span></button>\n    <button type=\"button\" class=\"btn btn-pri\" data-sgb-settings-close=\"\" data-act=\"close\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"></circle><path d=\"M8 12.3l2.8 2.8L16.3 9.5\"></path></svg>닫기</button>\n  </footer>\n</section>";
+    installInlineColorPalette(modal);
     installLiquidSettings(modal, true);
     installThemeArtControls(modal);
     installSettingsModalDragging(modal);
@@ -5943,12 +6248,22 @@ function createSettingsModal() {
       }
     };
 
+    const colorEditContexts = new WeakMap();
+    modal.addEventListener('focusin', event => {
+      const input = event.target;
+      if (input instanceof HTMLInputElement && input.matches('[data-sgb-color-picker],[data-sgb-color-code]')) {
+        colorEditContexts.set(input, getColorEditingContext());
+      }
+    });
+
     const applyColorDebounced = (key, value, delay = 140) => {
-      const timers = state.colorApplyTimers;
+      const timers = state.colorApplyTimers, context = getColorEditingContext();
       clearTimeout(timers.get(key));
       timers.set(key, window.setTimeout(() => {
         timers.delete(key);
-        saveBackgroundSettings({ [key]: value }, { skipRefresh: true });
+        if (context !== getColorEditingContext()) return;
+        const patch = getManualColorPatch(CONFIG, key, value);
+        if (patch) saveBackgroundSettings(patch, { skipRefresh: true });
       }, delay));
     };
 
@@ -5958,6 +6273,8 @@ function createSettingsModal() {
 
       const key = input.getAttribute('data-sgb-color-picker') || input.getAttribute('data-sgb-color-code');
       if (!key) return;
+      clearTimeout(state.colorApplyTimers.get(key));
+      state.colorApplyTimers.delete(key);
 
       const current = normalizeBackgroundSettings(CONFIG);
       const raw = input.value.trim();
@@ -5966,6 +6283,7 @@ function createSettingsModal() {
 
       if (!valid && input.getAttribute('data-sgb-color-code')) return;
 
+      colorEditContexts.set(input, getColorEditingContext());
       syncColorControls(key, nextColor, input);
       syncLiquidColorSamples(modal);
       applyColorDebounced(key, nextColor, 140);
@@ -5974,21 +6292,18 @@ function createSettingsModal() {
     const handleColorCommit = event => {
       const input = event.target instanceof HTMLInputElement ? event.target : null;
       if (!input) return;
-
       const key = input.getAttribute('data-sgb-color-picker') || input.getAttribute('data-sgb-color-code');
       if (!key) return;
-
-      const current = normalizeBackgroundSettings(CONFIG);
-      const nextColor = normalizeHexColor(input.value, current[key]);
-
       clearTimeout(state.colorApplyTimers.get(key));
       state.colorApplyTimers.delete(key);
-      syncColorControls(key, nextColor, input);
-      if (input.getAttribute('data-sgb-color-code')) {
-        input.value = nextColor;
-      }
-
-      saveBackgroundSettings({ [key]: nextColor }, { skipRefresh: true });
+      const context = colorEditContexts.get(input);
+      colorEditContexts.delete(input);
+      const patch = (!context || context === getColorEditingContext())
+        ? getManualColorPatch(CONFIG, key, input.value) : null;
+      const color = patch?.[key] || getEditableThemeColors(CONFIG)[key];
+      syncColorControls(key, color, input);
+      input.value = color;
+      if (patch) saveBackgroundSettings(patch, { skipRefresh: true });
     };
 
     modal.addEventListener('input', handleColorPreview);
@@ -6162,6 +6477,8 @@ function createSettingsModal() {
   }
 
   function closeSettingsModal() {
+    document.getElementById(SGB_UI_IDS.modal)?.__sgbColorPaletteClose?.(false);
+    clearPendingColorEdits();
     persistCurrentSettings('modal-close');
     const modal = document.getElementById(SGB_UI_IDS.modal);
     if (modal) {
@@ -6227,7 +6544,7 @@ function createSettingsModal() {
 
       const imageAdjust = modal.querySelector('[data-sgb-image-adjust]');
       if (imageAdjust) { imageAdjust.dataset.open = String(enabled); imageAdjust.inert = !enabled; imageAdjust.setAttribute('aria-hidden', String(!enabled)); }
-      const themeColorsLocked = !!settings.themeRecommendedColorsEnabled;
+      const themeColorsLocked = false; // Automatic colors do not disable manual editing.
       modal.querySelectorAll('[data-sgb-custom-color-controls]').forEach(group => {
         if (!(group instanceof HTMLElement)) return;
         group.setAttribute('data-sgb-locked', themeColorsLocked ? 'true' : 'false');
@@ -6266,7 +6583,7 @@ function createSettingsModal() {
         fontOutput.textContent = getChatFontLabel(settings);
       }
 
-      ['inputFontEnabled', 'siteFontEnabled', 'themeRecommendedColorsEnabled', 'textShadowEnabled', 'novelShadeEnabled', 'dialogueBgEnabled', 'thoughtBgEnabled', 'italicBgEnabled', 'strongBgEnabled', 'codeBlockBgEnabled', 'markdownDecorEnabled', 'sendButtonShapeEnabled'].forEach(key => {
+      ['inputFontEnabled', 'siteFontEnabled', 'themeRecommendedColorsEnabled', 'textShadowEnabled', 'novelShadeEnabled', 'dialogueBgEnabled', 'thoughtBgEnabled', 'italicBgEnabled', 'strongBgEnabled', 'codeBlockBgEnabled', 'codeBlockDecorEnabled', 'markdownDecorEnabled', 'sendButtonShapeEnabled'].forEach(key => {
         syncSwitch(
           modal.querySelector(`[data-sgb-bool-toggle="${key}"]`),
           modal.querySelector(`[data-sgb-bool-thumb="${key}"]`),
@@ -6310,8 +6627,9 @@ function createSettingsModal() {
             : '검정 음영으로 이미지의 밝은 부분을 눌러 글씨를 또렷하게 보여요.';
       }
 
+      const effectiveColors = getEditableThemeColors(settings);
       [...getColorSettingDefinitions(), ...getHighlightColorSettingDefinitions()].forEach(def => {
-        const color = settings[def.key];
+        const color = effectiveColors[def.key];
         const row = modal.querySelector(`[data-sgb-highlight-color-row="${def.key}"]`);
         if (row instanceof HTMLElement && def.when) {
           row.style.removeProperty('display'); // The enclosing highlight card animates its own toggle.
@@ -6322,6 +6640,15 @@ function createSettingsModal() {
 
         if (picker instanceof HTMLInputElement && document.activeElement !== picker) picker.value = color;
         if (code instanceof HTMLInputElement && document.activeElement !== code) code.value = color;
+        if (def.key === 'dialogueTextColor' && row) {
+          const fixed = !!getAddedThemeTones(settings.uiStyle);
+          row.toggleAttribute('data-sgb-fixed-white', fixed);
+          row.querySelector('.cl').textContent = fixed ? '글자색 · 흰색 고정' : '글자색';
+          if (code) code.readOnly = fixed;
+          for (const button of row.querySelectorAll('.cl,.cpick')) {
+            button.setAttribute('aria-disabled', String(fixed)); button.tabIndex = fixed ? -1 : 0;
+          }
+        }
       });
 
       const roomId = getRoomId();
@@ -7769,6 +8096,7 @@ function createSettingsModal() {
   }
 
   function wrapQuotesInElement(md) {
+    if (getAddedThemeTones(CONFIG.uiStyle)) wrapAddedThemeDialogue(md);
     // React가 소유한 마크다운 요소 구조는 건드리지 않는다.
     // 원본 Text 노드를 기록해 정확히 되돌릴 수 있는 같은 Text 노드 내부의 따옴표만 강조한다.
     collectQuoteTextNodes(md, /["“”「」❝❞]/).forEach(replaceTextNodeWithQuotes);
@@ -19963,7 +20291,7 @@ html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-sty
 
 
     // 최적화(4.2.0): 33개 테마 중 지금 테마 규칙만 원래 순서대로 남긴다(sgbThemeCss 참고)
-    style.textContent = sgbThemeCss.load(fullThemeCss + buildUserThemePackCss() + BOTANICAL_LETTER_CSS + NYANG_CSS + SEND_SHAPE_CSS, normalizeUiStyle(CONFIG.uiStyle), style);
+    style.textContent = sgbThemeCss.load(fullThemeCss + buildUserThemePackCss() + BOTANICAL_LETTER_CSS + NYANG_CSS + SEND_SHAPE_CSS + buildAddedCodeblockCss(), normalizeUiStyle(CONFIG.uiStyle), style);
     document.head.appendChild(style);
   }
 
