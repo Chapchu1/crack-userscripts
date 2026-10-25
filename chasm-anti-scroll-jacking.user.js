@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Chasm Anti-Scroll Jacking (v1.3.1 스마트 가디언)
 // @namespace    https://github.com/milkyway0308/crystallized-chasm
-// @version      1.3.2
-// @description  1.3.2: 새로고침 위치를 메시지·문단 기준으로 복원하고 역방향 스크롤 및 로딩 중 저장 덮어쓰기를 보완합니다. 평소에는 크랙의 자연스러운 자동 따라가기를 유지하고, 사용자가 직접 스크롤하면 자동 스크롤 탈취를 막습니다. 새로고침 뒤 위치를 복원하되 사용자가 스크롤하는 순간 복원 재시도를 즉시 중단합니다.
+// @version      1.3.3
+// @description  1.3.3: 본문 편집 커서가 키보드와 하단 입력창에 가려지지 않도록 보완합니다. 새로고침 위치 복원과 사용자가 직접 스크롤할 때의 자동 스크롤 차단은 유지합니다.
 // @author       이름없는 유동
 // @match        https://crack.wrtn.ai/stories/*/episodes/*
 // @match        https://crack.wrtn.ai/characters/chat/*
@@ -35,6 +35,11 @@
     let restoreTop = null;
     let restoreTimerIds = [];
     let persistTimer = 0;
+
+    const COMPOSER_SELECTOR = '.__chat_input_textarea, [data-sgb-input-box], [data-cmu-theme-input-box], [data-cmu-keyboard-composer]';
+    let activeEditor = null, editorRoute = '', editorFrame = 0, editorPaused = false;
+    let editorNeedsSettle = false;
+    let editorPadding = null;
 
     const css = `
         * {
@@ -291,6 +296,171 @@
         schedulePersist();
     }
 
+    // Crack의 본문 편집기(tiptap)만 대상으로 한다. 대화 입력창은 기존 동작을 유지한다.
+    function messageEditor(node) {
+        if (!(node instanceof Element)) return null;
+        const editor = node.closest('[contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"]');
+        // 꾸미기용 input-box 표시는 CMU가 본문 편집창에도 붙이므로 구분 기준으로 쓰지 않는다.
+        return editor?.closest(MESSAGE_SELECTOR) && !editor.closest('.__chat_input_textarea') &&
+            editor.getAttribute('aria-readonly') !== 'true' ? editor : null;
+    }
+
+    function clearEditorPadding() {
+        if (!editorPadding) return;
+        const { el, value, priority, applied, hadStyle } = editorPadding;
+        // 다른 스크립트가 이후 바꾼 스타일은 덮어쓰지 않는다.
+        if (el.style.getPropertyValue('padding-bottom') === applied && el.style.getPropertyPriority('padding-bottom') === 'important') {
+            if (value) el.style.setProperty('padding-bottom', value, priority);
+            else el.style.removeProperty('padding-bottom');
+            if (!hadStyle && !el.style.length) el.removeAttribute('style');
+        }
+        editorPadding = null;
+    }
+
+    function finishEditor() {
+        cancelAnimationFrame(editorFrame);
+        editorFrame = 0;
+        editorNeedsSettle = false;
+        clearEditorPadding();
+        activeEditor = null;
+        editorRoute = '';
+        editorPaused = false;
+    }
+
+    function pauseEditor() {
+        if (!activeEditor) return;
+        editorPaused = true;
+        cancelAnimationFrame(editorFrame);
+        editorFrame = 0;
+        editorNeedsSettle = false;
+    }
+
+    function caretBox() {
+        const selection = window.getSelection();
+        if (!selection?.focusNode || !activeEditor?.contains(selection.focusNode)) return null;
+        const range = document.createRange();
+        range.setStart(selection.focusNode, selection.focusOffset);
+        range.collapse(true);
+        const box = range.getBoundingClientRect();
+        // 빈 문단의 <br>에서는 collapsed Range의 사각형이 비어 있을 수 있다.
+        if (box.height) return box;
+        const node = selection.focusNode.nodeType === 1 ? selection.focusNode : selection.focusNode.parentElement;
+        const block = node?.closest('p, li') || node;
+        return block && activeEditor.contains(block) && !block.textContent ? block.getBoundingClientRect() : null;
+    }
+
+    function portBox(el) {
+        if (el === docScroller()) return { top: 0, bottom: window.innerHeight, scale: 1 };
+        const rect = el.getBoundingClientRect();
+        const scale = el.offsetHeight ? rect.height / el.offsetHeight || 1 : 1;
+        const top = rect.top + el.clientTop * scale;
+        return { top, bottom: top + el.clientHeight * scale, scale };
+    }
+
+    function revealEditorCaret() {
+        let caret = caretBox();
+        if (!caret) return;
+        const viewport = window.visualViewport;
+        const top = viewport?.offsetTop || 0;
+        let bottom = top + (viewport?.height || window.innerHeight);
+        // 키보드 위로 올라온 입력창도 실제로 커서를 덮는 영역에 포함한다.
+        for (const composer of document.querySelectorAll(COMPOSER_SELECTOR)) {
+            if (composer.closest(MESSAGE_SELECTOR) || composer.contains(activeEditor)) continue;
+            const box = composer.getBoundingClientRect();
+            if (box.height > 0 && box.right > caret.left && box.left <= caret.right && box.bottom > top && box.top > top)
+                bottom = Math.min(bottom, box.top);
+        }
+        const ports = [];
+        let foundParentPort = false;
+        for (let el = activeEditor; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+            if (!el.clientHeight || !/auto|scroll|overlay/.test(getComputedStyle(el).overflowY)) continue;
+            if (isScrollable(el) || (el !== activeEditor && !foundParentPort)) ports.push(el);
+            if (el !== activeEditor) foundParentPort = true;
+        }
+        if (isScrollable(docScroller()) || !ports.length) ports.push(docScroller());
+        const outer = ports[ports.length - 1];
+        const outerBox = portBox(outer);
+        const reserve = Math.max(0, (outerBox.bottom - bottom + 8) / outerBox.scale);
+        if (editorPadding && (editorPadding.el !== outer || reserve < editorPadding.reserve)) clearEditorPadding();
+        for (const port of ports) {
+            const box = portBox(port);
+            const low = Math.max(box.top, port === outer ? top : box.top) + 8;
+            const high = Math.min(box.bottom, port === outer ? bottom : box.bottom) - 8;
+            if (high <= low) continue;
+            const move = () => {
+                caret = caretBox();
+                if (!caret) return;
+                const delta = caret.bottom > high ? caret.bottom - high : Math.min(0, caret.top - low);
+                if (!delta) return;
+                internalRestoreWrite = true;
+                try { port.scrollTop += delta / box.scale; }
+                finally { internalRestoreWrite = false; }
+                if (!atBottom(port)) locked.add(port);
+            };
+            move();
+            caret = caretBox();
+            // 마지막 줄은 스크롤 여지가 부족할 때만 필요한 만큼 임시 여백을 둔다.
+            if (port === outer && caret && caret.bottom > high + 1 && reserve > 0) {
+                if (editorPadding && (port.style.getPropertyValue('padding-bottom') !== editorPadding.applied ||
+                    port.style.getPropertyPriority('padding-bottom') !== 'important')) editorPadding = null;
+                if (!editorPadding) editorPadding = { el: port, value: port.style.getPropertyValue('padding-bottom'),
+                    priority: port.style.getPropertyPriority('padding-bottom'), hadStyle: port.hasAttribute('style'),
+                    base: parseFloat(getComputedStyle(port).paddingBottom) || 0 };
+                editorPadding.reserve = reserve;
+                editorPadding.applied = `${editorPadding.base + reserve}px`;
+                port.style.setProperty('padding-bottom', editorPadding.applied, 'important');
+                move();
+            }
+        }
+    }
+
+    function scheduleEditorReveal() {
+        if (!activeEditor) return;
+        editorNeedsSettle = true;
+        if (editorFrame) return;
+        const reveal = () => {
+            const needsSettle = editorNeedsSettle;
+            editorNeedsSettle = false;
+            if (!activeEditor?.isConnected || messageEditor(document.activeElement) !== activeEditor || editorRoute !== routeKey()) {
+                finishEditor();
+                return;
+            }
+            if (editorPaused) { editorFrame = 0; return; }
+            revealEditorCaret();
+            // 같은 resize에 반응하는 입력창 배치가 끝난 다음 프레임까지 한 번만 확인한다.
+            // 대기 중 새 이벤트가 오면 그 이벤트의 배치 완료도 놓치지 않는다.
+            editorFrame = 0;
+            if (needsSettle || editorNeedsSettle) editorFrame = requestAnimationFrame(reveal);
+        };
+        editorFrame = requestAnimationFrame(reveal);
+    }
+
+    document.addEventListener('focusin', () => {
+        const editor = messageEditor(document.activeElement);
+        if (editor !== activeEditor || editorRoute !== routeKey()) finishEditor();
+        if (!editor) return;
+        activeEditor = editor;
+        editorRoute = routeKey();
+        editorPaused = false;
+        stopRestoreForUser();
+        scheduleEditorReveal();
+    }, true);
+    document.addEventListener('focusout', scheduleEditorReveal, true);
+    for (const event of ['input', 'selectionchange']) document.addEventListener(event, () => {
+        if (activeEditor) {
+            editorPaused = false;
+            scheduleEditorReveal();
+        }
+    }, true);
+    window.visualViewport?.addEventListener('resize', scheduleEditorReveal, { passive: true });
+    window.visualViewport?.addEventListener('scroll', scheduleEditorReveal, { passive: true });
+    window.addEventListener('resize', scheduleEditorReveal, { passive: true });
+    window.addEventListener('popstate', finishEditor);
+    window.addEventListener('hashchange', finishEditor);
+    window.navigation?.addEventListener('currententrychange', () => {
+        if (activeEditor && editorRoute !== routeKey()) finishEditor();
+    });
+
     function restoreSavedPosition() {
         const state = loadSavedState();
         if (!state) return;
@@ -344,6 +514,7 @@
 
     window.addEventListener('wheel', (e) => {
         const el = findScrollableFrom(e.target);
+        pauseEditor();
         stopRestoreForUser();
         setUserGesture(el);
         requestAnimationFrame(() => updateLockFromUserScroll(el));
@@ -365,6 +536,7 @@
         if (Math.abs(y - touchStartY) < 3) return;
         const el = touchTarget || findScrollableFrom(e.target);
         touchMoved = true;
+        pauseEditor();
         stopRestoreForUser();
         setUserGesture(el);
         requestAnimationFrame(() => updateLockFromUserScroll(el));
@@ -402,7 +574,7 @@
         schedulePersist();
     }, { capture: true, passive: true });
 
-    window.addEventListener('pagehide', persistNow, true);
+    window.addEventListener('pagehide', () => { finishEditor(); persistNow(); }, true);
     window.addEventListener('beforeunload', persistNow, true);
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') persistNow();
@@ -448,7 +620,9 @@
         const original = Element.prototype[method];
         Element.prototype[method] = function(...args) {
             const container = findScrollableFrom(this);
-            if (shouldBlockGeneric(container)) return;
+            const editor = messageEditor(this);
+            if ((!editor || editor !== messageEditor(document.activeElement)) && shouldBlockGeneric(container)) return;
+            if (editor) scheduleEditorReveal();
             return original.apply(this, args);
         };
     });
@@ -456,7 +630,7 @@
     const originalFocus = HTMLElement.prototype.focus;
     HTMLElement.prototype.focus = function(...args) {
         const container = findScrollableFrom(this);
-        if (shouldBlockGeneric(container)) {
+        if (!messageEditor(this) && shouldBlockGeneric(container)) {
             try {
                 return originalFocus.call(this, { ...(args[0] || {}), preventScroll: true });
             } catch (_) {
