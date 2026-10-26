@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.92
+// @version      0.5.93
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.93 · 선별 안정화와 작업별 버튼 정리
+ * 시간 포함 날짜로그, 긴 대화 이어 요약, Vertex 인증 중복 억제, 입력창 오배치 방지, 잠금 원인 안내.
+ * 홈의 자주 쓰는 작업과 하단 기억 전달을 모으고, 설정·데이터 정리 도구를 용도별로 구분.
+ * 기존 기능·설정·저장 형식·권한 유지.
+ */
 
 /* 0.5.92 · 전송 전 연결 확인·생성 잠금 복구
  * 최근 대화 조회는 페이지 연결을 우선 사용하고 연결 실패에만 기존 확장 조회로 전환합니다.
@@ -775,7 +781,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.92'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.93'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -14913,10 +14919,10 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
       const assistantText = current.assistantParts.join('\n\n').trim();
       if (!assistantText) return;
       const key = current.turnId || current.assistantId || simpleHash(`${current.userText}\n${assistantText}`);
-      const aliases=[current.turnId,current.assistantId].filter(Boolean).map(String);
+      const aliases=[current.turnId,current.assistantId,current.userId,...current.reviewSources.map(row=>row.id)].filter(Boolean).map(String);
       turns.push({
         key:String(key), aliases:[...new Set(aliases)],
-        userText:current.userText,
+        userId:current.userId,userText:current.userText,
         assistantText,reviewSources:current.reviewSources,
         text:`[USER]\n${current.userText}\n\n[AI]\n${assistantText}`,
       });
@@ -14927,7 +14933,7 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
       if (!clean) continue;
       if (role === 'user') {
         push();
-        current = { userText:clean, assistantParts:[], assistantId:'',reviewSources:[], turnId:String(message?.turnId || ''), incomplete:false };
+        current = { userText:clean,userId:String(messageIdOf(message)||''),assistantParts:[],assistantId:'',reviewSources:[],turnId:String(message?.turnId||''),incomplete:false };
       } else if (current && ['assistant','character','bot'].includes(role)) {
         if (isIncompleteAiSourceMessage(message)) { current.incomplete = true; continue; }
         current.assistantParts.push(clean);
@@ -14973,12 +14979,46 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
     const ordered=all.reverse();rpcmNewBadgeObserveMessages(chatId,ordered,true);return ordered;
   }
 
+  function aiSummaryNeededCursorKeys(room, settings) {
+    if (!settings?.preferUnprocessed) return [];
+    return [...new Set(['logSummary', 'currentState']
+      .filter(id => settings.targets?.[id])
+      .map(id => String(room?.aiSummaryLastAppliedTurnKeys?.[id] || room?.aiSummaryLastAppliedTurnKey || ''))
+      .filter(Boolean))];
+  }
+
+  function aiSummaryTurnIndex(turns,key) {
+    const target=String(key||'');if(!target)return -1;let found=-1;
+    for(let i=0;i<(turns||[]).length;i++){
+      const turn=turns[i];if(String(turn.key)!==target&&!(turn.aliases||[]).some(alias=>String(alias)===target))continue;
+      if(found>=0)throw Object.assign(new Error('저장된 이어 요약 기준이 여러 대화 턴과 일치합니다. 원문을 확인해 주세요. 기준을 자동 변경하지 않았습니다.'),{code:'RPCM_SUMMARY_CURSOR_AMBIGUOUS'});
+      found=i;
+    }
+    return found;
+  }
+
+  async function loadAiSummaryTurns(room, requiredKeys=[], minRecentTurns=100, options={}) {
+    if(!room||String(apiChatIdOf(state.currentRoom))!==String(apiChatIdOf(room)))throw rpcmHistoryStale('AI 요약 중 현재 RP 방이 변경되었습니다. 원래 방에서 다시 확인해 주세요.');
+    const context=rpcmHistoryContext(state.currentRoom),control=options.control||null;
+    const check=()=>{rpcmAssertHistoryContext(context);if(control?.cancelled)throw rpcmHistoryUserAbort();};
+    check();
+    const keys=[...new Set((requiredKeys||[]).map(String).filter(Boolean))],remaining=new Set(keys),minTurns=Math.max(0,Math.min(100,Number(minRecentTurns)||0));
+    const pager=createRpcmTurnPager(state.currentRoom,{control,maxPageSize:300}),chunks=[];let count=0;
+    while(!pager.done){
+      check();const chunk=await pager.next();check();chunks.push(chunk);count+=chunk.length;
+      for(const key of remaining)if(rpcmFindTurnIndex(chunk,key)>=0)remaining.delete(key);
+      if(count>=minTurns&&!remaining.size)break;
+    }
+    const turns=chunks.reverse().flat();for(const key of keys)aiSummaryTurnIndex(turns,key);
+    return{turns,exhausted:pager.done};
+  }
+
   function selectAiDialogueTurns(turns, room, settings, targetId = '') {
     const count = Math.max(0, Math.min(100, Number(settings.turnCount) || 0));
     const lastKey = String(room.aiSummaryLastAppliedTurnKeys?.[targetId] || room.aiSummaryLastAppliedTurnKey || '');
     if (settings.preferUnprocessed && lastKey) {
-      const index = rpcmFindTurnIndex(turns,lastKey);
-      if (index < 0) throw new Error('저장된 이어 요약 기준을 최근 대화에서 찾지 못했습니다. “최근 N턴 다시 요약”을 선택하거나 기준을 리셋해 주세요.');
+      const index = aiSummaryTurnIndex(turns,lastKey);
+      if (index < 0) throw new Error('저장된 이어 요약 기준이 전체 RP 원문에서도 확인되지 않습니다. 해당 턴이 삭제·리롤·수정되었는지 확인해 주세요. 기준을 자동 초기화하지 않았습니다.');
       const fresh = turns.slice(index + 1);
       if (!fresh.length) throw new Error('저장된 이어 요약 기준 이후 새로 완료된 대화가 없습니다.');
       return count ? fresh.slice(0, count) : [];
@@ -15156,36 +15196,51 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
   }
 
   async function getVertexAccessToken(serviceAccount) {
-    const cacheKey = String(serviceAccount.client_email || '');
+    const email = String(serviceAccount.client_email || '').trim();
+    const tokenUri = String(serviceAccount.token_uri || AI_VERTEX_OAUTH_URL).trim();
+    const keyId = String(serviceAccount.private_key_id || '').trim();
+    const keyBytes = aiPemBytes(serviceAccount.private_key);
+    const fingerprint = aiBase64Url(new Uint8Array(await crypto.subtle.digest('SHA-256', keyBytes)));
+    const cacheKey = JSON.stringify([email, tokenUri, keyId, fingerprint]);
     const cached = AI_VERTEX_TOKEN_CACHE.get(cacheKey);
     if (cached && cached.expiresAt > Date.now() + 60000) return cached.token;
-    const now = Math.floor(Date.now() / 1000);
-    const tokenUri = String(serviceAccount.token_uri || AI_VERTEX_OAUTH_URL);
-    const header = aiBase64Url(JSON.stringify({ alg:'RS256', typ:'JWT' }));
-    const claims = aiBase64Url(JSON.stringify({
-      iss:serviceAccount.client_email,
-      scope:'https://www.googleapis.com/auth/cloud-platform',
-      aud:tokenUri,
-      iat:now,
-      exp:now + 3600,
-    }));
-    const unsigned = `${header}.${claims}`;
-    const key = await crypto.subtle.importKey(
-      'pkcs8', aiPemBytes(serviceAccount.private_key),
-      { name:'RSASSA-PKCS1-v1_5', hash:'SHA-256' }, false, ['sign']
-    );
-    const signature = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, aiUtf8Bytes(unsigned)));
-    const assertion = `${unsigned}.${aiBase64Url(signature)}`;
-    const response = await aiHttpRequest(tokenUri, {
-      headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
-      body:`grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${encodeURIComponent(assertion)}`,
-      timeout:30000,
-    });
-    const data = parseAiJsonResponse(response, 'Vertex 인증');
-    if (!data.access_token) throw new Error('Vertex 액세스 토큰을 받지 못했습니다.');
-    const expiresIn = Math.max(300, Number(data.expires_in) || 3600);
-    AI_VERTEX_TOKEN_CACHE.set(cacheKey, { token:String(data.access_token), expiresAt:Date.now() + expiresIn * 1000 });
-    return String(data.access_token);
+    if (cached?.pending) return cached.pending;
+    const entry = {};
+    const pending = (async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const header = aiBase64Url(JSON.stringify({ alg:'RS256', typ:'JWT', ...(keyId ? { kid:keyId } : {}) }));
+      const claims = aiBase64Url(JSON.stringify({
+        iss:email,
+        scope:'https://www.googleapis.com/auth/cloud-platform',
+        aud:tokenUri,
+        iat:now,
+        exp:now + 3600,
+      }));
+      const unsigned = `${header}.${claims}`;
+      const key = await crypto.subtle.importKey(
+        'pkcs8', keyBytes,
+        { name:'RSASSA-PKCS1-v1_5', hash:'SHA-256' }, false, ['sign']
+      );
+      const signature = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, aiUtf8Bytes(unsigned)));
+      const encodedSignature = aiBase64Url(signature);
+      const assertion = `${unsigned}.${encodedSignature}`;
+      const response = await aiHttpRequest(tokenUri, {
+        headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
+        body:`grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${encodeURIComponent(assertion)}`,
+        timeout:30000,
+      });
+      const data = parseAiJsonResponse(response, 'Vertex 인증');
+      if (!data.access_token) throw new Error('Vertex 액세스 토큰을 받지 못했습니다.');
+      const expiresIn = Math.max(300, Number(data.expires_in) || 3600);
+      AI_VERTEX_TOKEN_CACHE.set(cacheKey, { token:String(data.access_token), expiresAt:Date.now() + expiresIn * 1000 });
+      return String(data.access_token);
+    })();
+    entry.pending = pending;
+    AI_VERTEX_TOKEN_CACHE.set(cacheKey, entry);
+    try { return await pending; }
+    finally {
+      if (AI_VERTEX_TOKEN_CACHE.get(cacheKey) === entry) AI_VERTEX_TOKEN_CACHE.delete(cacheKey);
+    }
   }
 
   // Response-refiner-only capabilities for the existing generateContent transports.
@@ -15630,7 +15685,7 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
   function aiTurnsAfterSavedKey(turns, savedKey) {
     const key = String(savedKey || '');
     if (!key) return null;
-    const index = (turns || []).findIndex(turn => String(turn.key) === key);
+    const index = aiSummaryTurnIndex(turns, key);
     return index < 0 ? -1 : Math.max(0, turns.length - index - 1);
   }
 
@@ -15942,8 +15997,8 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
     const source = Array.isArray(turns) ? turns : [];
     const lastKey = String(room?.aiSummaryLastAppliedTurnKeys?.[targetId] || room?.aiSummaryLastAppliedTurnKey || '');
     if (settings.preferUnprocessed && lastKey) {
-      const index = source.findIndex(turn => String(turn.key) === lastKey);
-      if (index < 0) throw new Error('저장된 이어 요약 기준을 최근 대화에서 찾지 못했습니다. ‘최근 N턴 다시 요약’을 선택하거나 기준을 리셋해 주세요.');
+      const index = aiSummaryTurnIndex(source, lastKey);
+      if (index < 0) throw new Error('저장된 이어 요약 기준이 전체 RP 원문에서도 확인되지 않습니다. 해당 턴이 삭제·리롤·수정되었는지 확인해 주세요. 기준을 자동 초기화하지 않았습니다.');
       return { turns:source.slice(index + 1), fromStart:true };
     }
     return { turns:source, fromStart:false };
@@ -16228,9 +16283,8 @@ ${dialogueText}`;
     if (!settings.targets?.logSummary && !settings.targets?.currentState) throw new Error('생성할 항목을 하나 이상 선택해 주세요.');
     const chatId = apiChatIdOf(room);
     if (!chatId) throw new Error('현재 채팅방 ID를 찾지 못했습니다.');
-    onStatus('완료된 최근 대화를 불러오는 중…');
-    const history = await fetchAiMessageHistory(chatId, '', Math.max(160, Math.min(500, settings.turnCount * 6 + 80)));
-    const allTurns = buildCompletedAiDialogueTurns(history);
+    onStatus(settings.preferUnprocessed?'저장된 기준까지 완료 대화를 확인하는 중…':'완료된 최근 대화를 불러오는 중…');
+    const {turns:allTurns}=await loadAiSummaryTurns(room,aiSummaryNeededCursorKeys(room,settings),settings.turnCount);
     const turnsByTarget = {};
     if (settings.targets.logSummary) turnsByTarget.logSummary = selectAiDialogueTurns(allTurns, room, settings, 'logSummary');
     if (settings.targets.currentState) turnsByTarget.currentState = selectAiDialogueTurns(allTurns, room, settings, 'currentState');
@@ -21315,6 +21369,25 @@ ${dialogueText}`;
     return blockKey === timelineKey;
   }
 
+  function parseClockLogHeading(inner) {
+    const civil='(?:(?:\\d{1,6}년[ \\t]*)?\\d{1,2}월[ \\t]*\\d{1,2}일|\\d{4,6}[-/.]\\d{1,2}[-/.]\\d{1,2})';
+    const period='(?:오전|오후|새벽|아침|낮|저녁|밤|정오|자정)';
+    const clock='(?:'+period+'[ \\t]*)?(?:\\d{1,2}[:：]\\d{2}(?:[:：]\\d{2})?|\\d{1,2}[ \\t]*시(?:[ \\t]*\\d{1,2}[ \\t]*분|[ \\t]*반)?)(?:[ \\t]*(?:AM|PM))?';
+    const weekday='[ \\t]*[（(](?:[월화수목금토일](?:요일)?|Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)[)）]';
+    const suffix='(?:'+weekday+')?(?:[ \\t]*(?:T[ \\t]*)?'+clock+'(?:[ \\t]*[~～–—-][ \\t]*'+clock+')?|[ \\t]*'+period+')?';
+    const m=String(inner).match(new RegExp('^('+civil+')('+suffix+')(?:[ \\t]*·[ \\t]*([^\\-–—|｜]+?))?(?:[ \\t]*[-–—|｜][ \\t]*(.+))?$','i'));
+    if(!m||!m[2].trim())return null;
+    const k=m[1].match(/^(?:(\d{1,6})년[ \t]*)?(\d{1,2})월[ \t]*(\d{1,2})일$/),iso=k?null:m[1].match(/^(\d{4,6})([-/.])(\d{1,2})\2(\d{1,2})$/);
+    if(!k&&!iso)return null;
+    const year=Number(k?k[1]:iso[1])||null,month=Number(k?k[2]:iso[3]),day=Number(k?k[3]:iso[4]);
+    if((k?.[1]||iso)&&!year)return null;
+    const y=year||2000,leap=y%4===0&&(y%100!==0||y%400===0),days=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
+    if(month<1||month>12||day<1||day>days[month-1])return null;
+    for(const t of m[2].matchAll(/(\d{1,2})[:：](\d{2})(?:[:：](\d{2}))?/g))if(Number(t[1])>23||Number(t[2])>59||Number(t[3]||0)>59)return null;
+    for(const t of m[2].matchAll(/(\d{1,2})[ \t]*시(?:[ \t]*(\d{1,2})[ \t]*분)?/g))if(Number(t[1])>23||Number(t[2]||0)>59)return null;
+    return {fullDate:m[1]+m[2],calendarDate:(year?year+'년 ':'')+month+'월 '+day+'일',timeLabel:m[2].trim(),year,month,day,events:String(m[4]||'').trim(),sourceTimelineLabel:sanitizeLogTimelineLabel(m[3])};
+  }
+
   function parseDatedLogBlocks(text) {
     const src = normalizeLineBreaks(text);
     // 기본 양력형 외에 작품 고유 표기인 BC206·기원전 206년·AD714도 날짜 블록으로 인식합니다.
@@ -21329,7 +21402,8 @@ ${dialogueText}`;
       const eraNamePattern = 'B\\.?[ \\t]*C\\.?(?:[ \\t]*E\\.?)?|A\\.?[ \\t]*D\\.?|C\\.?[ \\t]*E\\.?|기원전|서기';
       const eraRe = new RegExp(`^((${eraNamePattern})[ \\t]*(\\d{1,6})(?:년)?(?:[ \\t]*(\\d{1,2})월[ \\t]*(\\d{1,2})일)?(?:[ \\t]*[~～](?:[ \\t]*(?:${eraNamePattern}[ \\t]*)?\\d{1,6}(?:년)?(?:[ \\t]*\\d{1,2}월[ \\t]*\\d{1,2}일)?)?)?)(?:[ \\t]*·[ \\t]*([^\\-–—|｜]+?))?(?:[ \\t]*[-–—|｜][ \\t]*(.+))?$`, 'i');
       const era = inner.match(eraRe);
-      if (!standard && !unknown && !era) continue;
+      const clockDate = !standard && !unknown && !era ? parseClockLogHeading(inner) : null;
+      if (!standard && !unknown && !era && !clockDate) continue;
 
       const isUnknown = !!unknown;
       const isSpecialDate = !!era;
@@ -21342,7 +21416,11 @@ ${dialogueText}`;
       let timelineLabel = '';
       let sourceTimelineLabel = '';
       let events = '';
-      if (standard) {
+      if (clockDate) {
+        ({fullDate,year,month,day,events,sourceTimelineLabel} = clockDate);
+        sortYear = year;
+        timelineLabel = cleanLogTimelineLabel(sourceTimelineLabel);
+      } else if (standard) {
         fullDate = standard[1];
         year = standard[2] ? Number(standard[2]) : null;
         month = Number(standard[3]);
@@ -21386,6 +21464,7 @@ ${dialogueText}`;
         events,
         heading: m[0].trim(),
         headingRaw: m[0],
+        ...(clockDate ? { calendarDate:clockDate.calendarDate, timeLabel:clockDate.timeLabel } : {}),
       });
     }
     if (!hits.length) return [];
@@ -21399,7 +21478,9 @@ ${dialogueText}`;
           ? `era-${String(h.fullDate || '').toLowerCase().replace(/\s+/g, '')}`
           : `${h.year || 'x'}-${String(h.month).padStart(2,'0')}-${String(h.day).padStart(2,'0')}`;
       const timelineKey = normalizedLogTimelineKey(h.timelineLabel);
-      const dateKey = h.isUnknown ? calendarDateKey : `${calendarDateKey}::${timelineKey}`;
+      // Calendar grouping remains day-based; merge/validation identity also includes the time.
+      const timeKey=h.timeLabel?`::time:${h.timeLabel.replace(/\s+/g,'').toLocaleLowerCase()}`:'';
+      const dateKey = h.isUnknown ? calendarDateKey : `${calendarDateKey}::${timelineKey}${timeKey}`;
       const key = `${dateKey}-${simpleHash(h.heading)}`;
       const yearPrefix = h.year ? `${h.year}.` : '';
       return {
@@ -21416,7 +21497,7 @@ ${dialogueText}`;
           ? `${h.unknownLabel}${h.events ? ` ${h.events}` : ''}`
           : h.isSpecialDate
             ? `${h.fullDate}${h.timelineLabel && h.timelineLabel !== DEFAULT_LOG_TIMELINE ? ` · ${h.timelineLabel}` : ''}${h.events ? ` ${h.events}` : ''}`
-            : `${yearPrefix}${h.month}/${h.day}${h.timelineLabel && h.timelineLabel !== DEFAULT_LOG_TIMELINE ? ` · ${h.timelineLabel}` : ''}${h.events ? ` ${h.events}` : ''}`,
+            : `${yearPrefix}${h.month}/${h.day}${h.timeLabel ? ` ${h.timeLabel}` : ''}${h.timelineLabel && h.timelineLabel !== DEFAULT_LOG_TIMELINE ? ` · ${h.timelineLabel}` : ''}${h.events ? ` ${h.events}` : ''}`,
         sourceStart: h.index,
         sourceEnd: end,
       };
@@ -21588,8 +21669,9 @@ ${dialogueText}`;
     const timeline = cleanLogTimelineLabel(timelineLabel);
     const timelineSuffix = timeline && timeline !== DEFAULT_LOG_TIMELINE ? `·${timeline}` : '';
     const suffix = block.events ? `-${block.events}` : '';
-    if (year && month && day) return `[${Number(year)}년 ${Number(month)}월 ${Number(day)}일${timelineSuffix}${suffix}]`;
-    if (!block.isUnknown && month && day) return `[${Number(month)}월 ${Number(day)}일${timelineSuffix}${suffix}]`;
+    const timeSuffix = block.timeLabel ? ` ${block.timeLabel}` : '';
+    if (year && month && day) return `[${Number(year)}년 ${Number(month)}월 ${Number(day)}일${timeSuffix}${timelineSuffix}${suffix}]`;
+    if (!block.isUnknown && month && day) return `[${Number(month)}월 ${Number(day)}일${timeSuffix}${timelineSuffix}${suffix}]`;
     return `[${block.unknownLabel || '날짜 미상'}${timelineSuffix}${suffix}]`;
   }
 
@@ -31420,6 +31502,18 @@ ${dialogueText}`;
     const inputPreviewEl = $('#rpcm-ai-input-preview');
     let currentInputPlan = null;
     let inputPreviewTurns = null;
+    let inputPreviewKey='',inputPreviewPending=null,inputPreviewControl=null,inputPreviewRoom=null;
+    async function getSummaryPreviewTurns(targetRoom,next) {
+      const context=rpcmHistoryContext(state.currentRoom);rpcmAssertHistoryContext(context);
+      if(!targetRoom||String(apiChatIdOf(targetRoom))!==context.chatId)throw rpcmHistoryStale();
+      const keys=aiSummaryNeededCursorKeys(targetRoom,next),key=JSON.stringify([context.chatId,context.epoch,context.revision,context.hostScope,[...keys].sort()]);
+      if(inputPreviewKey===key&&inputPreviewRoom===context.room){if(inputPreviewTurns)return inputPreviewTurns;if(inputPreviewPending)return inputPreviewPending;}
+      inputPreviewControl?.cancel();inputPreviewControl=rpcmCreateHistoryControl();
+      inputPreviewKey=key;inputPreviewRoom=context.room;inputPreviewTurns=null;
+      const pending=loadAiSummaryTurns(targetRoom,keys,100,{control:inputPreviewControl}).then(result=>{rpcmAssertHistoryContext(context);if(inputPreviewKey===key&&inputPreviewRoom===context.room)inputPreviewTurns=result.turns;return result.turns;});
+      inputPreviewPending=pending;
+      try{return await pending;}finally{if(inputPreviewPending===pending)inputPreviewPending=null;}
+    }
     let inputPreviewTimer = 0;
     let inputPreviewSequence = 0;
     const historyDetailsEl = $('#rpcm-ai-history');
@@ -31529,18 +31623,15 @@ ${dialogueText}`;
       const sequence = ++resumeRefreshSequence;
       progress.textContent = '저장된 기준 이후 완료 대화 턴 수를 확인하는 중…';
       try {
-        const chatId = apiChatIdOf(room);
-        if (!chatId) throw new Error('현재 채팅방 ID를 찾지 못했습니다.');
-        const history = await fetchAiMessageHistory(chatId, '', 500);
-        const turns = buildCompletedAiDialogueTurns(history);
+        const next=collectSettings(false);
+        const turns=await getSummaryPreviewTurns(aiRoomWithPendingDraft(room,generatedDraft),next);
         if (sequence !== resumeRefreshSequence || !document.contains(backdrop)) return;
-        inputPreviewTurns = turns;
         const counts = new Map();
         const labels = selectedTargets.map(([id, label]) => {
           if (!keys[id]) return `${label} 첫 적용 전`;
           const count = aiTurnsAfterSavedKey(turns, keys[id]);
           counts.set(id, count);
-          return count < 0 ? `${label} 기준점이 최근 범위에 없음` : `${label} ${formatCount(count)}턴`;
+          return count < 0 ? `${label} ${next.preferUnprocessed?'원문에서 기준점 확인 불가':'이번 조회 범위 밖'}` : `${label} ${formatCount(count)}턴`;
         });
         let suffix = '';
         const canAutoFit = $('#rpcm-ai-new-only')?.checked
@@ -31776,14 +31867,9 @@ ${dialogueText}`;
           inputPreviewEl.textContent = '날짜요약 또는 현재상태를 하나 이상 선택해 주세요.';
           return;
         }
-        if (!inputPreviewTurns) {
-          const chatId = apiChatIdOf(room);
-          if (!chatId) throw new Error('현재 채팅방 ID를 찾지 못했습니다.');
-          const history = await fetchAiMessageHistory(chatId, '', 500);
-          inputPreviewTurns = buildCompletedAiDialogueTurns(history);
-        }
+        const previewRoom=aiRoomWithPendingDraft(room,generatedDraft),turns=await getSummaryPreviewTurns(previewRoom,next);
         if (sequence !== inputPreviewSequence || !document.contains(backdrop)) return;
-        renderInputPlan(calculateAiSummaryInputPlan(aiRoomWithPendingDraft(room, generatedDraft), next, inputPreviewTurns));
+        renderInputPlan(calculateAiSummaryInputPlan(previewRoom,next,turns));
       } catch (error) {
         if (sequence !== inputPreviewSequence || !document.contains(backdrop)) return;
         currentInputPlan = null;
@@ -31875,6 +31961,8 @@ ${dialogueText}`;
       aiDisclosureResizeObserver?.disconnect();
       window.removeEventListener('resize', scheduleAiDisclosureHeights);
       document.removeEventListener('keydown', onKey);
+      inputPreviewControl?.cancel();inputPreviewSequence++;resumeRefreshSequence++;
+      if(inputPreviewTimer){clearTimeout(inputPreviewTimer);inputPreviewTimer=0;}
       backdrop.remove();
       if (state.aiSummaryDialog === backdrop) state.aiSummaryDialog = null;
     };
@@ -49830,7 +49918,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.92-suite';
+  const SCRIPT_VERSION = '0.5.93-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -70150,12 +70238,16 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
   const storageWrites=new Map(),roomLeases=new Map();
   async function withRoomExclusive(rid,work,options={}) {
     rid=String(rid);
-    if(options.signal?.aborted)throw Error('작업 준비가 취소되었습니다.');
+    const cancelled=()=>Object.assign(new Error('작업 준비가 취소되었습니다.'),{name:'AbortError',code:'WISH_USER_ABORT'});
+    if(options.signal?.aborted)throw cancelled();
     if(typeof navigator!=='undefined'&&navigator.locks?.request){
-      const controller=new AbortController(),cancel=()=>controller.abort();
+      const controller=new AbortController();let acquired=false;
+      const cancel=()=>{if(!controller.signal.aborted)controller.abort(cancelled());};
+      const timeout=()=>{if(!controller.signal.aborted)controller.abort(Object.assign(new Error('방 작업 잠금을 30초 안에 얻지 못했습니다. 다른 탭이나 진행 중인 작업을 확인해 주세요.'),{code:'WISH_ROOM_LOCK_TIMEOUT'}));};
       options.signal?.addEventListener('abort',cancel,{once:true});
-      const timer=setTimeout(cancel,30000);
-      try{return await navigator.locks.request('wish-rp-room:'+rid,{mode:'exclusive',signal:controller.signal},async()=>{clearTimeout(timer);if(controller.signal.aborted)throw Error('방 작업 잠금 대기가 취소되었습니다.');return work();});}
+      const timer=setTimeout(timeout,30000);
+      try{return await navigator.locks.request('wish-rp-room:'+rid,{mode:'exclusive',signal:controller.signal},async()=>{clearTimeout(timer);if(controller.signal.aborted)throw controller.signal.reason;acquired=true;return work();});}
+      catch(error){if(!acquired&&controller.signal.aborted)throw controller.signal.reason;throw error;}
       finally{clearTimeout(timer);options.signal?.removeEventListener('abort',cancel);}
     }
     const leaseId='wish-lease:'+rid,owner=crypto.randomUUID();
@@ -71767,17 +71859,20 @@ const fullHistoryWanted=new Set();
   // 하단 채팅 입력 툴바 전용. 상단/고정/floating fallback은 사용하지 않습니다.
   // 탐색 순서는 Crack GPT Companion의 실제 composer-toolbar 로직을 축약해 따릅니다.
   // ---------------------------------------------------------------------------
-  function findCrackComposer() {
+  function isCrackComposerCandidate(el) {
+    if(!el?.isConnected||el.closest('#wish-rp-root,#wish-rp-quick,#wish-rp-monitor,#rpcm-overlay,[id^="rpcm-"][id$="-backdrop"],[data-message-id],[data-message-group-id],.wrtn-markdown,.wish-rp-inline-action-footer,[role="dialog"],dialog,[hidden],[aria-hidden="true"]'))return false;
+    if(!isElementVisible(el))return false;
+    const r=el.getBoundingClientRect();return r.width>120&&r.height>18&&r.bottom>window.innerHeight*.34;
+  }
+  function findCrackComposer(preferred=null) {
+    if(isCrackComposerCandidate(preferred))return preferred;
     const root = document.querySelector('main') || document.body;
     if (!root) return null;
     const candidates = [...root.querySelectorAll('textarea,[contenteditable="true"],[role="textbox"],[data-lexical-editor="true"],.ProseMirror')]
-      .filter(el => isElementVisible(el) && !el.closest('#wish-rp-root,#wish-rp-quick,#rpcm-overlay,#rpcm-ai-settings-backdrop,#rpcm-bulk-backdrop'))
-      .filter(el => {
-        const r = el.getBoundingClientRect();
-        return r.width > 120 && r.height > 18 && r.bottom > window.innerHeight * .34;
-      })
-      .sort((a,b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
-    return candidates[0] || null;
+      .filter(isCrackComposerCandidate)
+      .map(el=>({el,native:el.classList.contains('__chat_input_textarea'),top:el.getBoundingClientRect().top}))
+      .sort((a,b) => Number(b.native)-Number(a.native)||b.top-a.top);
+    return candidates[0]?.el || null;
   }
 
 
@@ -74865,6 +74960,19 @@ html.rpcm-custom-surface body[data-theme="dark"] :is(#wish-rp-root,#wish-suite-e
 #wish-rp-root .m3-memory-work>.m3-fold2{margin:12px 0}
 #wish-rp-root .m3-memory-work>.m3-compact-status{line-height:1.65;overflow-wrap:anywhere}
 #wish-rp-root .m3-memory-note{font-size:12px;line-height:1.65;color:var(--m3-muted);margin:8px 0}
+/* Existing actions are grouped by task; their handlers and saved settings are unchanged. */
+#wish-rp-root .m3-section-label{font:inherit;font-size:12px;font-weight:700;color:var(--m3-fg2);margin:14px 0 9px}
+#wish-rp-root .m3-home-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 14px}
+#wish-rp-root .m3-home-actions>div{min-width:0;margin:0}
+#wish-rp-root .m3-home-actions .m3-btn,#wish-rp-root .m3-home-actions>.m3-btn{width:100%;min-height:44px;justify-content:center;white-space:normal;overflow-wrap:anywhere;gap:6px}
+#wish-rp-root .m3-home-actions small{display:block;text-align:center;font-size:10.5px;color:var(--m3-muted);margin-top:5px;line-height:1.5}
+#wish-rp-root .m3-footer-actions{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px;min-width:0}
+#wish-rp-root .m3-footer-actions>.m3-btn,#wish-rp-root .m3-footer-actions>.m3-inject{min-height:40px}
+#wish-rp-root .m3-tool-links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
+#wish-rp-root .m3-tool-links>.m3-btn{min-width:0;min-height:40px;justify-content:flex-start;white-space:normal;overflow-wrap:anywhere}
+#wish-rp-root .m3-compact-overview>.m3-section-label{margin-top:0}
+@container(max-width:480px){#wish-rp-root .m3-home-actions{grid-template-columns:repeat(2,minmax(0,1fr))}#wish-rp-root .m3-home-actions>.m3-memory-primary-row{grid-column:1/-1}}
+@media(max-width:768px){#wish-rp-root .m3-footer-actions{width:100%}#wish-rp-root .m3-footer-actions>.m3-btn,#wish-rp-root .m3-footer-actions>.m3-inject{flex:1;padding-inline:7px}}
 /* Delivery settings expand exactly below their home action. */
 #wish-rp-root .m3-btn.m3-draft-restart-main{background:var(--m3-accent);color:var(--m3-accent-ink,#fff);font-weight:700;border-color:var(--m3-accent)}
 #wish-rp-root .m3-delivery-toggle[aria-expanded="true"]{background:var(--m3-accent-soft);border-color:var(--m3-accent-line);color:var(--m3-accent)}
@@ -75228,7 +75336,7 @@ const ta = (k, v, ph = '', h = '', x = '') => `<textarea data-bind="${esc(k)}" p
   }
   function homeMemoryCard(u,s,isSuite,ready){
     const autoOn=isSuite?s.enabled:u.enabled&&(u.memoryEnabled||u.observeEnabled);
-    if(isManualAiProvider())return `<section class="m3-panel m3-focus"><b>외부 AI로 기억·인물 정리</b><p class="m3-muted">요청문을 외부 AI에 보내고 답을 붙여 넣으면, 같은 방과 원문인지 확인한 뒤 적용합니다.</p><div class="m3-card-actions">${btn('함께 정리','unifiedAll',{cls:'primary',icon:'copy',dis:!!V.job})}${btn('답 붙여넣기','manualPaste',{cls:'mini',dis:!manualJobView()||!!V.job})}</div></section>`;
+    if(isManualAiProvider())return `<section class="m3-panel m3-focus"><b>외부 AI로 기억·인물 정리</b><p class="m3-muted">요청문을 외부 AI에 보내고 답을 붙여 넣으면, 같은 방과 원문인지 확인한 뒤 적용합니다.</p><div class="m3-home-actions" data-key="home-actions" role="group" aria-label="자주 쓰는 작업">${btn('함께 정리','unifiedAll',{cls:'primary',icon:'copy',dis:!!V.job})}${btn('답 붙여넣기','manualPaste',{cls:'mini',dis:!manualJobView()||!!V.job})}${btn('AI 기억 도우미','memoryHelper',{cls:'mini m3-helper-entry',icon:'search'})}</div></section>`;
     const suiteBusy=!!(isSuite&&WSUITE.suite?.busy?.()),cleanupBusy=!!(u.running||suiteBusy),otherAiBusy=!!V.job&&!V.job.quiet&&!cleanupBusy,busy=cleanupBusy||otherAiBusy;
     const restartRequired=!!(u.draft&&(u.draft.restartRequired||u.draft.phase==='waiting'||u.errorCode==='WISH_DRAFT_CHANGED'));
     const modeMismatch=!!(isSuite&&u.draft);
@@ -75251,9 +75359,9 @@ const ta = (k, v, ph = '', h = '', x = '') => `<textarea data-bind="${esc(k)}" p
     const errorText=u.errorCode==='WISH_RELATION_FIELDS'||/^관계 변경 (?:current|milestone|unresolved) 길이\/형식 오류/.test(u.error||'')?'관계 정리 결과의 길이·형식이 맞지 않아 적용을 보류했어요. 기존 기억과 완료된 정리는 유지됩니다.':/^WISH_RESPONSE_SHAPE/.test(u.errorCode||'')||/응답(?:\.|\[).*알 수 없는 필드/.test(u.error||'')?'AI 정리 응답의 항목 형식이 맞지 않아 보류했어요. 기존 기억은 유지됩니다. '+(u.draft?'위의 ‘이어서 정리·검증’을 눌러 주세요.':'위의 ‘다시 정리’를 눌러 주세요.'):WSUITE.crackTransport.display({code:u.errorCode,message:u.error});
     const error=!isSuite&&u.error?`<p class="m3-error-detail">마지막 정리 오류: ${esc(errorText)}</p>`:'';
     const recovery=!isSuite&&u.draft&&!restartRequired?`<p class="m3-muted">임시 결과를 버리고 원문부터 다시 처리해야 할 때만 사용하세요. 현재 적용된 기억은 유지됩니다.</p>${btn('임시 결과를 버리고 다시 시작','draftRestart',{cls:'quiet mini',dis:busy||!ready,icon:'refresh'})}`:'';
-    const details=fold('home-memory-details','설정·작업 상세',controls+error+`<div class="m3-card-actions">${btn('실패·주의 기록','errorLogs',{cls:'quiet mini',icon:'doc'})}${btn('교체 기록','repairRecords',{cls:'quiet mini',icon:'edit'})}</div>`+recovery);
-    const refinerRetry=`<div class="m3-card-actions">${btn('대화 응답교정 다시하기','suiteRefinerRetry',{cls:'mini',icon:'edit',dis:busy||!!WSUITE.coreRefiner?.getState?.().busy||typeof window.__WISH_RP_MANAGER_REFINER__?.reviewLatest!=='function'})}</div>`;
-    return `<section class="m3-panel m3-home-auto m3-memory-work${!isSuite&&(u.error||u.draft)?' m3-alert':''}" data-key="home-automation"><div class="m3-row m3-sp"><b>기억 정리</b>${tag(cleanupBusy?'정리 중':!isSuite&&u.error?'정리 보류':autoOn?'자동 켜짐':'자동 꺼짐',!isSuite&&u.error&&!cleanupBusy?'warn':autoOn?'ok':'')}</div>${cadence}${cadenceHelp}<p class="m3-compact-status"${isSuite?'':' data-unified-retry-status'}>${esc(status)}</p>${draftNote}${requestStatusCard(true)}<div class="m3-memory-primary-row">${btn(label,action,{arg,cls:'mini m3-memory-primary',dis:busy,icon})}</div>${refinerRetry}${details}<small class="m3-muted">${isSuite?'최신 턴 처리 범위는 자동 정리 설정을 따릅니다.':'최신 1턴은 다음 답변 뒤 확정됩니다.'}</small></section>`;
+    const details=fold('home-memory-details','설정·작업 상세',controls+(!u.serverWaiting?cadenceHelp:'')+error+`<div class="m3-card-actions">${btn('실패·주의 기록','errorLogs',{cls:'quiet mini',icon:'doc'})}${btn('교체 기록','repairRecords',{cls:'quiet mini',icon:'edit'})}</div>`+recovery);
+    const refinerRetry=btn('응답 교정','suiteRefinerRetry',{cls:'mini',icon:'edit',dis:busy||!!WSUITE.coreRefiner?.getState?.().busy||typeof window.__WISH_RP_MANAGER_REFINER__?.reviewLatest!=='function'});
+    return `<section class="m3-panel m3-home-auto m3-memory-work${!isSuite&&(u.error||u.draft)?' m3-alert':''}" data-key="home-automation"><div class="m3-row m3-sp"><b>기억 정리</b>${tag(cleanupBusy?'정리 중':!isSuite&&u.error?'정리 보류':autoOn?'자동 켜짐':'자동 꺼짐',!isSuite&&u.error&&!cleanupBusy?'warn':autoOn?'ok':'')}</div>${cadence}${u.serverWaiting?cadenceHelp:''}<p class="m3-compact-status"${isSuite?'':' data-unified-retry-status'}>${esc(status)}</p>${draftNote}${requestStatusCard(true)}<h3 class="m3-section-label">자주 쓰는 작업</h3><div class="m3-home-actions" data-key="home-actions" role="group" aria-label="자주 쓰는 작업"><div class="m3-memory-primary-row">${btn(label,action,{arg,cls:'mini m3-memory-primary',dis:busy,icon})}<small>기억·인물 업데이트</small></div><div class="m3-action-tile">${btn('AI 기억 도우미','memoryHelper',{cls:'mini m3-helper-entry',icon:'search'})}<small>저장된 기억에 질문</small></div><div class="m3-action-tile">${refinerRetry}<small>최근 답변 다시 확인</small></div></div>${details}<small class="m3-muted">${isSuite?'최신 턴 처리 범위는 자동 정리 설정을 따릅니다.':'최신 1턴은 다음 답변 뒤 확정됩니다.'}</small></section>`;
   }
   const manualJobPanel=()=>{
     const j=V.ai.job;
@@ -75266,12 +75374,10 @@ function vCheck(){
     const u=V.unified||{},I=V.inj,s=WSUITE.suite?.summary()||{},isSuite=WSUITE.host.automation(state.currentRoom)==='suite',ready=!!WSUITE.host.aiReady?.();
     const status=u.draft?'기존 기억 유지 · 최신 정리 미완료':I.armed?(I.authWaiting?'로그인 확인 대기':I.serverWaiting?'크랙 서버 확인 대기':I.verified?(I.error?'기존 기억 저장됨 · 최신 갱신 확인 필요':'AI에 전달할 기억 저장 확인됨'):I.error?'기억 전달 확인 필요':'기억 전달 확인 중'):'기억 전달 꺼짐';
     const fresh=V.fresh?.show?`<section class="m3-panel m3-focus" data-key="home-fresh"><b>${esc(V.fresh.title||'새 방 시작 설정')}</b><p>${esc(V.fresh.desc||'')}</p>${btn('나중에','freshSkip',{cls:'quiet mini'})}${btn('적용','freshApply',{cls:'mini'})}</section>`:'';
-    const pending=V.reviews.length+(s.pending||0);
     const deliveryNotice=I.error?`<p class="m3-memory-note m3-attention-status">${I.authWaiting?'⚠️ 사이트 로그인 확인 후 하단의 서버 재검증을 눌러 주세요.':I.serverWaiting?'⚠️ 크랙 서버 응답을 기다리고 있어요. 저장된 기억은 유지되며, 정상 응답 후 전달 상태를 다시 확인합니다.':I.verified?'⚠️ 기존 기억의 서버 저장은 확인됐지만 최근 갱신에 오류가 있어요. 실패 기록을 확인한 뒤 서버 재검증을 눌러 주세요.':'⚠️ 기억 전달 확인이 필요해요. 하단의 서버 재검증에서 다시 확인할 수 있습니다.'}</p>`:'';
     return pageHead('홈')+fresh+(isManualAiProvider()?manualJobPanel():'')+(!ready?`<section class="m3-panel m3-onboarding" data-key="first-connection"><b>처음에는 두 가지만 확인하세요</b><ol><li>사용할 API와 모델을 연결해요.</li><li>자동 정리할 항목과 주기를 정해요.</li></ol><p class="m3-muted">아래 API 연결하기로 시작하세요. 연결 뒤 설정·작업 상세에서 정리 주기를 정할 수 있습니다.</p></section>`:'')+
-      `<section class="m3-panel m3-home-status" data-key="home-status"><div class="m3-row m3-sp"><b class="${status.includes('확인 필요')?'m3-attention-status':''}">${esc(warningStatusText(status))}</b><span class="m3-tag ${I.verified?'ok':''}">${fmt(I.total)} / ${fmt(I.max||APP.carrierSafeChars)}자</span></div>${capMeter()}${deliveryNotice}<div class="m3-card-actions">${btn('기억 미리보기','preview',{cls:'mini',icon:'eye'})}${homeDeliveryToggle()}</div>${homeDeliveryDetails()}</section>`+
+      `<section class="m3-panel m3-home-status" data-key="home-status"><div class="m3-row m3-sp"><b class="${status.includes('확인 필요')?'m3-attention-status':''}">${esc(warningStatusText(status))}</b><span class="m3-tag ${I.verified?'ok':''}">${fmt(I.total)} / ${fmt(I.max||APP.carrierSafeChars)}자</span></div>${capMeter()}${deliveryNotice}<div class="m3-card-actions">${homeDeliveryToggle()}</div>${homeDeliveryDetails()}</section>`+
       homeMemoryCard(u,s,isSuite,ready)+unifiedHomeCards()+
-      (pending?`<section class="m3-panel" data-key="home-review"><b>검토할 변경 ${pending}건</b><p class="m3-muted">보류된 변경만 한곳에서 확인하고 적용합니다.</p>${btn('변경 검토','unifiedRoute',{arg:'cognition:review',cls:'mini',icon:'eye'})}</section>`:'')+
       fold('first-steps','메뉴 사용 안내',`<dl class="m3-menu-guide"><dt>기억·자료</dt><dd>현재상태, 날짜별 기억, 자료집과 진행 규칙</dd><dt>인물</dt><dd>인물 설정, 인지, 호칭과 관계</dd><dt>AI·자동화</dt><dd>API 연결, 자동 정리, 응답 교정과 사용 기록</dd><dt>설정</dt><dd>화면, 백업·복원과 재구축</dd></dl>`);
   }
 
@@ -75795,7 +75901,7 @@ function positionPackMenus(){
   }
   }
 
-function vTools(page='all'){const j=V.rebuild,run=V.rebuildRunning,rows=j?.segments||[],done=rows.filter(s=>s.status==='complete').length,status={pending:'대기',running:'판독 중',complete:'완료',failed:'실패'};
+function vTools(page='all',heading=true){const j=V.rebuild,run=V.rebuildRunning,rows=j?.segments||[],done=rows.filter(s=>s.status==='complete').length,status={pending:'대기',running:'판독 중',complete:'완료',failed:'실패'};
  const rebuild=page==='transfer'?'':
  `<section class="m3-panel" data-key="memdiff-settings"><div class="m3-panel-head"><b>정리 전후 비교</b>${btn('정리 기록','memDiff',{cls:'mini',icon:'history'})}</div><p class="m3-muted">현재상태·날짜로그·서사 고리·관계·인지·호칭·자료집 · 방마다 최근 10회 · 추가 API 호출 없음</p></section>`+
  suiteBody('history')+(state.currentRoom?.suiteImportCandidates?.length?'<section class="m3-panel">'+btn('가져온 내용 비교 '+state.currentRoom.suiteImportCandidates.length+'건','suiteConflicts',{cls:'mini'})+'</section>':'')+
@@ -75805,9 +75911,9 @@ vExternalRebuild(run||ExternalBundles.busy())+
  '<hr class="m3-secondary-divider"><div data-key="secondary-rebuild"><b>외부 AI로 2차 재구축</b><div class="m3-muted">현재 방 자료를 카드별 고밀도 기록체로 압축합니다. 사건·원문·팩 구분을 보존합니다.</div><div class="m3-row m3-card-actions">'+btn('지침 + TXT 받기','secondaryExport',{cls:'mini',dis:run})+btn('JSON 가져오기','secondaryImport',{cls:'mini',dis:run})+btn('지침','promptGuides',{arg:'externalSecondary',cls:'mini',icon:'doc'})+'</div>'+vSecondaryStatus(run)+'</div></section>';
  const transfer=page==='rebuild'?'':
  '<section class="m3-panel" data-key="room-copy"><b class="m3-title-help">다른 방 자료 복사하기 '+help(helpSections([['독립 사본','원본 방과 연결하지 않고 현재 방 안에 독립 복사합니다. 이후 어느 한쪽이 자동 갱신돼도 다른 방은 바뀌지 않습니다.'],['선택 복사','현재상태·날짜로그·서사 고리·캐릭터/OOC·자료집·인물인지·은폐·호칭말투·관계감정선을 필요한 것만 체크해 복사합니다.'],['안전 범위','주입 중 상태, AI cursor·근거 manifest, 재구축 staging, 자동화 실행상태는 방 사이에 이식하지 않습니다.']]))+'</b><div class="m3-muted">분기·새 방으로 기존 정사 자료를 옮길 때 사용합니다. 내용을 펼쳐 확인하고 섹션·사건·카드를 개별 선택합니다. 자료집은 별도 참고 팩으로 보관합니다.</div><div class="m3-row m3-card-actions">'+btn('다른 방에서 선택 복사','roomCopy',{cls:'mini',icon:'copy',dis:run})+'</div></section>'+
- '<section class="m3-panel" data-key="backup"><div class="m3-row m3-sp"><div class="m3-t"><b class="m3-title-help">백업 · 복원 '+help(helpSections([['파일 백업','이 기기의 Wish 자료를 파일로 저장하고, 복원할 방과 자료를 선택합니다.'],['재구축과의 차이','백업 복원은 저장본을 되돌립니다. 전체 재구축은 과거 대화를 AI로 다시 읽습니다.']]))+'</b><div class="m3-muted">필요한 자료를 로컬 백업 파일로 보관합니다.</div></div></div><div class="m3-row m3-card-actions">'+btn('클라우드 백업','kvOpen',{cls:'mini',icon:'cloud'})+btn('백업 저장','fileBackup',{cls:'mini'})+btn('백업 복원','fileRestore',{cls:'mini'})+btn('로컬 데이터 정리','localRooms',{cls:'mini',icon:'database'})+'</div></section>'+
- '<section class="m3-panel" data-key="room-reset"><b class="m3-title-help">이 방 데이터 초기화</b><p class="m3-muted">현재 방의 기억·인지·설정·작업 이력과 방 전용 자동 자료를 초기화합니다. 크랙 대화는 유지하며 실행 전에 확인합니다.</p><div class="m3-actions m3-topgap">'+btn('이 방 데이터 초기화','reset',{cls:'mini m3-reset-action',icon:'trash'})+'</div></section>';
- return pageHead(page==='transfer'?'백업·이동':page==='rebuild'?'재구축·복구':'자료 관리')+rebuild+transfer;
+ '<section class="m3-panel" data-key="backup"><div class="m3-row m3-sp"><div class="m3-t"><b class="m3-title-help">백업 · 복원 '+help(helpSections([['파일 백업','이 기기의 Wish 자료를 파일로 저장하고, 복원할 방과 자료를 선택합니다.'],['재구축과의 차이','백업 복원은 저장본을 되돌립니다. 전체 재구축은 과거 대화를 AI로 다시 읽습니다.']]))+'</b><div class="m3-muted">필요한 자료를 로컬 백업 파일로 보관합니다.</div></div></div><div class="m3-row m3-card-actions">'+btn('클라우드 백업','kvOpen',{cls:'mini',icon:'cloud'})+btn('백업 저장','fileBackup',{cls:'mini'})+btn('백업 복원','fileRestore',{cls:'mini'})+'</div></section>'+
+ fold('transfer-cleanup','고급 · 저장 데이터 정리','<section class="m3-panel" data-key="room-reset"><b class="m3-title-help">이 방 데이터 초기화</b><p class="m3-muted">현재 방의 기억·인지·설정·작업 이력과 방 전용 자동 자료를 초기화합니다. 크랙 대화는 유지하며 실행 전에 확인합니다.</p><div class="m3-actions m3-topgap">'+btn('이 방 데이터 초기화','reset',{cls:'mini m3-reset-action',icon:'trash'})+'</div></section><section class="m3-panel"><b>기기에 남은 방 데이터</b><p class="m3-muted">정리할 자료를 먼저 확인하고 선택합니다.</p>'+btn('로컬 데이터 정리','localRooms',{cls:'mini',icon:'database'})+'</section>');
+ return (heading?pageHead(page==='transfer'?'백업·이동':page==='rebuild'?'재구축·복구':'자료 관리'):'')+rebuild+transfer;
 }
 
   /* ───────── 12. 화면: 설정 ───────── */
@@ -75917,7 +76023,7 @@ function vSettings(){
     if(S.settingsPage==='history')S.settingsPage='rebuild';
     if(S.settingsPage==='backup')S.settingsPage='transfer';
     if(!pages.some(([k])=>k===S.settingsPage))S.settingsPage='general';
-    let body=S.settingsPage==='general'?`<section class="m3-panel"><b>새 채팅방</b>${tog('주입 자동 시작','injection.autoStartNewChats',WishNewChatInjection.enabled(),'새 방에서 자동으로 켜기 · 기본 ON')}<p class="m3-muted">자료와 주입할 이전 AI 답변이 준비되면 자동으로 적용합니다. 기존 방과 직접 주입을 해제한 방은 유지합니다.</p></section><section class="m3-panel"><b>화면 표시</b>${tog('입력창 상태 버튼 표시','display.monitor',WishDisplay.visible(),'OFF·남은 턴 숫자 버튼')}<p class="m3-muted">모바일 합본의 위시 RP 버튼을 사용하면 숨겨도 됩니다. 변경 즉시 모든 방에 적용됩니다.</p></section>${themeSettingsHtml()}${rpMemoSettingsHtml()}<section class="m3-panel"><b>설정을 찾고 있나요?</b><div class="m3-card-actions">${btn('API 연결','unifiedRoute',{arg:'ai:connection',cls:'mini',icon:'key'})}${btn('자동 정리','unifiedRoute',{arg:'ai:automation',cls:'mini'})}${btn('응답 교정','unifiedRoute',{arg:'ai:refiner',cls:'mini'})}${btn('진행 규칙·프리셋','unifiedRoute',{arg:'memory:extra',cls:'mini',icon:'book'})}${btn('실패·주의 기록','errorLogs',{cls:'mini',icon:'doc'})}${btn('저장 공간 관리','storageManage',{cls:'mini',icon:'database'})}</div></section>`:vTools(S.settingsPage);
+    let body=S.settingsPage==='general'?`<section class="m3-panel"><b>새 채팅방</b>${tog('주입 자동 시작','injection.autoStartNewChats',WishNewChatInjection.enabled(),'새 방에서 자동으로 켜기 · 기본 ON')}<p class="m3-muted">자료와 주입할 이전 AI 답변이 준비되면 자동으로 적용합니다. 기존 방과 직접 주입을 해제한 방은 유지합니다.</p></section><section class="m3-panel"><b>화면 표시</b>${tog('입력창 상태 버튼 표시','display.monitor',WishDisplay.visible(),'OFF·남은 턴 숫자 버튼')}<p class="m3-muted">모바일 합본의 위시 RP 버튼을 사용하면 숨겨도 됩니다. 변경 즉시 모든 방에 적용됩니다.</p></section>${themeSettingsHtml()}${rpMemoSettingsHtml()}<section class="m3-panel" data-key="settings-setup"><b>AI·기억 설정</b><p class="m3-muted">연결과 자동화, 기억에 적용할 규칙을 설정합니다.</p><div class="m3-tool-links">${btn('API 연결','unifiedRoute',{arg:'ai:connection',cls:'mini',icon:'key'})}${btn('자동 정리','unifiedRoute',{arg:'ai:automation',cls:'mini'})}${btn('응답 교정','unifiedRoute',{arg:'ai:refiner',cls:'mini'})}${btn('진행 규칙·프리셋','unifiedRoute',{arg:'memory:extra',cls:'mini',icon:'book'})}</div></section><section class="m3-panel" data-key="settings-diagnostics"><b>점검·저장 관리</b><p class="m3-muted">작업 오류와 저장 공간을 확인합니다. 자료 이동과 복구는 위의 세부 메뉴에서 선택하세요.</p><div class="m3-tool-links">${btn('실패·주의 기록','errorLogs',{cls:'mini',icon:'doc'})}${btn('저장 공간 관리','storageManage',{cls:'mini',icon:'database'})}</div></section>`:vTools(S.settingsPage,false);
     if(S.settingsPage==='rebuild')body+=fold('legacy-all-tools','고급 · 기존 상세 편집기 (위시 RP 매니저)',`<p class="m3-muted">통합본에 포함된 위시 RP 매니저의 상세 화면입니다. 기존 인물·물품의 세부 편집, 수동 업데이트·자료 압축 등 전문 도구를 엽니다. 일반 기억·자료·인물 편집은 각각의 메뉴에서 가능합니다.</p>${btn('위시 RP 매니저 상세 편집기 열기','suiteLegacy',{cls:'mini',icon:'edit'})}`);
     return pageHead('설정')+unifiedTabs(pages,S.settingsPage,'settingsSub')+`<div class="m3-sub" data-key="settings-${S.settingsPage}">${body}</div>`;
   }
@@ -75941,7 +76047,7 @@ function vSettings(){
   function unifiedHomeCards(){
     const s=WSUITE.suite?.summary()||{},isSuite=WSUITE.host.automation(state.currentRoom)==='suite';
     const rows=isSuite?[['cognition:cards',s.cards||0,'정보 카드','people'],['memory:events',s.events||0,'사건 기억','memory'],['cognition:review',s.pending||0,'변경 검토','spark']]:[['cognition:people',V.cog.actors.length,'인물','people'],['memory:log',V.logs.blocks.length,'날짜 기억','memory'],['cognition:review',V.reviews.length+(s.pending||0),'변경 검토','spark']];
-    return `<section class="m3-overview m3-compact-overview" data-key="unified-overview"><div class="m3-overview-grid">${rows.map(([route,count,label,icon])=>`<button type="button" data-act="unifiedRoute" data-arg="${route}">${ic(icon)}<strong>${fmt(count)}</strong><span>${label}</span></button>`).join('')}</div><div class="m3-card-actions">${btn('AI 기억 도우미','memoryHelper',{cls:'mini',icon:'search'})}</div></section>`;
+    return `<section class="m3-overview m3-compact-overview" data-key="unified-overview"><h3 class="m3-section-label">기억·인물 둘러보기</h3><div class="m3-overview-grid">${rows.map(([route,count,label,icon])=>`<button type="button" data-act="unifiedRoute" data-arg="${route}">${ic(icon)}<strong>${fmt(count)}</strong><span>${label}</span></button>`).join('')}</div></section>`;
   }
   function canonicalRoute(tab='check',sub=''){
     if(tab==='suite'){tab='cognition';sub='cards';}
@@ -77161,7 +77267,7 @@ guide(d) {
   function jobLabel() { if (V.job) return V.job.label || '결과 확인 중'; if (S.jobs.length) return S.jobs[S.jobs.length - 1].label; return ''; }
   function vFoot() {
     const a = V.inj.armed, v = V.inj.verified, busy=!!V.job&&!V.job.quiet;
-    return `<button type="button" class="m3-inject ${a ? 'on' : ''}" data-act="${a ? 'release' : 'arm'}"${busy?' disabled':''}><span class="m3-dot"></span>${a ? '주입 해제' : '주입 시작'}</button>${btn('미리보기', 'preview', { cls: 'mini', icon: 'eye' })}${a ? btn('서버 재검증', 'reverify', { cls: 'quiet mini', icon: 'refresh', feat: 'reverify', dis:busy }) : ''}<span class="m3-state">${a ? (V.inj.authWaiting ? '로그인 확인 대기 · 저장된 기억 유지' : V.inj.serverWaiting ? '크랙 서버 확인 대기 · 저장된 기억 유지' : v ? `서버 저장 확인됨 · ${fmt(V.inj.total)}자` : V.inj.error ? '주입 확인 실패 · 재검증 필요' : V.inj.awaitingItems ? '자동 주입 켜짐 · 자료 대기' : V.inj.awaitingCarrier ? '주입 켜짐 · 이전 AI 답변 대기' : `서버 저장 확인 중${dots}`) : '주입 꺼짐 · 기억은 그대로'}</span>`;
+    return `<div class="m3-footer-actions" role="group" aria-label="기억 전달"><button type="button" class="m3-inject ${a ? 'on' : ''}" data-act="${a ? 'release' : 'arm'}"${busy?' disabled':''}><span class="m3-dot"></span>${a ? '주입 해제' : '주입 시작'}</button>${btn('미리보기', 'preview', { cls: 'mini', icon: 'eye' })}${a ? btn('서버 재검증', 'reverify', { cls: 'quiet mini', icon: 'refresh', feat: 'reverify', dis:busy }) : ''}</div><span class="m3-state">${a ? (V.inj.authWaiting ? '로그인 확인 대기 · 저장된 기억 유지' : V.inj.serverWaiting ? '크랙 서버 확인 대기 · 저장된 기억 유지' : v ? `서버 저장 확인됨 · ${fmt(V.inj.total)}자` : V.inj.error ? '주입 확인 실패 · 재검증 필요' : V.inj.awaitingItems ? '자동 주입 켜짐 · 자료 대기' : V.inj.awaitingCarrier ? '주입 켜짐 · 이전 AI 답변 대기' : `서버 저장 확인 중${dots}`) : '주입 꺼짐 · 기억은 그대로'}</span>`;
   }
   function vOverlay() {
     const nl = navList(), idx = Math.max(0, nl.findIndex(t => t[0] === S.tab)), badge = { check: V.reviews.length, cognition: V.reviews.length };
@@ -77185,7 +77291,7 @@ function vQuick() {
     const body = !V.inj.armed ? `<div class="wq-empty">${esc(V.labels.quickEmpty || '현재 주입 중인 항목이 없습니다.')}<div class="m3-topgap">${btn('주입 시작', 'arm', { cls: 'primary mini', icon: 'check' })}</div></div>` :
       `<div class="wq-gt">${V.inj.verified?'저장된 주입 확인':'주입 예정 · 확인 대기'} ${on.length}</div>${items.map(i => `<label class="wq-row ${i.off ? 'is-off' : ''}" data-key="q-${esc(i.rowKey||i.key)}"><input type="checkbox" data-bind="quick.item:${esc(i.key)}"${i.off ? '' : ' checked'}${has('quickItems') ? '' : ' disabled'}><i></i>${kind(i.label || KLABEL[i.kind] || '', COL[i.kind] || COL.guide)}<span class="m3-t"><b>${esc(i.title)}</b><small>${i.off ? esc(i.offReason||'현재 주입에서 제외됨') : fmt(i.size) + '자' + (!i.why||i.why==='켜져 있으면 계속 포함'?'':' · ' + esc(i.why))}</small></span></label>`).join('')}
       ${V.quickCog.length ? `<div class="wq-gt">인지 개별 선택 · 이번 턴만</div>${V.quickCog.map(f => `<label class="wq-row ${f.included ? '' : 'is-off'}" data-key="qc-${esc(f.id)}"><input type="checkbox" data-bind="quick.cog:${esc(f.id)}"${f.included ? ' checked' : ''}${V.pol.cog === 'off' ? ' disabled' : ''}><i></i>${kind('인지', COL.cog)}<span class="m3-t"><b>${esc(f.label)}</b><small>기본 ${f.mode === 'always' ? '항상' : f.mode === 'exclude' ? '제외' : '자동'} · ${f.included ? '이번 턴 포함' + (f.brief ? ' · 한 줄' : '') : '이번 턴 제외'}</small></span></label>`).join('')}` : ''}`;
-    return `<div class="wq-head"><div class="m3-t"><b>현재 주입</b><small>${V.inj.armed ? `${V.inj.verified?'확인됨':'예정'} ${on.length}개 · ${fmt(V.inj.total)}자${V.reviews.length ? ` · 확인할 인지 ${V.reviews.length}건` : ''}` : '주입 꺼짐'}</small></div><button type="button" class="m3-ico" data-act="quickClose" aria-label="닫기">${ic('close')}</button></div><div class="wq-list">${body}</div><div class="wq-foot"><span class="m3-muted">${V.quickCog.length ? '인지 체크는 다음 턴에 자동 초기화 · ' : ''}${'켜진 항목은 계속 포함 · '}일반 항목 체크는 이번 주입 세션에 적용 · ${V.inj.legacyExclusions?'구버전 자료집 제외 '+V.inj.legacyExclusions+'건은 충돌 가능성으로 해제 · ':''}길게 누르면 전체 패널</span>${btn('전체 설정', 'quickFull', { cls: 'mini', icon: 'set' })}</div>`;
+    return `<div class="wq-head"><div class="m3-t"><b>현재 주입</b><small>${V.inj.armed ? `${V.inj.verified?'확인됨':'예정'} ${on.length}개 · ${fmt(V.inj.total)}자${V.reviews.length ? ` · 확인할 인지 ${V.reviews.length}건` : ''}` : '주입 꺼짐'}</small></div><button type="button" class="m3-ico" data-act="quickClose" aria-label="닫기">${ic('close')}</button></div><div class="wq-list">${body}</div><div class="wq-foot"><span class="m3-muted">${V.quickCog.length ? '인지 체크는 다음 턴에 자동 초기화 · ' : ''}${'켜진 항목은 계속 포함 · '}일반 항목 체크는 이번 주입 세션에 적용 · ${V.inj.legacyExclusions?'구버전 자료집 제외 '+V.inj.legacyExclusions+'건은 충돌 가능성으로 해제 · ':''}길게 누르면 전체 패널</span>${btn('전체 관리 열기', 'quickFull', { cls: 'mini', icon: 'set' })}</div>`;
   }
   let quickEl = null;
   function renderQuick() {
@@ -77673,12 +77779,11 @@ function startDrag(e) {
   function foreign(el) { return !el || !!el.closest('#crack-pure-send-left-group') || !!el.closest('#' + MON_ID) || (el.id || '').startsWith('crack-'); }
   let cachedMonitorSend=null,cachedMonitorComposer=null,cachedMonitorParent=null;
   function siteNode(el) { try { return Object.keys(el).some(k => k.startsWith('__reactFiber$') || k.startsWith('__reactProps$')); } catch (_) { return false; } }
-  function findSend() {
-    const input = document.querySelector('.__chat_input_textarea') || document.querySelector('div[contenteditable="true"][translate="no"]') || document.querySelector('div[contenteditable="true"]') || document.querySelector('textarea');
+  function findSend(input=findCrackComposer(cachedMonitorComposer)) {
     if (!input) return null;
-    if(input===cachedMonitorComposer&&cachedMonitorSend?.isConnected&&cachedMonitorSend.parentNode===cachedMonitorParent&&!cachedMonitorSend.hidden&&cachedMonitorSend.getAttribute('aria-hidden')!=='true'&&!/(?:중지|취소|stop|cancel)/i.test(cachedMonitorSend.getAttribute('aria-label')||cachedMonitorSend.title||''))return cachedMonitorSend;
     const ir = input.getBoundingClientRect(), midY = ir.top + ir.height / 2, midX = ir.left + ir.width / 2;
-    const ok = b => { if (!b || b.hidden || b.getAttribute('aria-hidden')==='true' || /(?:중지|취소|stop|cancel)/i.test(b.getAttribute('aria-label')||b.title||'') || b.contains(input) || foreign(b)) return false; const r = b.getBoundingClientRect(); if (!r.width || !r.height) return false; if (r.top + r.height / 2 < midY - 40) return false; if (r.left + r.width / 2 < midX) return false; for (let p = b, i = 0; p && p !== document.body && i < 6; p = p.parentElement, i++) if (getComputedStyle(p).position === 'fixed') return false; return true; };
+    const ok = b => { if (!b?.isConnected || b.closest('[data-message-id],[data-message-group-id],.wrtn-markdown,.wish-rp-inline-action-footer,[role="dialog"],dialog,[hidden],[aria-hidden="true"]') || /(?:중지|취소|stop|cancel)/i.test([b.getAttribute('aria-label'),b.title,b.textContent].join(' ')) || b.contains(input) || foreign(b) || !isElementVisible(b)) return false; const r = b.getBoundingClientRect(); if (r.top + r.height / 2 < midY - 40) return false; if (r.left + r.width / 2 < midX) return false; for (let p = b, i = 0; p && p !== document.body && i < 6; p = p.parentElement, i++) if (getComputedStyle(p).position === 'fixed') return false; return true; };
+    if(input===cachedMonitorComposer&&cachedMonitorSend?.parentNode===cachedMonitorParent&&ok(cachedMonitorSend))return cachedMonitorSend;
     for (let node = input, i = 0; node && i < 8; node = node.parentElement, i++) {
       const rows = node.querySelectorAll ? node.querySelectorAll('div.justify-between') : [];
       // Crack's new composer nests its native send button inside a group.
@@ -77731,9 +77836,12 @@ function startDrag(e) {
   function mountMonitor() {
     if (location.pathname !== lastPath) { lastPath = location.pathname; for(const d of [...S.dialogs]){if(d.type==='confirm')closeSheet(d,true);else if(d.editKey&&d.editPath!==location.pathname)closeSheet(d,true,true);} for(const [k,d] of editorDrafts)if(d.editPath!==location.pathname&&!S.dialogs.includes(d)&&!d.busy&&!d.draft?.busy&&JSON.stringify(d.draft)===JSON.stringify(d.baseline?.draft)&&!Object.entries(d.edits||{}).some(([id,text])=>text!==d.initial?.[id]))editorDrafts.delete(k); if (S.quick) closeQuick(); AD.onRoute && AD.onRoute(location.pathname); }
     if (!WishDisplay.visible() || !(AD.isChatPath ? AD.isChatPath(location.pathname) : CHAT_PATH.test(location.pathname))) { const m = document.getElementById(MON_ID); if (m) m.remove(); if (S.quick) closeQuick(); return; }
-    // Avoid forced layout, placement and monitor DOM writes while Crack streams.
+    const mounted=document.getElementById(MON_ID),composer=findCrackComposer(cachedMonitorComposer);
+    if(!composer){if(mounted)mounted.remove();cachedMonitorComposer=null;cachedMonitorSend=null;cachedMonitorParent=null;if(S.quick)closeQuick();return;}
+    if(mounted?.closest('[data-message-id],[data-message-group-id],.wrtn-markdown,.wish-rp-inline-action-footer,[role="dialog"],dialog'))mounted.remove();
+    // Preserve the valid launcher while streaming; misplaced launchers were removed above.
     if(AD.streaming?.()&&document.getElementById(MON_ID)?.isConnected)return;
-    const send = findSend(); if (!send || !send.parentNode) return;
+    const send = findSend(composer); if (!send || !send.parentNode) return;
     let mon = document.getElementById(MON_ID); if (!mon) mon = buildMonitor();
     const anchor = anchorFor(send);
     if (mon.parentNode !== anchor.parentNode || mon.nextElementSibling !== anchor) anchor.parentNode.insertBefore(mon, anchor);
