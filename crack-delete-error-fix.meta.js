@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 생성 실패 메시지 삭제 보정
 // @namespace    crack-delete-error-fix
-// @version      1.0.0
+// @version      1.0.1
 // @description  생성 지연 오류 메시지를 삭제할 때 서버의 같은 답변을 확인하여 임시 ID 오류를 보정합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        unsafeWindow

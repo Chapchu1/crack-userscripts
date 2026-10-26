@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 생성 실패 메시지 삭제 보정
 // @namespace    crack-delete-error-fix
-// @version      1.0.0
+// @version      1.0.1
 // @description  생성 지연 오류 메시지를 삭제할 때 서버의 같은 답변을 확인하여 임시 ID 오류를 보정합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        unsafeWindow
@@ -78,7 +78,7 @@
         const userId = userGroup.getAttribute('data-message-group-id'), user = messages.get(userId);
         if (!OBJECT_ID.test(userId) || user?._id !== userId || user.role !== 'user' ||
             typeof user.content !== 'string' || !UUID.test(user.turnId)) return null;
-        return { room, group, id, content: target.content, userGroup, userId, userContent: user.content,
+        return { room, group, id, at: Date.now(), content: target.content, userGroup, userId, userContent: user.content,
             userTurn: user.turnId, ids: new Set(messages.keys()), store };
     }
     function stillCurrent(snapshot) {
@@ -186,22 +186,49 @@
         if (url.href !== entry.snapshot.room.base + '/' + encodeURIComponent(entry.snapshot.id)) return null;
         clearPermit();
         if (!stillCurrent(entry.snapshot)) return null;
-        return entry.snapshot.room.base + '/' + entry.id;
+        return { url: entry.snapshot.room.base + '/' + entry.id, snapshot: entry.snapshot, id: entry.id };
+    }
+    function deletionCompleted(entry) {
+        // Only a successful, explicitly confirmed repair is a cancellation hint.
+        // Suite independently rechecks server history; this does not unlock it itself.
+        try { w.dispatchEvent(new w.CustomEvent('crack:failed-answer-deleted', { detail: {
+            apiChatId: entry.snapshot.room.id, messageId: entry.id, userId: entry.snapshot.userId,
+            userTurn: entry.snapshot.userTurn, startedAt: entry.snapshot.at, at: Date.now()
+        } })); } catch (_) { /* Deletion must still complete without Suite. */ }
     }
     w.fetch = function(input, init) {
-        const url = correctedURL(init?.method || input?.method || 'GET', input);
-        if (!url) return originalFetch.apply(this, arguments);
+        const entry = correctedURL(init?.method || input?.method || 'GET', input);
+        if (!entry) return originalFetch.apply(this, arguments);
         const args = Array.from(arguments);
-        args[0] = typeof input?.clone === 'function' ? new w.Request(url, input) : url;
-        return originalFetch.apply(this, args);
+        args[0] = typeof input?.clone === 'function' ? new w.Request(entry.url, input) : entry.url;
+        const result = originalFetch.apply(this, args);
+        Promise.resolve(result).then(response => { if (response?.ok) deletionCompleted(entry); }, () => {});
+        return result;
     };
     const open = w.XMLHttpRequest?.prototype?.open;
-    if (open) w.XMLHttpRequest.prototype.open = function(method, url) {
-        const corrected = correctedURL(method, url);
-        if (!corrected) return open.apply(this, arguments);
-        const args = Array.from(arguments); args[1] = corrected;
-        return open.apply(this, args);
-    };
+    if (open) {
+        const requests = new WeakMap(), send = w.XMLHttpRequest.prototype.send;
+        w.XMLHttpRequest.prototype.open = function(method, url) {
+            requests.delete(this);
+            const entry = correctedURL(method, url);
+            if (!entry) return open.apply(this, arguments);
+            const args = Array.from(arguments); args[1] = entry.url;
+            const result = open.apply(this, args); requests.set(this, entry); return result;
+        };
+        w.XMLHttpRequest.prototype.send = function() {
+            const entry = requests.get(this);
+            if (!entry) return send.apply(this, arguments);
+            const done = () => {
+                this.removeEventListener('loadend', done);
+                if (requests.get(this) !== entry) return;
+                requests.delete(this);
+                if (this.status >= 200 && this.status < 300) deletionCompleted(entry);
+            };
+            this.addEventListener('loadend', done);
+            try { return send.apply(this, arguments); }
+            catch (error) { this.removeEventListener('loadend', done); requests.delete(this); throw error; }
+        };
+    }
     w.addEventListener('pagehide', cancel);
     w.addEventListener('popstate', cancel);
 })();

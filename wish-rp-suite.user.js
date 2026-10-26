@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.91
+// @version      0.5.92
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,13 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.92 · 전송 전 연결 확인·생성 잠금 복구
+ * 최근 대화 조회는 페이지 연결을 우선 사용하고 연결 실패에만 기존 확장 조회로 전환합니다.
+ * 완료 응답의 안정성 재확인 중에는 이전 오류로 강제 잠금 해제를 묻지 않습니다.
+ * 삭제 보정 1.0.1의 성공 신호는 서버가 전송 전 상태로 돌아온 경우에만 잠금 복구에 사용합니다.
+ * 실제 생성·답 없는 USER·인증·서버 오류 차단과 쓰기 요청 경로는 유지합니다.
+ */
 
 /* 0.5.86 · 홈에서 대화 응답교정 다시하기
  * 기억 정리 버튼 바로 아래에서 기존 최신 응답 검수 경로를 실행합니다.
@@ -768,7 +775,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.91'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.92'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49823,7 +49830,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.91-suite';
+  const SCRIPT_VERSION = '0.5.92-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -53853,6 +53860,15 @@ async function recoverGenerationGate(rid,expectedGate=null) {
     if(Date.now()-Number(gate.at||0)<3500)return {pending:true,cleared:false};
     const recent=await fetchRecentMessages(rid,50),frame=stableFrame(recent);
     if(generationGates.get(rid)!==gate)return {pending:!!generationGates.get(rid),cleared:false,frame};
+    const deletion=gate.failedDeletion;
+    if(deletion&&gate.kind==='send'&&!gate.replayToken&&Number(gate.lastStreamAt||0)<=deletion.startedAt&&
+       frontierEqualsBaseline(gate,frame)&&!recent.some(row=>[deletion.messageId,deletion.userId].includes(String(messageIdOf(row))))){
+      // A confirmed failed-answer deletion restored the pre-send history. Sample
+      // it twice, like completion, without inventing an assistant-completed event.
+      if(!gate.deletionRecoveryAt){gate.deletionRecoveryAt=Date.now();return {pending:true,cleared:false,settling:true,frame};}
+      if(Date.now()-gate.deletionRecoveryAt<2000)return {pending:true,cleared:false,settling:true,frame};
+      if(releaseGenerationGate(rid,gate,'deleted-failed-answer'))return {pending:false,cleared:false,released:'deleted-failed-answer',frame};
+    }else delete gate.deletionRecoveryAt;
     if(!generationFrontierCompleted(gate,frame)){
       delete gate.recoverySignature;delete gate.recoveryAt;
       const ERR_QUIET=10000,CLOSE_SETTLE=20000,STREAM_QUIET=30000,STALL=180000,LINKED_QUIET=20000;
@@ -53899,9 +53915,12 @@ async function recoverGenerationGate(rid,expectedGate=null) {
       }
       return {pending:true,cleared:false,frame};
     }
+    // The server now shows a complete answer; old network uncertainty must not
+    // trigger a force-unlock dialog while the second stability sample is pending.
+    delete gate.uncertain;delete gate.uncertainNotified;delete gate.failSignature;delete gate.failChecks;
     const frontier=generationFrontier(frame),signature=JSON.stringify(frontier);
-    if(gate.recoverySignature!==signature){gate.recoverySignature=signature;gate.recoveryAt=Date.now();return {pending:true,cleared:false,frame};}
-    if(Date.now()-Number(gate.recoveryAt||0)<2000)return {pending:true,cleared:false,frame};
+    if(gate.recoverySignature!==signature){gate.recoverySignature=signature;gate.recoveryAt=Date.now();return {pending:true,cleared:false,settling:true,frame};}
+    if(Date.now()-Number(gate.recoveryAt||0)<2000)return {pending:true,cleared:false,settling:true,frame};
     if(!deleteGenerationGateIfCurrent(rid,gate))return {pending:!!generationGates.get(rid),cleared:false,frame};
     try{
       const W=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
@@ -53911,6 +53930,26 @@ async function recoverGenerationGate(rid,expectedGate=null) {
       W.dispatchEvent(new CustomEvent('wish:assistant-recovered',{detail}));
     }catch{}
     return {pending:false,cleared:true,frame};
+  }
+  async function recoverGenerationForAction(rid,gate) {
+    let result=await recoverGenerationGate(rid,gate);
+    if(result.settling){
+      const sampledAt=Math.max(Number(gate.recoveryAt)||0,Number(gate.deletionRecoveryAt)||0);
+      await sleep(Math.max(0,2000-(Date.now()-sampledAt)));
+      result=await recoverGenerationGate(rid,gate);
+    }
+    return result;
+  }
+  function observeFailedAnswerDeletion(detail) {
+    const d=detail||{},rid=String(d.apiChatId||''),gate=generationGates.get(rid),now=Date.now();
+    const validId=value=>typeof value==='string'&&/^[a-f\d]{24}$/i.test(value);
+    if(!gate||gate.kind!=='send'||gate.replayToken||![rid,d.messageId,d.userId].every(validId)||
+       !Number.isFinite(d.startedAt)||!Number.isFinite(d.at)||d.startedAt<Number(gate.sentAt||gate.at)||
+       d.at<d.startedAt||d.at>now||now-d.at>30000||
+       d.userId===gate.baseline?.userId||d.messageId===gate.baseline?.assistantId||
+       gate.committedUserId&&gate.committedUserId!==d.userId)return;
+    gate.failedDeletion={messageId:d.messageId,userId:d.userId,startedAt:d.startedAt,at:d.at};
+    delete gate.deletionRecoveryAt;scheduleRecovery(0);
   }
   function generationPending(rid) {
     if(ExternalReplay.pending(rid))return true;
@@ -63915,20 +63954,38 @@ function roomCopyMergeCognition(targetRaw,sourceRaw,targetRid) {
     const token=await waitForCrackToken(),stamp=aiHashTiny(token);
     const transportTicket=WSUITE.crackTransport.begin(method,url);
     const utf16=options.encoding==='utf-16le'&&method==='PATCH'&&typeof body?.message==='string';
+    const timeoutMs=Math.max(1000,Math.min(120000,Number(options.timeoutMs)||20000)),started=Date.now();
+    const headers={Authorization:`Bearer ${token}`,'Content-Type':utf16?'application/json; charset=utf-16le':'application/json',Accept:'application/json, text/plain, */*',platform:'web','wrtn-locale':'ko-KR',...(options.noCache?{'Cache-Control':'no-cache',Pragma:'no-cache'}:{})};
+    let pageResponse=null;
+    // The page can remain online when the mobile extension's request bridge fails.
+    // Read through its authenticated connection first. Only transport failure may
+    // fall back to GM; HTTP/auth/rate-limit responses and all writes are never replayed.
+    const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
+    if(method==='GET'&&typeof page.fetch==='function'&&/^https:\/\/(?:crack-api|contents-api)\.wrtn\.ai\/(?:crack-gen|character-chat)\/v3\/chats(?:\/|\?|$)/.test(url)){
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),Math.min(5000,Math.ceil(timeoutMs/2)));
+      try{
+        const response=await page.fetch(url,{method:'GET',headers,credentials:'include',cache:'no-store',signal:controller.signal});
+        const responseHeaders=Array.from(response.headers.entries(),([key,value])=>key+': '+value).join('\r\n');
+        if(!response.ok){pageResponse={status:response.status,responseHeaders,responseText:''};try{pageResponse.responseText=await response.text();}catch{}}
+        else pageResponse={status:response.status,responseHeaders,responseText:await response.text()};
+      }catch{ /* No HTTP result: the original extension GET gets the remaining budget. */ }
+      finally{clearTimeout(timer);}
+    }
     return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method,url,
-        headers:{Authorization:`Bearer ${token}`,'Content-Type':utf16?'application/json; charset=utf-16le':'application/json',Accept:'application/json, text/plain, */*',platform:'web','wrtn-locale':'ko-KR',...(options.noCache?{'Cache-Control':'no-cache',Pragma:'no-cache'}:{})},
-        data:body===undefined?undefined:utf16?utf16leBlob(JSON.stringify(body)):JSON.stringify(body),
-        timeout:Math.max(1000,Math.min(120000,Number(options.timeoutMs)||20000)),
-        onload:res=>{
+      const onload=res=>{
           let parsed=null;try{parsed=res.responseText?JSON.parse(res.responseText):null;}catch{}
           if(res.status>=200&&res.status<300){WSUITE.crackTransport.success(transportTicket);crackAuthSuccess(stamp);WLOG.crackOk(method,ringMark);resolve(parsed??{ok:true});}
           // Never silently replay a PATCH/POST after an auth error.
           else if(res.status===401)reject(crackAuthError('CRACK_AUTH_REJECTED',{stamp}));
           else reject(WLOG.tag(WSUITE.crackTransport.failure(transportTicket,res,parsed),'CRACK_STATUS'));
-        },
-        ontimeout:()=>reject(WLOG.tag(Object.assign(new Error('API 요청 시간 초과'),{code:'CRACK_TIMEOUT',diagnostic:{service:'크랙',method,timeoutMs:Math.max(1000,Math.min(120000,Number(options.timeoutMs)||20000))}}),'CRACK_SLOW')),
+        };
+      if(pageResponse){onload(pageResponse);return;}
+      const ontimeout=()=>reject(WLOG.tag(Object.assign(new Error('API 요청 시간 초과'),{code:'CRACK_TIMEOUT',diagnostic:{service:'크랙',method,timeoutMs}}),'CRACK_SLOW'));
+      const remaining=timeoutMs-(Date.now()-started);if(remaining<=0){ontimeout();return;}
+      GM_xmlhttpRequest({
+        method,url,headers,
+        data:body===undefined?undefined:utf16?utf16leBlob(JSON.stringify(body)):JSON.stringify(body),
+        timeout:remaining,onload,ontimeout,
         onerror:()=>reject(WLOG.tag(Object.assign(new Error('네트워크 오류'),{code:'CRACK_NETWORK',diagnostic:{service:'크랙',method}}),'CRACK_OFFLINE')),
       });
     });
@@ -70170,7 +70227,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
 
   async function reverifyPendingUnlocked(room) {
     const rid=String(apiChatIdOf(room)||''),gate=generationGates.get(rid);
-    if(gate){const recovery=await recoverGenerationGate(rid,gate);if(recovery.pending){if(generationGates.get(rid)===gate&&gate.uncertain&&confirm('이전 AI 생성 완료를 서버에서 확인하지 못했습니다.\n다른 기기·탭에서 생성 중이 아니라면 잠금을 풀고 계속할까요?'))releaseGenerationGate(rid,gate,'user');else throw new Error('AI 생성 또는 리롤이 아직 진행 중입니다. 완료 후 서버 재검증을 눌러 주세요.');}}
+    if(gate){const recovery=await recoverGenerationForAction(rid,gate);if(recovery.pending){if(generationGates.get(rid)===gate&&gate.uncertain&&confirm('이전 AI 생성 완료를 서버에서 확인하지 못했습니다.\n다른 기기·탭에서 생성 중이 아니라면 잠금을 풀고 계속할까요?'))releaseGenerationGate(rid,gate,'user');else throw new Error('AI 생성 또는 리롤이 아직 진행 중입니다. 완료 후 서버 재검증을 눌러 주세요.');}}
     const frame=stableFrame(await fetchRecentMessages(rid,50));
     if(frame.trailingUser)throw new Error('서버에 답변 대기 중인 USER가 있습니다. 생성 완료 또는 취소 후 확인해 주세요.');
     let p = room.pending;
@@ -73464,6 +73521,7 @@ async reanalyzeLatest(rid){
     }catch(e){console.warn('[Wish] 전송 준비 필요 여부 확인 실패 · 기존 절차 사용',e);return true;}
   }
   const previousSend = W.WebSocket.prototype.send;
+  W.addEventListener('crack:failed-answer-deleted',event=>observeFailedAnswerDeletion(event.detail));
   const sendPreparationQueues=new Map();
   W.WebSocket.prototype.send = function (data) {
     watchSocket(this);
@@ -73493,8 +73551,8 @@ async reanalyzeLatest(rid){
       replay=ExternalReplay.claim(rid,parsed.event);
       {const g=generationGates.get(rid);if(g?.autoOnly&&!replay&&currentRoom&&!currentRoom.pending)releaseGenerationGate(rid,g,'auto-only');}
       {const g=generationGates.get(rid);
-       if(g?.uncertain){
-         await waitForWishOperation(recoverGenerationGate(rid,g),controller.signal);assertActive();
+       if(g){
+         await waitForWishOperation(recoverGenerationForAction(rid,g),controller.signal);assertActive();
          if(generationGates.get(rid)===g&&g.uncertain&&confirm('이전 AI 생성 완료를 서버에서 확인하지 못했습니다.\n다른 기기·탭에서 생성 중이 아니라면 잠금을 풀고 계속할까요?'))releaseGenerationGate(rid,g,'user');
          assertActive();
        }}
