@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.93
+// @version      0.5.94
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.94 · 모바일 표시와 새 방 자동 적용
+ * 주입 버튼 가운데 정렬, 메뉴 아이콘 크기, 자료집 제목·인물 검색 간격을 조정합니다.
+ * 새 방 첫 AI 메시지의 켜진 정보를 기존 자동 주입·검증 경로로 바로 준비합니다.
+ * 자동 주입 중에는 별도 시작 설정 적용 안내를 표시하지 않습니다.
+ */
 
 /* 0.5.93 · 선별 안정화와 작업별 버튼 정리
  * 시간 포함 날짜로그, 긴 대화 이어 요약, Vertex 인증 중복 억제, 입력창 오배치 방지, 잠금 원인 안내.
@@ -781,7 +787,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.93'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.94'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49918,7 +49924,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.93-suite';
+  const SCRIPT_VERSION = '0.5.94-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -64300,7 +64306,7 @@ async function fetchMessage(chatId, messageId) {
         errors.push(`${label}: 성공 응답 뒤 서버 본문 미반영`);
       } catch (e) {
         unanswered=unanswered&&e?.code==='CRACK_NETWORK';
-        if(isCrackAuthError(e)||e?.code==='WISH_REFINER_STALE'||String(e?.code||'').startsWith('WISH_CARRIER_'))throw e;
+        if(isCrackAuthError(e)||e?.code==='WISH_REFINER_STALE'||e?.code==='WISH_AUTO_START_CANCELLED'||String(e?.code||'').startsWith('WISH_CARRIER_'))throw e;
         errors.push(`${label}: ${String(e?.message||e)}`);
       }
     }
@@ -71237,9 +71243,9 @@ const fullHistoryWanted=new Set();
     const latestId=String(messageIdOf(frame.latest)||'');
     if(reason==='before-reroll')RecallPrefetch.drop(latestId);
     const readRestore=localRestoreEpoch,readRoute=state.routeEpoch,readCurrent=state.currentRoom===room;
-    const assertCarrierReadCurrent=()=>{
+    const assertCarrierReadCurrent=(expectedPending=p)=>{
       control?.assertActive?.();
-      if(room.pending!==p||readRestore!==localRestoreEpoch||ExternalReplay.changed(rid,replayEpoch)||(readCurrent&&(state.currentRoom!==room||state.routeEpoch!==readRoute)))
+      if(room.pending!==expectedPending||readRestore!==localRestoreEpoch||ExternalReplay.changed(rid,replayEpoch)||(readCurrent&&(state.currentRoom!==room||state.routeEpoch!==readRoute)))
         throw carrierSourceError({state:'changed',diagnostics:{stage:'주입 원문 확인 중 방·분기·복원 또는 주입 상태 변경'}},'주입 원문 확인');
       if(generationPending(rid))throw carrierSourceError({state:'unsettled',diagnostics:{stage:'주입 원문 확인 중 새 생성 시작'}},'주입 원문 확인');
     };
@@ -71296,7 +71302,10 @@ const fullHistoryWanted=new Set();
     p.nextCadenceTurn=pendingCadenceTurn(p,frame,true);
     const actuallyRemaining=activePendingItems(p);
     const tlKept=refreshing?undefined:(activePendingItems(projected).find(i=>i?.slotId==='__timeline'&&typeof i.contentNow==='string')?.content??null);
-    let active=filterItemsByInjectionCadence(room,safeMemoryItems(room,timelineNow(activePendingItems(projected))),cadenceTurn);
+    // Before the first USER, enabled characters need no name-match evidence,
+    // just as in manual start setup. Keep all OFF rules and the saved setting.
+    const cadenceRoom=firstTurnCarrier(frame)?{...room,autoCharacterDetection:false}:room;
+    let active=filterItemsByInjectionCadence(cadenceRoom,safeMemoryItems(room,timelineNow(activePendingItems(projected))),cadenceTurn);
     if(p.awaitingItems&&active.length)p.awaitingItems=false;
     if(!newId || !active.length){
       carrierWriteAttempted=true;await restorePendingCarriers(room,p);
@@ -71320,12 +71329,20 @@ const fullHistoryWanted=new Set();
     if(!original.trim())throw carrierSourceError({state:'empty',diagnostics:{stage:'주입 직전 원문 확인 · 본문 없음'}},'주입 직전 원문 확인');
     control?.assertActive?.();
     const sourceStamp=allFitSourceStamp(room);
-    const verifiedWrite=async(text,expected=null)=>{carrierWriteAttempted=true;let encoding='';await patchMessage(apiChatIdOf(room),newId,text,expected,{onEncoding:value=>{encoding=value;}});const checked=await verifyInjectedCarrier(room,{...p,messageId:newId,originalText:original},text);if(encoding)checked.encoding=encoding;return checked;};
+    const verifiedWrite=async(text,expected=null)=>{
+      // Persistence may yield to OFF/navigation. Validate the saved next state
+      // at every actual PATCH (including retries), then again after read-back.
+      const assertCurrent=()=>assertCarrierReadCurrent(next);
+      assertCurrent();carrierWriteAttempted=true;let encoding='';
+      await patchMessage(apiChatIdOf(room),newId,text,expected,{assertCurrent,onEncoding:value=>{encoding=value;}});
+      assertCurrent();const checked=await verifyInjectedCarrier(room,{...p,messageId:newId,originalText:original},text);assertCurrent();
+      if(encoding)checked.encoding=encoding;return checked;
+    };
     const candidateItems=active;
     // 고정 = 선순위 (K-1): the plan's standby rows (what the pinned head displaced at the refresh) are read as the pending items are and
     // go to each pick below, which adds them to its pool only over the byte budget (chooseAllFitItemsWithinBytes); rows a pick takes
     // from them join the pending items once sent, so the panel reads the sent text.
-    const held=new Set(active.map(pendingItemIdentity)),removed=new Set(quickRemovedPendingItems(p).map(pendingItemIdentity)),standby=filterItemsByInjectionCadence(room,safeMemoryItems(room,(Array.isArray(p.recallPlan?.standby)?p.recallPlan.standby:[]).filter(i=>{const k=i&&pendingItemIdentity(i);return !!k&&!held.has(k)&&!removed.has(k);})),cadenceTurn);
+    const held=new Set(active.map(pendingItemIdentity)),removed=new Set(quickRemovedPendingItems(p).map(pendingItemIdentity)),standby=filterItemsByInjectionCadence(cadenceRoom,safeMemoryItems(room,(Array.isArray(p.recallPlan?.standby)?p.recallPlan.standby:[]).filter(i=>{const k=i&&pendingItemIdentity(i);return !!k&&!held.has(k)&&!removed.has(k);})),cadenceTurn);
     assertRequiredRecallBudget(room,candidateItems,original);
     // 관련 후보는 앞 단계에서 이미 에리 의미검색과 선택적 AI 재검토를 마쳤습니다.
     // 최종 50k/45k 맞춤은 네트워크 없는 결정적 로컬 순서만 사용합니다.
@@ -71500,9 +71517,10 @@ const fullHistoryWanted=new Set();
     for(const item of items){item.turnStartUserId=frame.latestUserId;item.usedTurns=0;}
     try{await saveRoom(room,control?.assertActive);}
     catch(error){if(room.pending===pending)room.pending=null;if(room.newChatAutoInjection==='started')room.newChatAutoInjection=decision;throw error;}
-    // A new room has no stable older AI yet. Arm now; the existing send/recovery path
-    // will attach real context as soon as both material and a carrier are available.
-    if(!automatic)await reconcileStableCarrier(room,'start',frame);
+    // Prepare a fresh greeting immediately through the normal verified carrier path.
+    // Automatic start uses local-only polling selection; missing material/greetings
+    // still wait for the existing send/recovery path without a second setup block.
+    if(!automatic||hasItems&&firstTurnCarrier(frame))await reconcileStableCarrier(room,automatic?'poll':'start',frame,control);
     scheduleRecovery(automatic?APP.idlePollMs:APP.activePollMs);
   }
 
@@ -74967,7 +74985,7 @@ html.rpcm-custom-surface body[data-theme="dark"] :is(#wish-rp-root,#wish-suite-e
 #wish-rp-root .m3-home-actions .m3-btn,#wish-rp-root .m3-home-actions>.m3-btn{width:100%;min-height:44px;justify-content:center;white-space:normal;overflow-wrap:anywhere;gap:6px}
 #wish-rp-root .m3-home-actions small{display:block;text-align:center;font-size:10.5px;color:var(--m3-muted);margin-top:5px;line-height:1.5}
 #wish-rp-root .m3-footer-actions{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px;min-width:0}
-#wish-rp-root .m3-footer-actions>.m3-btn,#wish-rp-root .m3-footer-actions>.m3-inject{min-height:40px}
+#wish-rp-root .m3-footer-actions>.m3-btn,#wish-rp-root .m3-footer-actions>.m3-inject{min-height:40px;justify-content:center;text-align:center}
 #wish-rp-root .m3-tool-links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
 #wish-rp-root .m3-tool-links>.m3-btn{min-width:0;min-height:40px;justify-content:flex-start;white-space:normal;overflow-wrap:anywhere}
 #wish-rp-root .m3-compact-overview>.m3-section-label{margin-top:0}
@@ -75003,9 +75021,11 @@ body[data-theme="dark"] #wish-rp-root{--wish-helper-bg:#233e39;--wish-helper-fg:
 #wish-rp-root :is(.m3-nav,.m3-bottomnav) [data-arg="cognition"]{--wish-nav-color:var(--wish-nav-people)}
 #wish-rp-root :is(.m3-nav,.m3-bottomnav) [data-arg="ai"]{--wish-nav-color:var(--wish-nav-ai)}
 #wish-rp-root :is(.m3-nav,.m3-bottomnav) [data-arg="settings"]{--wish-nav-color:var(--wish-nav-settings)}
-#wish-rp-root :is(.m3-nav,.m3-bottomnav) button>svg.ic{box-sizing:content-box;width:20px;height:20px;padding:4px;border-radius:9px;color:var(--wish-nav-color,var(--m3-accent));background:color-mix(in srgb,var(--wish-nav-color,var(--m3-accent)) 14%,var(--m3-card));border:1px solid color-mix(in srgb,var(--wish-nav-color,var(--m3-accent)) 25%,var(--m3-line));flex:none;transform:none}
+#wish-rp-root :is(.m3-nav,.m3-bottomnav) button>svg.ic{box-sizing:border-box;width:26px;height:26px;padding:3px;border-radius:8px;color:var(--wish-nav-color,var(--m3-accent));background:color-mix(in srgb,var(--wish-nav-color,var(--m3-accent)) 14%,var(--m3-card));border:1px solid color-mix(in srgb,var(--wish-nav-color,var(--m3-accent)) 25%,var(--m3-line));flex:none;transform:none}
 #wish-rp-root :is(.m3-nav,.m3-bottomnav) button[aria-current="page"]>svg.ic{background:color-mix(in srgb,var(--wish-nav-color,var(--m3-accent)) 24%,var(--m3-card));border-color:var(--wish-nav-color,var(--m3-accent));box-shadow:0 0 0 1px color-mix(in srgb,var(--wish-nav-color,var(--m3-accent)) 18%,transparent)}
-#wish-rp-root .m3-bottomnav button{min-height:53px;padding-top:4px;padding-bottom:4px;gap:3px}
+#wish-rp-root .m3-bottomnav button{min-height:49px;padding-top:4px;padding-bottom:4px;gap:3px}
+#wish-rp-root .m3-lore-title{white-space:nowrap;flex:none}
+#wish-rp-root .m3-main .m3-lore-summary{justify-content:flex-start;margin:-5px 0 12px}
 #wish-rp-root [data-request-status-icon]{display:inline-flex;align-items:center;flex:none}
 #wish-rp-root [data-request-status-details][hidden]{display:none}
 #wish-rp-root .m3-attention-status{color:#8a591c!important;font-weight:700}
@@ -75769,7 +75789,8 @@ function vLore() {
       const body=S.openSet.has('lore-pack-'+p.id)?[...groups].sort(([a],[b])=>(order.includes(a)?order.indexOf(a):99)-(order.includes(b)?order.indexOf(b):99)).map(([type,list])=>`<section class="m3-date-group" data-key="lore-pack-${esc(p.id)}-type-${esc(type)}"><div class="m3-date-head"><b>${esc(L.lore[type]||type)}</b><small>${list.length}개</small></div>${list.map(e=>{const sp=e.speech,content=sp?`${sp.speaker} → ${sp.target}: “${sp.address}” · ${L.reg[sp.reg]||sp.reg||''}${sp.note?' · '+sp.note:''}`:e.full||e.compact||e.micro||'',quote=WishSourceJump.loreQuote(e);return card('entry-'+p.id+'-'+e.id,esc(e.name),`${esc(L.lore[e.type]||e.type||'자료')}${e.prot?' · 수동 보호':e.auto?' · 자동':''}`,`<p>${esc(content)}</p>${(e.triggers||[]).length?`<div class="m3-aka">${e.triggers.map(t=>tag(esc(t))).join('')}</div>`:''}${quote&&!foreignOwned?fold('entry-src-'+p.id+'-'+e.id,'근거',srcQuote('',quote,['lore',p.id,e.id])):''}`,(foreignOwned?'':btn('편집','enEdit',{arg:p.id+'|'+e.id,cls:'mini',icon:'edit'})+(loreReleasable(p,e)?unlockBtn('enRelease',p.id+'|'+e.id):'')),tag(e.on===false?'사용 안 함':e.anchor?'항상 참고':e.emb?'의미 검색':'키워드',e.on!==false?'ok':''));}).join('')}</section>`).join('')||empty('이 팩에는 카드가 없습니다.') : '';
       return card('lore-pack-'+p.id,esc(p.name),`${rows.length}개 · ${origin}${foreignOwned&&p.ownerLabel?' · '+esc(p.ownerLabel):''}`,controls+(foreignOwned?'<div class="m3-row m3-pack-actionbar">'+actions+'</div>':'')+body,'',(foreignOwned?kind('복사 필요','#8b93a9'):(!Lr.enabled?kind('자료집 꺼짐','#8b93a9'):'')+chip('주입','pack.active:'+p.id,p.active)),COL.lore);
     };
-    return pageHead('자료집 '+help(guide)+'<span class="m3-lore-count">사용 자료 '+on+' / '+total+'개 · 팩 '+packs.length+'개</span>',(chip('주입','lore.enabled',Lr.enabled)))+
+    return pageHead('<span class="m3-lore-title">자료집</span> '+help(guide),chip('주입','lore.enabled',Lr.enabled))+
+      '<p class="m3-lore-count m3-lore-summary">사용 자료 '+on+' / '+total+'개 · 팩 '+packs.length+'개</p>'+
       `<div class="m3-toolbar"><span class="m3-grow"></span><span class="m3-actions">${btn('팩 가져오기','packImport',{cls:'mini',icon:'up'})}${btn('새 팩','packNew',{cls:'mini',icon:'plus'})}${btn('텍스트 → 자료','loreConvert',{cls:'mini',icon:'spark',feat:'loreConvert',dis:!!V.ai.manual})}${btn('자료집 묶음 정리','loreApiBundle',{cls:'mini',icon:'refresh',dis:!!V.ai.manual})}</span></div>`+
       [['이 방의 진행형 자료',packs.filter(p=>p.auto&&!p.copyOrigin&&(!p.ownerChatId||p.ownerCurrent))],['가져온·분리한 자료 묶음',packs.filter(p=>p.copyOrigin&&(!p.ownerChatId||p.ownerCurrent))],['직접 관리·공용 자료',packs.filter(p=>!p.auto&&!p.copyOrigin&&(!p.ownerChatId||p.ownerCurrent))],['다른 방 자료 · 복사 후 사용',packs.filter(p=>p.ownerChatId&&!p.ownerCurrent)]].filter(([,rows])=>rows.length).map(([title,rows])=>`<div class="m3-sechead"><b>${esc(title)}</b><small class="m3-muted">${rows.length}팩 · 펼치기와 사용 설정은 별개</small></div>`+rows.map(packCard).join('')).join('')+(!packs.length?empty('자료집 팩이 없습니다.'):'')+
       heldLore();
@@ -75794,7 +75815,7 @@ function vLore() {
     const c = V.cog, pick = c.facts.filter(f => f.included).length;
     const cardReview=WSUITE.suite?.summary().pending||0;
     return `${pageHead('인물 '+help(helpSections([['인물·인지','누가 무엇을 알고 모르는지, 누구에게 숨기는지를 관리합니다. 인지 주입 버튼과 각 정보의 포함·제외 설정을 따릅니다.'],['호칭·말투','화자→상대별 현재 호칭과 말투를 관리합니다. 호칭·말투 주입을 켜면 매턴 포함하며 과거 호칭보다 현재값을 우선합니다.'],['지금 정리','확인 화면의 인지·호칭·말투 지금 정리와 같은 기능입니다. 외부 AI API로 미처리 확정 대화를 읽어 인물·인지·호칭·말투·관계·감정선·은폐를 함께 갱신합니다.']])), `<span class="m3-actions">${btn('정리 설정', 'unifiedRoute', { arg: 'ai:automation', cls: 'quiet mini', icon: 'set' })}${btn('지금 정리', 'autoPeople', { cls: 'mini', icon: 'refresh' })}</span>`)}
-    ${btn('인물별 기록 찾기','personDossierOpen',{cls:'mini',icon:'search'})}${S.cog==='people'?npcPresenceControls():''}
+    <div class="m3-toolbar">${btn('인물별 기록 찾기','personDossierOpen',{cls:'mini',icon:'search'})}</div>${S.cog==='people'?npcPresenceControls():''}
     ${unifiedTabs([['people','인물·인지'],['cards','정보 카드'],['speech','호칭·말투'],['relationships','관계·감정선'],['char','캐릭터 설정'],['review',`검토 ${cardReview+V.reviews.length}`]],S.cog,'cogSub')}
     <div class="m3-sub" data-key="cog-${S.cog}">${S.cog==='cards'?suiteBody('peopleCards')+fold('legacy-people','기존 인물 상세 편집',btn('인물 상세 편집기','managerPeople',{cls:'mini'})):S.cog==='char'?mChar():S.cog === 'relationships' ? mRelationships() : S.cog === 'speech' ? mSpeech() : S.cog === 'review' ? `${suiteBody('review')}<div class="m3-sechead"><span class="m3-muted">이전 버전에서 보류한 후보입니다. 새 통합 정리는 직접 근거가 있는 변경만 적용합니다</span>${V.reviews.length ? btn('모두 제외', 'rvClear', { cls: 'quiet mini' }) : ''}</div>${V.reviews.map(reviewPanel).join('')}` :
       `<div class="m3-sechead"><b>인물 ${c.actors.length}</b><span class="m3-actions">${btn('인물 추가', 'acNew', { cls: 'mini', icon: 'plus' })}${chip('인지 주입','cogInclude',V.pol.cog!=='off')}</span></div>
@@ -78299,7 +78320,7 @@ if(!state.currentRoom||!WUICache.ai)return {};model(state.currentRoom);const r=s
 const rebuild=R31.get(r);D.pol.threads=Number(r.injectionPolicy?.threadsEvery??1)>0;D.pol.timeline=Number(r.injectionPolicy?.timelineEvery??1)>0;const vm={held:WishHeldUI.view(r),threads:WishThreads.view(r),timeline:{...WishTimeline.view(r),people:(state.v2Cognition?.actors||[]).map(a=>({id:a.id,name:a.name,aliases:a.aliases||[],archived:!!a.archived}))},apiEconomy:{...WishEconomy.settings(r),status:WishEconomy.describe(r)},cogInclude:Number(r.injectionPolicy?.cognitionEvery)>0,recall:recallSelectionSettings(r),rpMemo:rpMemoSettings(),rebuild:rebuild?{status:rebuild.status,message:rebuild.message,segments:rebuild.segments,ready:!!rebuild.draft}:null,rebuildRunning:R31.busy(),unified:U3.view(r),room:{...WishRoomNames.describe(r),name:D.room},version:SCRIPT_VERSION,save:{saving:state.saveStatus==='saving',at:state.lastSavedAt?new Date(state.lastSavedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''},job:S.job,features:{autoDefault:false,semantic:false,density:false},inj:injection,defaults:{enabled:WUICache.ai.autoMemoryEnabled!==false,every:WUICache.ai.memoryMaxTurns},memory:D.memory,cog:{selectMode:cgMode(r),...D.cog,actors:D.actors,facts:D.facts.map(f=>({...f,included:f.sel}))},reviews:D.reviews.map(rv=>({...rv,acceptLabel:rv.accept})),state:{inject:D.pol.state,sections:D.state,raw:String(r.slots?.find(s=>s.id==='currentState')?.content||'')},logs:{inject:D.pol.log,blocks:D.logs.map(b=>({...b,undated:b.date==='날짜 미상',included:D.pol.log&&plan.some(i=>i.kind==='log'&&!i.off&&(i.sourceKey===b.key||i.key==='log:'+b.key))})),dupDates:logView.duplicateDates},relationships:{held:Array.isArray(r.relationshipHeld)?r.relationshipHeld:[],on:r.relationshipConfig?.enabled!==false,rows:WishRelationships.normalize(r.relationships)},speech:{on:D.speechOn,rows:D.speech},chars:{autoDetect:D.autoChar,includeUnchecked:!!r.autoCharacterIncludeUnchecked,rows:D.chars},extras:{rows:D.extras},presets:D.presets.map(p=>({...p,ret:p.retentionTurns})),lore:D.lore,ai:{providerLabel:getAiProviderLabel(D.ai.provider),model:D.ai.model,manual:isManualAiProvider(D.ai),pendingManual:manualJobView(r)},pol:D.pol,autoChar:D.autoChar,quickCog:D.facts.map(f=>({id:f.id,label:f.label,mode:f.mode,included:state.quickCognitionDesired.has(f.id)?state.quickCognitionDesired.get(f.id):f.sel})),recent:[D.memory.last,D.lore.auto.last].filter(Boolean),labels:{resetDesc:'현재 방의 기억·인지·이 방 전용 자동 자료를 초기화합니다. 일반 자료집은 유지됩니다.'}};
 Object.assign(vm.memory,{error:U3.monitor(r).error,enabled:vm.unified.enabled&&vm.unified.memoryEnabled,committed:vm.unified.memoryPending,target:vm.unified.memoryEvery,fixed:vm.unified.memoryEvery,running:vm.unified.running,status:vm.unified.error||vm.unified.status});Object.assign(vm.cog,{auto:vm.unified.enabled&&vm.unified.observeEnabled,every:vm.unified.observeEvery});vm.job=vm.unified.running?{label:vm.unified.jobLabel||'통합 결과 확인 중'}:vm.job;
 if(R31.busy())vm.job={label:rebuild?.message||'재구축 자료 준비 중'};
-const eligibility=sessionSetupEligibilityFor(r);vm.fresh=eligibility?.fresh&&WUICache.freshDismissed!==String(state.currentChatId)?{show:true,title:'새 방 시작 설정',desc:'켜진 기억·자료·인물 정보를 첫 AI 메시지에 적용합니다.'}:null;for(const [path,value] of Object.entries(WUISettingsDraft()))WUISetPath(vm,path,value);vm.diagnostics=WLOG.list();{const shown=WLOG.view();if(shown)vm.job={...shown,quiet:!vm.job&&!WLOG.current()};}return vm;}
+const eligibility=sessionSetupEligibilityFor(r);vm.fresh=eligibility?.fresh&&!r.pending&&!WishNewChatInjection.wanted(r)&&!r.sessionSetup?.verified&&WUICache.freshDismissed!==String(state.currentChatId)?{show:true,title:'새 방 시작 설정',desc:'켜진 기억·자료·인물 정보를 첫 AI 메시지에 적용합니다.'}:null;for(const [path,value] of Object.entries(WUISettingsDraft()))WUISetPath(vm,path,value);vm.diagnostics=WLOG.list();{const shown=WLOG.view();if(shown)vm.job={...shown,quiet:!vm.job&&!WLOG.current()};}return vm;}
 
 // Shared prompt editor. Defaults are resolved lazily after all engines initialize.
 const WishPromptGuides=(()=>{
