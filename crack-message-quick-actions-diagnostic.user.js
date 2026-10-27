@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 메시지 바로 복사·삭제 (원인 확인용)
 // @namespace    crack-message-quick-actions-diagnostic
-// @version      0.2.0
+// @version      0.2.1
 // @description  기존 점 세 개 → 삭제 → 취소 동작의 메뉴 구조만 기록합니다. 자동 삭제하지 않습니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        unsafeWindow
@@ -65,11 +65,13 @@
     }
     const panel = document.createElement('div'); panel.id = 'cqa-passive-diagnostic';
     panel.style.cssText = 'position:fixed;top:calc(env(safe-area-inset-top,0px) + 54px);left:50%;transform:translateX(-50%);z-index:2147483647;box-sizing:border-box;width:max-content;max-width:94vw;padding:8px 12px;border:1px solid #a1a8e5;border-radius:10px;background:#30364c;color:#fff;font:13px/1.5 system-ui,sans-serif;text-align:center;pointer-events:auto';
-    const hint = document.createElement('div'); hint.textContent = '기존 ⋯ → 삭제 → 확인창에서 취소를 눌러 주세요';
+    const hint = document.createElement('div'); hint.textContent = '먼저 ① 진단 시작을 눌러 주세요';
+    const begin = document.createElement('button'); begin.type = 'button'; begin.dataset.cqaDiagnosticStart = ''; begin.textContent = '① 진단 시작';
     const save = document.createElement('button'); save.type = 'button'; save.dataset.cqaDiagnosticDownload = '';
-    save.textContent = '메뉴 진단 저장'; save.disabled = true;
+    save.textContent = '② 메뉴 진단 저장'; save.disabled = true;
     save.style.cssText = 'margin-top:5px;padding:5px 12px;border:1px solid #a1a8e5;border-radius:7px;background:#414965;color:#fff;font:inherit;cursor:pointer;pointer-events:auto';
-    panel.append(hint, save); document.body.append(panel);
+    begin.style.cssText = save.style.cssText + ';margin-right:8px';
+    panel.append(hint, begin, save); document.body.append(panel);
     const HANDLERS = ['onClick', 'onPointerDown', 'onPointerUp', 'onMouseDown', 'onMouseUp', 'onTouchStart', 'onTouchEnd', 'onKeyDown', 'onSelect', 'onDelete', 'onConfirm', 'onOpenChange'];
     const TAGS = new Set(['button', 'div', 'span', 'svg', 'path', 'section', 'main', 'body', 'html', 'ul', 'li', 'a', 'dialog', 'h1', 'h2', 'h3']);
     const ROLES = new Set(['button', 'menu', 'menuitem', 'dialog', 'alertdialog', 'presentation', 'none']);
@@ -103,15 +105,16 @@
         return out;
     }
     function nodeShape(node) {
+        if (!node) return null;
         const tag = node?.tagName?.toLowerCase(), role = node?.getAttribute?.('role');
         return {tag:TAGS.has(tag) ? tag : 'other', role:ROLES.has(role) ? role : role ? 'other' : 'absent',
             target:relation([node.getAttribute('data-message-id'), node.getAttribute('data-target-message-id')], session.info?.id),
             visible:visible(node), disabled:!!node.disabled || node.getAttribute('aria-disabled') === 'true',
             hasId:!!node.id, hasControls:!!node.getAttribute('aria-controls'), expanded:node.getAttribute('aria-expanded') === 'true',
             popupMenu:node.getAttribute('aria-haspopup') === 'menu', dropdown:node.classList.contains('dropdown-button'),
-            sameGroup:node.closest(GROUP) === session.group, sameWrapper:!!session.wrapper && node.closest('.dropdown-button') === session.wrapper,
-            insideTrigger:session.trigger.contains(node), containsTrigger:node.contains(session.trigger),
-            linked:!!((session.trigger.id && (node.getAttribute('aria-labelledby') || '').split(/\s+/).includes(session.trigger.id)) || (node.id && session.trigger.getAttribute('aria-controls') === node.id)),
+            sameGroup:!!session.group && node.closest(GROUP) === session.group, sameWrapper:!!session.wrapper && node.closest('.dropdown-button') === session.wrapper,
+            insideTrigger:!!session.trigger?.contains(node), containsTrigger:!!session.trigger && node.contains(session.trigger),
+            linked:!!((session.trigger?.id && (node.getAttribute('aria-labelledby') || '').split(/\s+/).includes(session.trigger.id)) || (node.id && session.trigger?.getAttribute('aria-controls') === node.id)),
             handlers:handlers(ownProps(node)), fiber:fiberShape(node)};
     }
     function pathShape(node) {
@@ -142,7 +145,7 @@
         if (!session) return;
         try {
             const shape = {
-                trigger:nodeShape(session.trigger), targetConnected:session.group.isConnected,
+                trigger:nodeShape(session.trigger), targetConnected:!!session.group?.isConnected,
                 menus:Array.from(document.querySelectorAll('[role="menu"],[data-radix-menu-content],[data-radix-popper-content-wrapper]')).filter(visible).slice(0, 8).map(nodeShape),
                 dialogs:Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"],dialog')).filter(visible).slice(0, 8).map(nodeShape),
                 actions:actionNodes().map(node => ({label:label(node), node:nodeShape(node), path:pathShape(node)}))
@@ -168,41 +171,48 @@
     function probe() {
         probes.forEach(clearTimeout); probes = [0, 80, 300].map(ms => setTimeout(schedule, ms));
     }
-    function start(trigger, group) {
+    function start() {
         if (session) stop('replaced');
-        session = {trigger, group, wrapper:trigger.closest('.dropdown-button'), info:resolve(group), groupId:group.getAttribute('data-message-group-id'),
+        session = {trigger:null, group:null, wrapper:null, info:null, groupId:'',
             room:roomId(), path:location.pathname, start:performance.now(), events:[], trace:[], last:null, signature:'', reason:'recording', captureError:false};
-        session.initial = nodeShape(trigger); session.triggerPath = pathShape(trigger);
+        session.initial = null; session.triggerPath = [];
         observer = new MutationObserver(records => {
             if (records.some(record => !panel.contains(record.target))) schedule();
         });
         observer.observe(document.body, {childList:true, subtree:true, attributes:true, attributeFilter:['id','role','aria-controls','aria-labelledby','aria-expanded','aria-hidden','data-state','hidden','data-message-id','data-target-message-id']});
         expiry = setTimeout(() => stop('capture-ended'), 30000);
-        save.disabled = false; hint.textContent = '기존 삭제 메뉴 → 확인창에서는 취소를 눌러 주세요'; capture();
+        save.disabled = false; hint.textContent = '기록 중 · 기존 ⋯ → 삭제 → 취소 → ② 저장'; capture();
     }
-    document.addEventListener('click', event => {
-        if (!event.isTrusted || panel.contains(event.target)) return;
+    begin.addEventListener('click', start);
+    function nativeEvent(event) {
+        if (!observer || !event.isTrusted || panel.contains(event.target)) return;
         try {
-            const target = event.target?.closest?.('button,[role="button"]'), group = target?.closest(GROUP);
-            let action = '';
-            if (group && /메시지\s*(?:옵션|메뉴)/.test(text(target.getAttribute('aria-label') || target.querySelector('[aria-label]')?.getAttribute('aria-label')))) {
-                start(target, group); action = 'trigger';
-            } else if (observer) {
-                if (location.pathname !== session.path) { stop('navigation'); return; }
-                for (let node = event.target?.nodeType === 1 ? event.target : event.target?.parentElement, i = 0; node && i < 5; node = node.parentElement, i++) {
-                    if (label(node)) { action = label(node); break; }
-                }
+            if (location.pathname !== session.path) { stop('navigation'); return; }
+            const element = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
+            if (!element) return;
+            const target = element.closest('button,[role="button"]') || element, group = target.closest(GROUP);
+            let action = 'other';
+            // Diagnostic target selection is descriptive only, never permission to delete.
+            // Capture pointerdown before native popup focus/retargeting can remove its click.
+            if (!session.group && group) {
+                session.trigger = target; session.group = group; session.wrapper = target.closest('.dropdown-button');
+                session.info = resolve(group); session.groupId = group.getAttribute('data-message-group-id');
+                session.initial = nodeShape(target); session.triggerPath = pathShape(target); action = 'trigger';
             }
-            if (!observer) return;
-            if (action && session.events.length < 8) session.events.push({elapsedMs:Math.round(performance.now() - session.start), action, path:pathShape(event.target.closest('button,[role="menuitem"],[role="button"]') || event.target)});
+            for (let node = element, i = 0; node && i < 5; node = node.parentElement, i++) {
+                if (label(node)) { action = label(node); break; }
+            }
+            if (session.events.length < 8) session.events.push({elapsedMs:Math.round(performance.now() - session.start), event:event.type === 'pointerdown' ? 'pointerdown' : 'click', action, path:pathShape(element.closest('button,[role="menuitem"],[role="button"]') || element)});
             capture(); probe();
             if (action === 'cancel') probes.push(setTimeout(() => stop('cancelled'), 350));
         } catch (_) { if (session) session.captureError = true; }
-    }, {capture:true, passive:true});
+    }
+    w.addEventListener('pointerdown', nativeEvent, {capture:true, passive:true});
+    w.addEventListener('click', nativeEvent, {capture:true, passive:true});
     save.addEventListener('click', () => {
         if (!session) return;
         stop(session.reason === 'recording' ? 'exported' : session.reason);
-        const report = {diagnosticVersion:'0.2.0', mode:'manual-native-menu', reason:session.reason, captureError:session.captureError,
+        const report = {diagnosticVersion:'0.2.1', mode:'manual-native-menu', reason:session.reason, captureError:session.captureError,
             trigger:session.initial, triggerPath:session.triggerPath, events:session.events, trace:session.trace, last:session.last};
         const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], {type:'application/json;charset=utf-8'}));
         const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'crack-quick-actions-diagnostic.json';
