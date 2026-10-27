@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 메시지 바로 복사·삭제
 // @namespace    crack-message-quick-actions
-// @version      1.0.0
+// @version      1.0.1
 // @description  보낸 메시지에 전체 복사·삭제, AI 답변에 삭제 아이콘을 추가합니다. 삭제 대상이 확인되면 확인창 없이 실행합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        unsafeWindow
@@ -87,8 +87,11 @@
         } catch (_) { return null; }
     }
     function triggerOf(group) {
-        return Array.from(group.querySelectorAll('button, [role="button"]')).find(button => !button.closest(CONTROLS) &&
-            /메시지\s*(?:옵션|메뉴)/.test(text(button.getAttribute('aria-label') || button.querySelector('[aria-label]')?.getAttribute('aria-label')))) || null;
+        const buttons = Array.from(group.querySelectorAll('button, [role="button"]')).filter(button => !button.closest(CONTROLS) && visible(button) &&
+            /메시지\s*(?:옵션|메뉴)/.test(text(button.getAttribute('aria-label') || button.querySelector('[aria-label]')?.getAttribute('aria-label'))));
+        if (buttons.length !== 1) return null;
+        const wrapper = buttons[0].closest('.dropdown-button[aria-haspopup="menu"]');
+        return wrapper?.closest(GROUP) === group ? wrapper : buttons[0];
     }
     function editOf(group) {
         return Array.from(group.querySelectorAll('button')).find(button => !button.closest(CONTROLS) &&
@@ -147,8 +150,7 @@
             !job.group.querySelector('[contenteditable="true"]');
     }
     function dialogMatches(job, dialog, button) {
-        // Generic title/timing is not ownership. Require an explicit native target;
-        // unsupported modal implementations keep their manual confirmation.
+        // An explicit different target always rejects, even with a linked menu.
         const ids = new Set(), rooms = new Set();
         const add = value => { if (typeof value === 'string' && value) ids.add(value); };
         const inspect = props => {
@@ -170,11 +172,47 @@
                 inspect(props); inspect(props?.data); inspect(props?.payload);
             }
         } catch (_) { return false; }
-        return ids.size === 1 && ids.has(job.info.id) && [...rooms].every(id => id === roomId());
+        if ([...rooms].some(id => id !== roomId())) return false;
+        return ids.size ? ids.size === 1 && ids.has(job.info.id) : null;
+    }
+    function ownedMenuItem(job, item) {
+        // Native portals retain their React owner path. Require this exact
+        // message-group host, not a common page/provider's message metadata.
+        try {
+            let exactRow = false;
+            for (let f = fiberOf(item), depth = 0; f && depth < 500; f = f.return, depth++) {
+                const props = liveProps(f);
+                for (const p of [props, props?.data, props?.payload]) {
+                    if (!p || typeof p !== 'object') continue;
+                    if (typeof p.chatId === 'string' && p.chatId && p.chatId !== roomId()) return false;
+                    const ids = [p.messageId, p.targetMessageId];
+                    for (const message of [p.message, p.targetMessage, p.messageToDelete]) {
+                        if (message && typeof message === 'object') ids.push(message._id || message.id || message.messageId);
+                    }
+                    for (const id of ids) if (typeof id === 'string' && id) {
+                        if (id !== job.info.id) return false;
+                        exactRow = true;
+                    }
+                }
+                if (f.stateNode?.matches?.(GROUP)) return f.stateNode === job.group &&
+                    (exactRow || job.info.id === job.info.groupId && job.info.ids === JSON.stringify([job.info.id]));
+            }
+        } catch (_) {}
+        return false;
+    }
+    function nativeDialogCommit(job, dialog, records) {
+        if (!job.boundItem || visible(job.menu)) return false;
+        const contains = (node, target) => node === target || node.nodeType === 1 && node.contains(target);
+        const menuClosed = records.some(record =>
+            record.type === 'attributes' && record.target === job.menu && record.attributeName === 'data-state' && job.menu.getAttribute('data-state') === 'closed' ||
+            record.type === 'childList' && [...record.removedNodes].some(node => contains(node, job.menu)));
+        const dialogAdded = records.some(record => record.type === 'childList' && [...record.addedNodes].some(node => contains(node, dialog)));
+        return menuClosed && dialogAdded;
     }
     function finish(message) {
         const job = flow; flow = null;
         if (!job) return;
+        watch();
         clearTimeout(job.timer);
         job.menu?.removeAttribute('data-cqa-pending-ui'); job.dialog?.removeAttribute('data-cqa-pending-ui');
         job.button.disabled = false; job.button.removeAttribute('aria-busy');
@@ -185,7 +223,20 @@
         job.timer = setTimeout(() => { if (flow === job) finish('처리를 확인하지 못했어요. 기존 메뉴에서 상태를 확인해 주세요.'); }, ms);
     }
     function activate(node) {
-        const options = { bubbles: true, cancelable: true, composed: true, view: window, button: 0, buttons: 1, pointerId: 735, pointerType: 'touch', isPrimary: true };
+        const wrappedTrigger = node.matches('.dropdown-button[aria-haspopup="menu"]');
+        const target = wrappedTrigger ? node.querySelector('button, [role="button"]') || node : node;
+        const rect = target.getBoundingClientRect();
+        const options = { bubbles: true, cancelable: true, composed: true, view: window, button: 0, buttons: 1, pointerId: 735, pointerType: 'touch', isPrimary: true,
+            clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+        if (wrappedTrigger) {
+            // The phone's native handler opens on pointerdown. A subsequent
+            // synthetic click can reach a different element after the portal opens.
+            if (typeof PointerEvent === 'function') {
+                target.dispatchEvent(new PointerEvent('pointerdown', options));
+                target.dispatchEvent(new PointerEvent('pointerup', { ...options, buttons: 0 }));
+            } else node.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'ArrowDown' }));
+            return;
+        }
         try { node.focus({ preventScroll: true }); } catch (_) {}
         if (typeof PointerEvent === 'function') node.dispatchEvent(new PointerEvent('pointerdown', options));
         node.dispatchEvent(new MouseEvent('mousedown', options));
@@ -193,7 +244,7 @@
         node.dispatchEvent(new MouseEvent('mouseup', { ...options, buttons: 0 }));
         node.click();
     }
-    function advance() {
+    function advance(records = []) {
         const job = flow; if (!job) return;
         if (job.phase !== 'working' && !sameTarget(job)) { finish('대화 상태가 바뀌어 삭제를 멈췄어요. 다시 선택해 주세요.'); return; }
         if (job.phase === 'menu') {
@@ -202,11 +253,14 @@
                 ((job.trigger.id && (menu.getAttribute('aria-labelledby') || '').split(/\s+/).includes(job.trigger.id)) ||
                     (menu.id && job.trigger.getAttribute('aria-controls') === menu.id)));
             if (own.length !== 1) return;
+            if (menus.length !== 1) { finish('열린 메뉴가 여러 개라 삭제를 멈췄어요.'); return; }
             const items = Array.from(own[0].querySelectorAll('[role="menuitem"], button')).filter(item =>
                 visible(item) && !item.disabled && item.getAttribute('aria-disabled') !== 'true' && /^삭제(?:하기)?$/.test(text(item.textContent || item.getAttribute('aria-label'))));
             if (items.length !== 1) return;
+            job.boundItem = ownedMenuItem(job, items[0]);
             job.menu = own[0]; job.menu.setAttribute('data-cqa-pending-ui', ''); job.phase = 'dialog';
             deadline(job, 1000); activate(items[0]);
+            return; // Inspect the native action's next DOM commit, not the menu-open batch.
         }
         if (flow !== job) return;
         if (job.phase === 'dialog') {
@@ -221,7 +275,8 @@
             if (fresh.length !== 1 || !title || buttons.length !== 1 || dialog.querySelector('input,textarea,[contenteditable="true"]')) {
                 finish('삭제 확인창을 정확히 구분하지 못해 멈췄어요.'); return;
             }
-            if (!dialogMatches(job, dialog, buttons[0])) {
+            const match = dialogMatches(job, dialog, buttons[0]);
+            if (match !== true && (match === false || !nativeDialogCommit(job, dialog, records))) {
                 finish('확인창의 삭제 대상을 확인하지 못해 자동 삭제를 멈췄어요.'); return;
             }
             if (!sameTarget(job)) { finish('대화가 바뀌어 삭제를 멈췄어요.'); return; }
@@ -240,10 +295,11 @@
         if (!info || !trigger) { notify('삭제할 메시지를 정확히 찾지 못했어요.'); return; }
         const oldDialogs = new Set(document.querySelectorAll(DIALOGS));
         if ([...oldDialogs].some(visible)) { notify('열린 창을 먼저 닫아 주세요.'); return; }
+        if (Array.from(document.querySelectorAll('[role="menu"]')).some(visible)) { notify('열린 메뉴를 먼저 닫아 주세요.'); return; }
         const job = { group, button, info, trigger, path: location.pathname, oldDialogs,
             oldMenus: new Set(Array.from(document.querySelectorAll('[role="menu"]')).filter(visible)), phase: 'menu', timer: 0 };
         if (!sameTarget(job)) { notify('답변 생성이나 편집이 끝난 뒤 삭제해 주세요.'); return; }
-        flow = job; button.disabled = true; button.setAttribute('aria-busy', 'true');
+        flow = job; watch(); button.disabled = true; button.setAttribute('aria-busy', 'true');
         deadline(job, 1000);
         // Let the initiating click finish before opening/confirming native UI.
         // Otherwise a later listener (including the error repair) can mistake
@@ -267,26 +323,38 @@
         else deleteNow(group, button);
     }, true);
     document.addEventListener('pointerdown', event => {
-        if (flow && event.isTrusted && !event.target?.closest?.(CONTROLS)) finish();
+        if (flow && event.isTrusted && event.target?.closest?.('[data-cqa-action]') !== flow.button) finish();
+        // Some layouts place our controls inside the native trigger wrapper.
+        // Let other document-level listeners track the group, but keep this tap
+        // from opening its dropdown before our own click starts the transaction.
+        if (event.target?.closest?.(CONTROLS)) event.stopPropagation();
         const group = event.target?.closest?.(GROUP); if (group && !bars.get(group)?.isConnected) queue(group);
     }, { capture: true, passive: true });
+    document.addEventListener('keydown', event => {
+        if (flow && event.isTrusted) finish();
+        if (event.target?.closest?.(CONTROLS)) event.stopPropagation();
+    }, true);
     const observer = new MutationObserver(records => {
         if (route !== location.pathname) {
             route = location.pathname; finish(); managed.forEach(group => bars.get(group)?.remove()); managed.clear(); scan(document.body);
         }
         for (const record of records) {
             const group = record.target.nodeType === 1 ? record.target.closest(GROUP) : record.target.parentElement?.closest(GROUP);
-            if (record.type === 'attributes') { if (group) queue(group); continue; }
+            if (record.type === 'attributes') { if (group && record.attributeName === 'data-message-group-id') queue(group); continue; }
             if (group && !bars.get(group)?.isConnected && !record.target.closest?.(CONTROLS)) queue(group);
             for (const node of record.addedNodes) scan(node);
         }
         if (records.some(record => record.removedNodes.length)) for (const group of managed) if (!group.isConnected) managed.delete(group);
-        advance();
+        advance(records);
     });
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-message-group-id'] });
+    function watch() {
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true,
+            attributeFilter: flow ? ['data-message-group-id', 'data-state'] : ['data-message-group-id'] });
+    }
+    watch();
     scan(document.body);
     w.addEventListener('load', () => scan(document.body), { once: true });
     w.addEventListener('popstate', () => { finish(); scan(document.body); });
     w.addEventListener('pagehide', () => { finish(); cancelAnimationFrame(frame); frame = 0; queued.clear(); observer.disconnect(); });
-    w.addEventListener('pageshow', event => { if (event.persisted) { observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-message-group-id'] }); scan(document.body); } });
+    w.addEventListener('pageshow', event => { if (event.persisted) { watch(); scan(document.body); } });
 })();
