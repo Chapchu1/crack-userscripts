@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 메시지 바로 복사·삭제
 // @namespace    crack-message-quick-actions
-// @version      1.0.3
+// @version      1.0.4
 // @description  보낸 메시지에 전체 복사·삭제, AI 답변에 삭제 아이콘을 추가합니다. 삭제 대상이 확인되면 확인창 없이 실행합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        unsafeWindow
@@ -14,10 +14,10 @@
 (() => {
     'use strict';
     const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    const VERSION = '1.0.3';
+    const VERSION = '1.0.4';
     const GROUP = '[data-message-group-id]', CONTROLS = '[data-cqa-controls]';
     const DIALOGS = '[role="dialog"], [role="alertdialog"], dialog';
-    const bars = new WeakMap(), managed = new Set(), queued = new Set();
+    const bars = new WeakMap(), userLayouts = new WeakMap(), managed = new Set(), queued = new Set();
     let frame = 0, flow = null, route = location.pathname, toastTimer = 0;
     const text = value => String(value ?? '').replace(/\s+/g, ' ').trim();
     const roomId = () => location.pathname.match(/^\/(?:stories\/[^/]+\/episodes|characters\/[^/]+\/chats)\/([a-f\d]{24})(?:\/|$)/i)?.[1] || '';
@@ -25,11 +25,16 @@
     style.textContent = `
       [data-cqa-controls]{display:inline-flex;align-items:center;gap:2px;vertical-align:middle;flex-shrink:0;margin-inline-end:3px;line-height:1;z-index:2}
       [data-cqa-controls][data-cqa-absolute]{position:absolute;right:100%;top:50%;transform:translateY(-50%);white-space:nowrap}
+      [data-cqa-user-layout]{display:flex!important;flex-direction:column!important;align-items:stretch!important}
+      [data-cqa-user-anchor]{display:inline-flex!important;align-items:center;align-self:flex-end;justify-content:flex-end;flex:0 0 auto;gap:2px;width:max-content!important;height:auto!important;margin-inline-start:auto}
+      [data-cqa-user-menu]{position:static!important;flex:0 0 auto}
       [data-cqa-action]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;min-width:32px;padding:6px;border:0;border-radius:8px;background:transparent;color:inherit;opacity:.65;cursor:pointer;touch-action:manipulation;vertical-align:middle}
       [data-cqa-action]:hover,[data-cqa-action]:focus-visible{opacity:1;background:color-mix(in srgb,currentColor 10%,transparent)}
       [data-cqa-action]:focus-visible{outline:2px solid currentColor;outline-offset:1px}
       [data-cqa-action]:disabled{opacity:.3;cursor:wait}
       [data-cqa-action] svg{width:18px;height:18px;display:block;pointer-events:none}
+      [data-cqa-role="user"] [data-cqa-action]{width:28px;height:28px;min-width:28px;padding:5px}
+      [data-cqa-role="user"] [data-cqa-action] svg{width:16px;height:16px}
       [data-cqa-pending-ui]{visibility:hidden!important}
       #cqa-notice{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 12px);transform:translateX(-50%);z-index:2147483647;max-width:calc(100vw - 28px);box-sizing:border-box;padding:10px 14px;border-radius:12px;background:#272b34;color:#fff;font:14px/1.5 system-ui,sans-serif;text-align:center;pointer-events:none}
       [data-cqa-report-save]{display:block;margin:8px auto 0;padding:6px 12px;border:1px solid #aaa;border-radius:6px;background:#393f4b;color:#fff;font:inherit;pointer-events:auto;touch-action:manipulation}
@@ -125,7 +130,14 @@
         button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
         return button;
     }
+    function clearUserLayout(group) {
+        const previous = userLayouts.get(group);
+        if (!previous) return;
+        for (const [node, attribute] of previous) node.removeAttribute(attribute);
+        userLayouts.delete(group);
+    }
     function mount(group) {
+        clearUserLayout(group);
         const previous = bars.get(group), info = resolve(group), trigger = triggerOf(group);
         if (!info || !trigger) { previous?.remove(); managed.delete(group); return; }
         let bar = previous;
@@ -138,6 +150,21 @@
         const anchor = edit || trigger.closest('.dropdown-button') || trigger;
         if (!edit && !anchor.matches('button,[role="button"]') && ['absolute', 'fixed'].includes(getComputedStyle(anchor).position)) {
             bar.dataset.cqaAbsolute = '';
+            if (bar.parentElement !== anchor) anchor.appendChild(bar);
+        } else if (info.role === 'user' && anchor.matches('.dropdown-button') && !anchor.matches('button,[role="button"]')) {
+            // A display:contents trigger exposes our bar as another flex item.
+            // Keep the native button first, and give its compact action row its
+            // own line below the text instead of narrowing the message body.
+            const nativeButton = Array.from(anchor.querySelectorAll('button,[role="button"]')).find(node => !node.closest(CONTROLS));
+            const markdown = group.querySelector('.wrtn-markdown');
+            let layout = anchor.parentElement;
+            while (layout && layout !== group && markdown && !layout.contains(markdown)) layout = layout.parentElement;
+            const placements = [[anchor, 'data-cqa-user-anchor']];
+            if (nativeButton) placements.push([nativeButton, 'data-cqa-user-menu']);
+            if (markdown && layout?.contains(markdown)) placements.push([layout, 'data-cqa-user-layout']);
+            for (const [node, attribute] of placements) node.setAttribute(attribute, '');
+            userLayouts.set(group, placements);
+            delete bar.dataset.cqaAbsolute;
             if (bar.parentElement !== anchor) anchor.appendChild(bar);
         } else {
             delete bar.dataset.cqaAbsolute;
@@ -413,7 +440,7 @@
     }, true);
     const observer = new MutationObserver(records => {
         if (route !== location.pathname) {
-            route = location.pathname; finish(); managed.forEach(group => bars.get(group)?.remove()); managed.clear(); scan(document.body);
+            route = location.pathname; finish(); managed.forEach(group => { clearUserLayout(group); bars.get(group)?.remove(); }); managed.clear(); scan(document.body);
         }
         for (const record of records) {
             const group = record.target.nodeType === 1 ? record.target.closest(GROUP) : record.target.parentElement?.closest(GROUP);
