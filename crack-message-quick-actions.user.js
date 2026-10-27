@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 메시지 바로 복사·삭제
 // @namespace    crack-message-quick-actions
-// @version      1.0.1
+// @version      1.0.2
 // @description  보낸 메시지에 전체 복사·삭제, AI 답변에 삭제 아이콘을 추가합니다. 삭제 대상이 확인되면 확인창 없이 실행합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        unsafeWindow
@@ -14,6 +14,7 @@
 (() => {
     'use strict';
     const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    const VERSION = '1.0.2';
     const GROUP = '[data-message-group-id]', CONTROLS = '[data-cqa-controls]';
     const DIALOGS = '[role="dialog"], [role="alertdialog"], dialog';
     const bars = new WeakMap(), managed = new Set(), queued = new Set();
@@ -31,13 +32,26 @@
       [data-cqa-action] svg{width:18px;height:18px;display:block;pointer-events:none}
       [data-cqa-pending-ui]{visibility:hidden!important}
       #cqa-notice{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 12px);transform:translateX(-50%);z-index:2147483647;max-width:calc(100vw - 28px);box-sizing:border-box;padding:10px 14px;border-radius:12px;background:#272b34;color:#fff;font:14px/1.5 system-ui,sans-serif;text-align:center;pointer-events:none}
+      [data-cqa-report-save]{display:block;margin:8px auto 0;padding:6px 12px;border:1px solid #aaa;border-radius:6px;background:#393f4b;color:#fff;font:inherit;pointer-events:auto;touch-action:manipulation}
     `;
     (document.head || document.documentElement).appendChild(style);
-    function notify(message) {
+    function notify(message, report = null) {
         let node = document.getElementById('cqa-notice');
         if (!node) { node = document.createElement('div'); node.id = 'cqa-notice'; node.setAttribute('role', 'status'); document.body.appendChild(node); }
         node.textContent = message; clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => node.remove(), 2200);
+        if (report) {
+            const save = document.createElement('button'); save.type = 'button'; save.dataset.cqaReportSave = '';
+            save.textContent = '진단 저장';
+            save.addEventListener('click', event => {
+                event.preventDefault(); event.stopPropagation();
+                const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+                const link = document.createElement('a'); link.href = url; link.download = `crack-quick-actions-${VERSION}-report.json`;
+                document.body.appendChild(link); link.click(); link.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 1000); node.remove();
+            });
+            node.appendChild(save);
+        }
+        toastTimer = setTimeout(() => node.remove(), report ? 8000 : 2200);
     }
     function fiberOf(node) {
         for (let el = node, i = 0; el && i < 15; el = el.parentElement, i++) {
@@ -201,30 +215,89 @@
         return false;
     }
     function nativeDialogCommit(job, dialog, records) {
-        if (!job.boundItem || visible(job.menu)) return false;
+        job.dialogCommit = { boundItem: !!job.boundItem, menuVisible: visible(job.menu), closeMutation: false, addMutation: false };
+        if (!job.boundItem || job.dialogCommit.menuVisible) return false;
         const contains = (node, target) => node === target || node.nodeType === 1 && node.contains(target);
         const menuClosed = records.some(record =>
             record.type === 'attributes' && record.target === job.menu && record.attributeName === 'data-state' && job.menu.getAttribute('data-state') === 'closed' ||
             record.type === 'childList' && [...record.removedNodes].some(node => contains(node, job.menu)));
         const dialogAdded = records.some(record => record.type === 'childList' && [...record.addedNodes].some(node => contains(node, dialog)));
+        job.dialogCommit.closeMutation = menuClosed; job.dialogCommit.addMutation = dialogAdded;
         return menuClosed && dialogAdded;
     }
-    function finish(message) {
+    function menuLinked(job, menu) {
+        return !!((job.trigger.id && (menu.getAttribute('aria-labelledby') || '').split(/\s+/).includes(job.trigger.id)) ||
+            (menu.id && job.trigger.getAttribute('aria-controls') === menu.id));
+    }
+    function failureReport(job, code = '') {
+        // A bounded, failure-only snapshot: never serialize text, IDs, URLs,
+        // cookies, React objects or function source. No background recorder.
+        const report = { version: VERSION, phase: job.phase, code, role: job.info.role };
+        try {
+            const shape = node => {
+                if (!node) return null;
+                const raw = node.wrappedJSObject || node;
+                const key = Object.keys(raw).find(k => k.startsWith('__reactProps$'));
+                const fk = Object.keys(raw).find(k => k.startsWith('__reactFiber$'));
+                const props = key ? raw[key] : fk ? liveProps(raw[fk]) : null;
+                return { tag: ['BUTTON', 'DIV', 'SPAN'].includes(node.tagName) ? node.tagName.toLowerCase() : 'other',
+                    visible: visible(node), disabled: !!node.disabled || node.getAttribute('aria-disabled') === 'true',
+                    dropdown: node.classList.contains('dropdown-button'), hasId: !!node.id,
+                    customControl: !!node.closest(CONTROLS), nativeMenuLabel: /메시지\s*(?:옵션|메뉴)/.test(text(node.getAttribute('aria-label') || node.querySelector('[aria-label]')?.getAttribute('aria-label'))),
+                    popupMenu: node.getAttribute('aria-haspopup') === 'menu', hasControls: !!node.getAttribute('aria-controls'),
+                    expanded: node.getAttribute('aria-expanded') === 'true', closed: node.getAttribute('data-state') === 'closed',
+                    hiddenByQuickActions: node.hasAttribute('data-cqa-pending-ui'),
+                    handlers: ['onPointerDown', 'onKeyDown', 'onClick'].filter(name => typeof props?.[name] === 'function') };
+            };
+            const all = [...document.querySelectorAll('[role="menu"]')], shown = all.filter(visible);
+            const linked = shown.filter(menu => !job.oldMenus.has(menu) && menuLinked(job, menu));
+            const dialogs = [...document.querySelectorAll(DIALOGS)];
+            report.code ||= job.phase === 'menu' ? !shown.length ? 'M0' : linked.length !== 1 ? 'M1' : 'M2' : job.phase === 'dialog' ? 'D0' : 'W0';
+            report.targetStable = sameTarget(job); report.pointerEvents = typeof PointerEvent === 'function';
+            report.trigger = shape(job.trigger); report.openEvent = job.openEvent || null;
+            report.openTarget = shape(job.openTarget);
+            report.menuMutations = job.menuMutations || { added: false, removed: false };
+            report.dialogTarget = job.dialogTarget || 'unchecked'; report.dialogCommit = job.dialogCommit || null;
+            report.counts = { menus: all.length, visibleMenus: shown.length, linkedMenus: linked.length,
+                dialogs: dialogs.length, freshVisibleDialogs: dialogs.filter(node => visible(node) && !job.oldDialogs.has(node)).length,
+                controlsInGroup: job.group.querySelectorAll(CONTROLS).length };
+            report.selectedMenu = shape(job.menu); report.selectedItem = shape(job.item);
+            report.boundItem = !!job.boundItem;
+            const score = menu => (menuLinked(job, menu) ? 4 : 0) + (visible(menu) ? 2 : 0) + (!job.oldMenus.has(menu) ? 1 : 0);
+            report.menus = all.sort((a, b) => score(b) - score(a)).slice(0, 6).map(menu => {
+                const items = [...menu.querySelectorAll('[role="menuitem"],button')];
+                return { ...shape(menu), linked: menuLinked(job, menu), hasLabel: !!menu.getAttribute('aria-labelledby'),
+                    owned: ownedMenuItem(job, menu), itemCount: items.length,
+                    items: items.slice(0, 12).map(item => ({ visible: visible(item), disabled: !!item.disabled || item.getAttribute('aria-disabled') === 'true',
+                        exactDelete: /^삭제(?:하기)?$/.test(text(item.textContent || item.getAttribute('aria-label'))),
+                        containsDelete: /삭제/.test(text(item.textContent || item.getAttribute('aria-label'))) })) };
+            });
+        } catch (_) { report.code ||= 'E0'; report.captureError = true; }
+        return report;
+    }
+    function finish(message, report = null) {
         const job = flow; flow = null;
         if (!job) return;
         watch();
         clearTimeout(job.timer);
         job.menu?.removeAttribute('data-cqa-pending-ui'); job.dialog?.removeAttribute('data-cqa-pending-ui');
         job.button.disabled = false; job.button.removeAttribute('aria-busy');
-        if (message) notify(message);
+        if (message) notify(message + (report ? ` [${VERSION} · ${report.code}]` : ''), report);
     }
     function deadline(job, ms) {
         clearTimeout(job.timer);
-        job.timer = setTimeout(() => { if (flow === job) finish('처리를 확인하지 못했어요. 기존 메뉴에서 상태를 확인해 주세요.'); }, ms);
+        job.timer = setTimeout(() => {
+            if (flow !== job) return;
+            const report = failureReport(job);
+            const labels = { M0: '메뉴가 열렸는지 확인하지 못했어요.', M1: '메뉴와 선택한 글의 연결을 확인하지 못했어요.',
+                M2: '메뉴에서 삭제 항목을 확인하지 못했어요.', D0: '삭제 확인창이 열렸는지 확인하지 못했어요.', W0: '삭제 처리 완료를 확인하지 못했어요.' };
+            finish(labels[report.code] || '삭제 상태를 확인하지 못했어요.', report);
+        }, ms);
     }
     function activate(node) {
         const wrappedTrigger = node.matches('.dropdown-button[aria-haspopup="menu"]');
         const target = wrappedTrigger ? node.querySelector('button, [role="button"]') || node : node;
+        if (flow?.trigger === node) flow.openTarget = target;
         const rect = target.getBoundingClientRect();
         const options = { bubbles: true, cancelable: true, composed: true, view: window, button: 0, buttons: 1, pointerId: 735, pointerType: 'touch', isPrimary: true,
             clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
@@ -232,9 +305,13 @@
             // The phone's native handler opens on pointerdown. A subsequent
             // synthetic click can reach a different element after the portal opens.
             if (typeof PointerEvent === 'function') {
-                target.dispatchEvent(new PointerEvent('pointerdown', options));
+                const event = new PointerEvent('pointerdown', options); target.dispatchEvent(event);
+                if (flow?.trigger === node) flow.openEvent = { kind: 'pointerdown', defaultPrevented: event.defaultPrevented };
                 target.dispatchEvent(new PointerEvent('pointerup', { ...options, buttons: 0 }));
-            } else node.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'ArrowDown' }));
+            } else {
+                const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'ArrowDown' }); node.dispatchEvent(event);
+                if (flow?.trigger === node) flow.openEvent = { kind: 'keydown', defaultPrevented: event.defaultPrevented };
+            }
             return;
         }
         try { node.focus({ preventScroll: true }); } catch (_) {}
@@ -249,15 +326,14 @@
         if (job.phase !== 'working' && !sameTarget(job)) { finish('대화 상태가 바뀌어 삭제를 멈췄어요. 다시 선택해 주세요.'); return; }
         if (job.phase === 'menu') {
             const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter(visible);
-            const own = menus.filter(menu => !job.oldMenus.has(menu) &&
-                ((job.trigger.id && (menu.getAttribute('aria-labelledby') || '').split(/\s+/).includes(job.trigger.id)) ||
-                    (menu.id && job.trigger.getAttribute('aria-controls') === menu.id)));
+            const own = menus.filter(menu => !job.oldMenus.has(menu) && menuLinked(job, menu));
             if (own.length !== 1) return;
             if (menus.length !== 1) { finish('열린 메뉴가 여러 개라 삭제를 멈췄어요.'); return; }
             const items = Array.from(own[0].querySelectorAll('[role="menuitem"], button')).filter(item =>
                 visible(item) && !item.disabled && item.getAttribute('aria-disabled') !== 'true' && /^삭제(?:하기)?$/.test(text(item.textContent || item.getAttribute('aria-label'))));
             if (items.length !== 1) return;
             job.boundItem = ownedMenuItem(job, items[0]);
+            job.item = items[0];
             job.menu = own[0]; job.menu.setAttribute('data-cqa-pending-ui', ''); job.phase = 'dialog';
             deadline(job, 1000); activate(items[0]);
             return; // Inspect the native action's next DOM commit, not the menu-open batch.
@@ -276,8 +352,9 @@
                 finish('삭제 확인창을 정확히 구분하지 못해 멈췄어요.'); return;
             }
             const match = dialogMatches(job, dialog, buttons[0]);
+            job.dialogTarget = match === null ? 'absent' : match ? 'match' : 'mismatch';
             if (match !== true && (match === false || !nativeDialogCommit(job, dialog, records))) {
-                finish('확인창의 삭제 대상을 확인하지 못해 자동 삭제를 멈췄어요.'); return;
+                finish('확인창의 삭제 대상을 확인하지 못해 자동 삭제를 멈췄어요.', failureReport(job, 'D1')); return;
             }
             if (!sameTarget(job)) { finish('대화가 바뀌어 삭제를 멈췄어요.'); return; }
             job.dialog = dialog; job.phase = 'working'; dialog.setAttribute('data-cqa-pending-ui', '');
@@ -345,6 +422,14 @@
             for (const node of record.addedNodes) scan(node);
         }
         if (records.some(record => record.removedNodes.length)) for (const group of managed) if (!group.isConnected) managed.delete(group);
+        if (flow?.phase === 'menu') {
+            flow.menuMutations ||= { added: false, removed: false };
+            const hasMenu = node => node.nodeType === 1 && (node.matches('[role="menu"]') || !!node.querySelector('[role="menu"]'));
+            for (const record of records) if (record.type === 'childList') {
+                if ([...record.addedNodes].some(hasMenu)) flow.menuMutations.added = true;
+                if ([...record.removedNodes].some(hasMenu)) flow.menuMutations.removed = true;
+            }
+        }
         advance(records);
     });
     function watch() {
