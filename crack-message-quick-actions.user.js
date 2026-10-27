@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 메시지 바로 복사·삭제
 // @namespace    crack-message-quick-actions
-// @version      1.0.2
+// @version      1.0.3
 // @description  보낸 메시지에 전체 복사·삭제, AI 답변에 삭제 아이콘을 추가합니다. 삭제 대상이 확인되면 확인창 없이 실행합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        unsafeWindow
@@ -14,7 +14,7 @@
 (() => {
     'use strict';
     const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-    const VERSION = '1.0.2';
+    const VERSION = '1.0.3';
     const GROUP = '[data-message-group-id]', CONTROLS = '[data-cqa-controls]';
     const DIALOGS = '[role="dialog"], [role="alertdialog"], dialog';
     const bars = new WeakMap(), managed = new Set(), queued = new Set();
@@ -299,7 +299,7 @@
         const target = wrappedTrigger ? node.querySelector('button, [role="button"]') || node : node;
         if (flow?.trigger === node) flow.openTarget = target;
         const rect = target.getBoundingClientRect();
-        const options = { bubbles: true, cancelable: true, composed: true, view: window, button: 0, buttons: 1, pointerId: 735, pointerType: 'touch', isPrimary: true,
+        const options = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1, pointerId: 735, pointerType: 'touch', isPrimary: true,
             clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
         if (wrappedTrigger) {
             // The phone's native handler opens on pointerdown. A subsequent
