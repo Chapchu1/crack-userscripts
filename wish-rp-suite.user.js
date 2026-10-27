@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.94
+// @version      0.5.95
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,11 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.95 · 사용자 대화 이후 자동 응답 교정
+ * 작가의 시작 도입부는 자동 검수하지 않고 첫 USER 이후의 AI 답변부터 검수합니다.
+ * 수동 교정, 자동 교정 OFF, 기존 방 설정과 새 방 정보 자동 주입을 유지합니다.
+ */
 
 /* 0.5.94 · 모바일 표시와 새 방 자동 적용
  * 주입 버튼 가운데 정렬, 메뉴 아이콘 크기, 자료집 제목·인물 검색 간격을 조정합니다.
@@ -787,7 +792,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.94'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.95'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49924,7 +49929,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.94-suite';
+  const SCRIPT_VERSION = '0.5.95-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -79300,7 +79305,9 @@ Object.assign(WSUITE.host, {
     const rows = result?.data?.messages ?? result?.messages;
     if (!Array.isArray(rows) || rows.some(m => !messageIdOf(m) || !['user','assistant','system'].includes(messageRoleOf(m)))) throw Error('최근 대화 목록을 확인할 수 없습니다.');
     if (new Set(rows.map(m => String(messageIdOf(m)))).size !== rows.length) throw Error('대화 목록의 메시지 ID가 중복됐습니다.');
-    return rows.filter(m => messageRoleOf(m) !== 'system');
+    const visible=rows.filter(m => messageRoleOf(m) !== 'system');
+    Object.defineProperty(visible,'refinerSourceCount',{value:rows.length});
+    return visible;
   },
   async refinerMessage(chatId,messageId){
     if(String(chatId)!==String(getChatIdFromPath()))throw Error('현재 채팅방이 바뀌었습니다.');
@@ -81340,7 +81347,22 @@ A correction requires a supported contradiction, a materially relevant persisten
 
   async function findLastAssistant() {
     const raws = await fetchRawMessages(20);
-    const hit = raws.map(normalizeMessage).find(m => m.role === 'assistant' && m.content.trim());
+    const messages = raws.map(normalizeMessage);
+    const hit = messages.find(m => m.role === 'assistant' && m.content.trim());
+    if(hit){
+      const branch=reviewBranch(hit.raw),parentOf=m=>String(m.raw?.parentMessageId||m.raw?.parentId||m.raw?.replyToMessageId||'');
+      const prior=messages.slice(messages.indexOf(hit)+1).filter(m=>!reviewInactive(m.raw)&&(!branch||!reviewBranch(m.raw)||reviewBranch(m.raw)===branch));
+      // Newest-first history: a USER newer than the opening is not its prompt.
+      // Count the API page before system filtering; missing ancestry is not a new room.
+      let complete=(raws.refinerSourceCount??raws.length)<20,ancestor=hit;
+      const seen=new Set([messageStableId(hit)]);
+      while(complete&&parentOf(ancestor)){
+        const parent=parentOf(ancestor),next=prior.find(m=>messageStableId(m)===parent);
+        if(!next||seen.has(parent)){complete=false;break;}
+        seen.add(parent);ancestor=next;
+      }
+      hit.openingGreeting=complete&&!prior.some(m=>m.role==='user');
+    }
     return hit || null;
   }
 
@@ -83316,6 +83338,11 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
       return;
     }
     if (!force && !settings.enabled) return;
+    if(!force){
+      const candidate=typeof targetOverride?.openingGreeting==='boolean'?targetOverride:await findLastAssistant();
+      if(candidate?.openingGreeting||workerBusy||!settings.enabled)return;
+      if(targetOverride&&String(candidate?.id)!==String(targetOverride.id))return;
+    }
     if(!enabledReviewTopics().length){setStatus('검사 항목 OFF');showReviewNotice('응답을 유지했어요','검사 항목이 모두 꺼져 있습니다. 검사할 항목을 선택해 주세요.','info',5000);return;}
     if (!connectionOk) {
       if(!force){const target=targetOverride||await findLastAssistant();if(target){const key=messageAutoKey(target);if(key&&key===lastAutoAssistantKey)return;lastAutoAssistantKey=key;setReviewGate(target,'error');showReviewFailure(target,new Error('공용 AI 연결 확인이 필요합니다.'));}}
@@ -83343,6 +83370,7 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
       const target = targetOverride ? normalizeMessage(targetOverride) : await waitStableAssistant();
       reviewTiming.stableMs=Date.now()-reviewTiming.startedAt;
       if (!target) {setStatus('응답 완료 확인 대기');if(force)showReviewNotice('아직 검토하지 못했어요','응답 완료를 아직 확인하지 못했습니다. 잠시 후 다시 검수해 주세요.','info',5000);return;}
+      if(!force&&target.openingGreeting)return;
       assertScope(requestScope);target.suiteScope=requestScope;
       if(isPendingResponse(target))throw new Error('선택한 응답이 아직 생성 중입니다. 완료된 뒤 다시 검수해 주세요.');
       if(targetOverride)await assertReviewSource(target,chatId);
@@ -83704,6 +83732,7 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
         if(epoch!==autoPrimeEpoch||roomKey!==chatStateKey())return;
         const latestKey=messageAutoKey(latest);
         if(!latestKey||latestKey===lastAutoAssistantKey)return;
+        if(latest.openingGreeting){lastAutoAssistantKey=latestKey;return;}
         if(isProcessed(latest)){lastAutoAssistantKey=latestKey;return;}
         const target = await waitStableAssistant();
         if(epoch!==autoPrimeEpoch||roomKey!==chatStateKey())return;
@@ -83734,14 +83763,15 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
       // DOM의 생성중 표시가 완료 뒤에도 남는 Crack 렌더 케이스가 있어 서버 status만 확정 pending으로 사용합니다.
       const pending=/^(streaming|generating|pending|in_progress|inprogress)$/i.test(String(last?.raw?.status||last?.raw?.state||''));
       const processed=!!last&&!pending&&isProcessed(last);
+      const opening=!!last?.openingGreeting;
       baselineFingerprint = pending?'':messageFingerprint(last);
       // 이전 버전은 시작/새로고침 시 현재 최신 응답을 무조건 기준점으로 잡아서,
       // 아직 한 번도 검수하지 않은 최신 응답까지 자동 검수 대상에서 빠질 수 있었습니다.
-      // 처리 완료 fingerprint가 확인된 응답만 기준점으로 삼고, 미검수 최신 응답은 즉시 큐에 넣습니다.
-      lastAutoAssistantKey = processed ? messageAutoKey(last) : '';
-      autoCheckQueued = pending || (!!last && !processed);
+      // 작가의 도입부는 검수 완료로 표시하지 않고 건너뜁니다. 나머지 미검수 최신 응답은 즉시 큐에 넣습니다.
+      lastAutoAssistantKey = processed || opening ? messageAutoKey(last) : '';
+      autoCheckQueued = !opening && (pending || (!!last && !processed));
       autoCheckWaits=0;
-      if(last&&!pending&&!reviewGateRows()[String(last.id)])setReviewGate(last,processed?'settled':'queued');
+      if(last&&!pending&&!opening&&!reviewGateRows()[String(last.id)])setReviewGate(last,processed?'settled':'queued');
     } catch (_) {
       if (epoch !== autoPrimeEpoch) return;
       baselineFingerprint = '';
@@ -83913,7 +83943,7 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
     past.querySelector('[data-load-past]').onclick=loadPast;past.ontoggle=()=>{if(past.open&&!pastRows.length)loadPast();};pastRun.onclick=async()=>{const chosen=pastRows.find(row=>row.id===pastSelect.value);if(!chosen)return;pastRun.disabled=true;try{await runRefiner({force:true,targetOverride:chosen});}finally{choosePast();}};box.append(past);
 
 
-    box.appendChild(makeToggle('자동 응답교정', '아직 검수하지 않은 최신 AI 응답을 자동 검사합니다. 같은 본문은 건너뛰고, 리롤·수정으로 본문이 바뀌면 다시 검사합니다.', settings.enabled, async v => {
+    box.appendChild(makeToggle('자동 응답교정', '내가 첫 메시지를 보낸 뒤의 AI 답변부터 자동 검사합니다. 작가의 도입부는 제외하며, 리롤·수정으로 본문이 바뀌면 다시 검사합니다.', settings.enabled, async v => {
       settings.enabled = v; saveSettings();
       if (v) { await primeBaseline(); toast('자동 응답 교정을 켰어.', 'ok'); }
       else toast('자동 응답 교정을 껐어.');
