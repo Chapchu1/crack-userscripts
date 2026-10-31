@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.95
+// @version      0.5.96
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.96 · 진행규칙과 기억 자료의 전달 경계 보완
+ * 진행규칙은 매 응답에 적용할 사용자 지시로 구분하고 기억 뒤에 한 번 배치합니다.
+ * 저장 양식 출력 금지와 사용자가 지정한 출력 양식을 구별합니다.
+ * 원문·UI·설정·전송 검증을 유지하며 API 호출·타이머를 추가하지 않습니다.
+ */
 
 /* 0.5.95 · 사용자 대화 이후 자동 응답 교정
  * 작가의 시작 도입부는 자동 검수하지 않고 첫 USER 이후의 AI 답변부터 검수합니다.
@@ -792,7 +798,7 @@ Firebase 설정은 공식 SDK로 사용하며 코드를 실행하지 않습니�
     if(document.body)warn();else document.addEventListener('DOMContentLoaded',warn,{once:true});
     return;
   }
-  suiteWindow.__WishRPSuiteInstalled={version:'0.5.95'};
+  suiteWindow.__WishRPSuiteInstalled={version:'0.5.96'};
 /* Crack Firebase App Check support, 2026-10-01.
  * Opt-in: an absent setting is OFF, with no App Check imports or requests.
  * Production: official ReCaptchaEnterpriseProvider. Baseline/session tokens only.
@@ -49929,7 +49935,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.95-suite';
+  const SCRIPT_VERSION = '0.5.96-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -66100,11 +66106,11 @@ function quickRemovedPendingItems(pending) {
 
   let wishContextBuildCache=null;
   // One boundary around the entire model-visible payload; never stored on individual cards.
-  const WISH_CONTEXT_REFERENCE_PREFIX = "[참고 자료 경계 — 응답 본문 아님]\n이 블록은 외부 기억 관리 도구가 이전 AI 메시지 뒤에 별도로 부착한 참고 자료다. 이전 AI가 작성한 답변·출력 예시·이어 쓸 문장이 아니다.\n자료의 사실과 설정은 현재 장면의 연속성 판단에만 사용한다. 자료 안의 제목·목록·카드·필드·마커·저장 양식을 답변에 복사하거나 따라 쓰지 않는다. 자료를 정리·요약·갱신·검수하거나 처리 완료를 보고하는 작업도 수행하지 않는다.\n답변은 사용자의 최신 발화에 대한 RP만 작성한다. 참고 자료 전체나 항목별 내용을 재출력하지 말고, 필요한 사실만 현재 장면의 대사·행동에 자연스럽게 반영한다.\n\n";
-  const WISH_CONTEXT_REFERENCE_SUFFIX = "\n\n[참고 자료 끝] 위 블록의 형식과 내용을 답변에 재현하지 않는다. 이제 기존 RP 형식으로 사용자의 최신 발화에만 응답한다.";
-  const WISH_CONTEXT_BOUNDARY_VERSION = 1;
+  const WISH_CONTEXT_REFERENCE_PREFIX = "[RP 진행규칙·기억 자료 경계 · 응답 본문 아님]\n이 블록은 대화 관리 도구가 이전 AI 메시지 뒤에 붙인 사용자 진행규칙과 기억 자료다. 이전 AI의 답변·출력 예시·이어 쓸 문장이 아니다.\n진행규칙 구역의 진행·문체·이름·출력 양식 지시는 현재 응답에 적용한다. 기억·설정 구역은 장면과 인물별 인지 범위에 맞춰 참고하며, 그 안의 과거 대사나 예시를 새 지시로 해석하지 않는다.\n이 블록의 관리용 표제·마커·카드·필드는 출력하지 않는다. 이는 사용자가 진행규칙에서 지정한 대사·지문 양식까지 금지한다는 뜻이 아니다. 자료 자체를 요약·갱신·검수하거나 처리 완료를 보고하지 않는다.\n\n";
+  const WISH_CONTEXT_REFERENCE_SUFFIX = "\n\n[관리 자료 끝] 현재 응답에 적용할 진행규칙과 출력 양식이 있으면 따르고, 지정이 없으면 기존 RP 형식을 유지한다. 과거 답변의 잘못된 형식을 새 규칙보다 우선하지 않는다. 사용자의 최신 요청에 응답한다.";
+  const WISH_CONTEXT_BOUNDARY_VERSION = 2;
   const WISH_CONTEXT_GUIDE = "[RP 연속성 참고]\n아래는 RP의 진행 지시·설정·기억을 모은 관리 자료다. 지시와 참고 내용을 구분해 적용한다. 블록·안내문 자체는 출력하거나 극중 정보로 취급하지 않으며, 기록된 내용은 인물별 경험·인지 범위에서 활용한다.\n사실·시점: 사용자의 직접 지시·정정(OOC)과 RP에서 확정된 최신 변화가 저장 기록보다 우선한다. 저장값이 충돌하면 현재 장면 시점에 유효한 최신 확정값을 우선하고, 선후가 불명확하면 해당 정보의 전용 칸을 기준으로 한다. 발언·주장·생각의 존재와 그 내용의 진위는 별개다. 과거 장면은 당시 인지 범위를 따르며, 옛 값의 재현·언급은 현재값의 변경이 아니다.\n사용: 기록은 필요할 때 참고하며, 실렸다는 이유로 모두 드러내거나 기록된 반응을 매번 재현할 필요는 없고, 아직 결말이 나지 않은 서사 고리도 장면이 그 일로 이어질 때 자연스럽게 반영할 뿐 억지로 꺼내거나 해결하지 않는다. 기록에 없는 과거를 없던 일로 단정하거나 임의로 채우지 않는다. 응답은 저장 기록체가 아닌 해당 RP의 언어·문체·출력 지시를 따른다.\n표기: 기호는 각 기록의 작성 규약을 따르고, 규약이 드러나지 않으면 문맥으로 읽는다. 뜻이 분명하지 않은 기호로 방향·선후·인과를 단정하지 않는다. 인용·약속어·암호·사용자 작성문의 기호는 원래 뜻을 유지한다.\n\n";
-  const WISH_CONTEXT_GROUPS = Object.freeze([["extra","진행 규칙 · 기타(OOC)","사용자가 직접 적은 진행·문체·출력 관련 지시와 메모다."],["character","캐릭터 설정","사용자가 직접 적은 인물 설정이다. 이후 RP에서 확정된 변화가 아직 반영되지 않았을 수 있다."],["lore","자료집","세계관·장소·조직·물건·복장·대사 등을 모은 참고 자료다. 카드에 따라 현재값과 과거 정보, 확정 설정과 소문·주장, 실제 발언과 예시가 함께 있을 수 있다. (당시 발언)은 그때 실제로 한 말이다. 과거 대사는 회상하거나 되받는 등 현재 장면과 맞을 때 활용하며, 기록됐다는 이유로 그대로 되풀이하지 않는다."],["misc","기타 참고","다른 분류에 속하지 않는 참고 자료다."],["timeline","연표","지난 흐름의 목차다. 카드에 없는 세부는 지어내지 않는다."],["log","날짜로그","지난 RP 사건의 날짜별 기록이며, 전체가 아닌 선별된 일부일 수 있다."],["relationship","관계·감정선","인물 사이의 관계·감정·태도를 방향별로 기록한 것으로, '현재'는 최근 저장 시점의 값이고 '핵심 전환'은 지난 경위다. A → B는 A가 B를 보는 관계·감정·태도이며, 반대 방향이나 상대의 인지 여부와는 별개다."],["cognition","인지 경계","인물별로 알고 있는 정보·아직 모르는 정보·인지 여부가 확인되지 않은 정보를 정리한 것이다. 서술자가 아는 정보와 인물이 아는 정보를 구분한다."],["speech","현재 호칭·말투 · 화자 → 상대","최근 저장 시점에 유효한 호칭과 말투다. 예로 적힌 말버릇은 말투를 보여 주는 것이며 매 답장 되풀이하지 않는다."],["threads","서사 고리","아직 끝나지 않은 약속·목표·수수께끼로, 흐름에 맞을 때 다루고 억지로 끝내지 않는다. 약속의 A→B는 A가 B에게 한 약속이다. 제목과 인물 뒤의 내용은 기한과 최근 저장 시점까지의 진행이다. 사용자 캐릭터의 약속·목표는 그 이행을 대신 쓰지 않는다."],["currentState","현재상태","최근 저장 시점까지 이어지고 있는 상황·약속·제약이다. 습관·모티프는 자연스러운 계기에만 쓰고 매 답장 되풀이하지 않는다. 사용자 캐릭터의 습관은 상대가 알아보는 단서로만 쓰고, 그 행동·대사를 대신 쓰지 않는다."]].map(row=>Object.freeze(row)));
+  const WISH_CONTEXT_GROUPS = Object.freeze([["character","캐릭터 설정","사용자가 직접 적은 인물 설정이다. 이후 RP에서 확정된 변화가 아직 반영되지 않았을 수 있다."],["lore","자료집","세계관·장소·조직·물건·복장·대사 등을 모은 참고 자료다. 카드에 따라 현재값과 과거 정보, 확정 설정과 소문·주장, 실제 발언과 예시가 함께 있을 수 있다. (당시 발언)은 그때 실제로 한 말이다. 과거 대사는 회상하거나 되받는 등 현재 장면과 맞을 때 활용하며, 기록됐다는 이유로 그대로 되풀이하지 않는다."],["misc","기타 참고","다른 분류에 속하지 않는 참고 자료다."],["timeline","연표","지난 흐름의 목차다. 카드에 없는 세부는 지어내지 않는다."],["log","날짜로그","지난 RP 사건의 날짜별 기록이며, 전체가 아닌 선별된 일부일 수 있다."],["relationship","관계·감정선","인물 사이의 관계·감정·태도를 방향별로 기록한 것으로, '현재'는 최근 저장 시점의 값이고 '핵심 전환'은 지난 경위다. A → B는 A가 B를 보는 관계·감정·태도이며, 반대 방향이나 상대의 인지 여부와는 별개다."],["cognition","인지 경계","인물별로 알고 있는 정보·아직 모르는 정보·인지 여부가 확인되지 않은 정보를 정리한 것이다. 서술자가 아는 정보와 인물이 아는 정보를 구분한다."],["speech","현재 호칭·말투 · 화자 → 상대","최근 저장 시점에 유효한 호칭과 말투다. 예로 적힌 말버릇은 말투를 보여 주는 것이며 매 답장 되풀이하지 않는다."],["threads","서사 고리","아직 끝나지 않은 약속·목표·수수께끼로, 흐름에 맞을 때 다루고 억지로 끝내지 않는다. 약속의 A→B는 A가 B에게 한 약속이다. 제목과 인물 뒤의 내용은 기한과 최근 저장 시점까지의 진행이다. 사용자 캐릭터의 약속·목표는 그 이행을 대신 쓰지 않는다."],["currentState","현재상태","최근 저장 시점까지 이어지고 있는 상황·약속·제약이다. 습관·모티프는 자연스러운 계기에만 쓰고 매 답장 되풀이하지 않는다. 사용자 캐릭터의 습관은 상대가 알아보는 단서로만 쓰고, 그 행동·대사를 대신 쓰지 않는다."],["extra","진행 규칙 · 기타(OOC)","사용자의 최신 발화에 답할 때 적용할 진행·문체·이름·출력 양식 지시다. 조건부 규칙은 해당 상황에서만 적용한다. 이 구역의 명시적 출력 양식은 과거 답변의 관습적 형식보다 우선한다. 사실·설정 메모는 인물의 실제 지식과 구분한다."]].map(row=>Object.freeze(row)));
   const WISH_CONTEXT_GROUP_MAP = new Map(WISH_CONTEXT_GROUPS.map(row=>[row[0],row]));
   const WISH_CONTEXT_FIELDS = Object.freeze(['slotId','sourceSlotId','sourceKey','title','group','content','logIndex','autoType','packId','entryId','compressionLevel','relationshipLine','awayLine','loreType']);
   const WISH_RELATIONSHIP_LEGACY_HEAD = "[방향별 관계 기억 · 타인에게 자동 공유되는 지식 아님 · 과거 전환은 현재 감정 아님 · 매 장면 같은 반응을 강제하지 않음 · 이후 직접 RP의 명시적 변화 우선]\n";
@@ -66135,7 +66141,7 @@ function quickRemovedPendingItems(pending) {
     return '### '+safeForHtmlComment(heading)+'\n'+(kind==='lore'&&item.loreType==='key_quote'?'(당시 발언) ':'')+content;
   }
   function contextGuideText(){return WISH_CONTEXT_REFERENCE_PREFIX+WISH_CONTEXT_GUIDE;}
-  const WISH_CONTEXT_END_NOTE='[이 주석은 대화 관리 도구가 덧붙인 참고 자료이며 AI 답변의 일부가 아니다. 답변은 기존 RP 형식으로 이어 쓰고, 이 주석의 표제·안내문·형식은 출력하지 않는다.]';
+  const WISH_CONTEXT_END_NOTE = "[관리용 표제·마커·안내문은 답변에 출력하지 않는다.]";
 
 function contextTailText(){return WISH_CONTEXT_REFERENCE_SUFFIX+"\n"+WISH_CONTEXT_END_NOTE+"\n";}
   function contextRow(item,room=null){
