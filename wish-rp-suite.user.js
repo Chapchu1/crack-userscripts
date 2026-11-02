@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.97
+// @version      0.5.98
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.98 · 진행규칙 갱신 실패 시 이전 주입본 재사용 방지
+ * 서버에서 확인한 진행규칙의 원본·선택 설정을 현재 저장본과 대조합니다.
+ * 지침이 바뀐 뒤 기록 조회가 실패하면 옛 주입본으로 전송을 계속하지 않습니다.
+ * 변경 없는 검증본의 복구 동작과 기존 UI·사용자 데이터·권한을 유지합니다.
+ */
 
 /* 0.5.97 · 최종 기억 검토의 판정값 공백 처리
  * 최종 검토·부분 교정 응답의 열거값 앞뒤 공백만 허용된 값으로 읽습니다.
@@ -49941,7 +49947,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.97-suite';
+  const SCRIPT_VERSION = '0.5.98-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -71103,10 +71109,19 @@ async function restorePendingCarriers(room, pending, keep='') {
 
   function recentSceneText(frame){return frame.messages.slice(0,APP.autoScanMessageLimit).map(m=>stripAutomationNoise(messageTextOf(m),true)).reverse().join('\n\n').slice(-12000);}
 
+function ruleDeliverySource(room,p=room?.pending){
+  const slots=(room?.slots||[]).filter(s=>s?.group==='extra'&&s.enabled&&String(s.content||'').trim());
+  const keys=new Set(slots.map(s=>pendingItemIdentity({slotId:s.id})));
+  return JSON.stringify([1,Number(room?.injectionPolicy?.extraEvery??1)>0,
+    slots.map(s=>[s.id,s.title,String(s.content||'').trim()]),
+    quickRemovedPendingItems(p).map(pendingItemIdentity).filter(key=>keys.has(key)).sort(),SecondaryRebuild.stamp(room)]);
+}
 function verifiedCarrierReadFallback(room,p,frame,error,scope){
   if(room.pending!==p||state.currentRoom!==room||state.routeEpoch!==scope.route||localRestoreEpoch!==scope.epoch||location.pathname!==scope.path||ExternalReplay.changed(apiChatIdOf(room),scope.replay)||generationPending(apiChatIdOf(room))||frame.trailingUser||isAssistantGenerationPending(frame.latest)||isWishHistoryStale(error)||isHistoryReadChanged(error))return null;
   const headKey=JSON.stringify(sourceManifestOf(frame.messages.slice(0,50)));
-  if(!p.verified||!p.messageId||!p.contextBlock||!hasCurrentContextBoundary(p.contextBlock)||p.previousCarrierCleanup||(p.cleanupCarrierMessageIds||[]).length||!carrierSelectionMatches(p,frame,headKey))return null;
+  // A matching old server block does not prove that saved rule edits reached it.
+  // recallNeedsRefresh can clear before PATCH; the verified source also survives reloads.
+  if(!p.verified||p.recallNeedsRefresh||p.verifiedRuleSource!==ruleDeliverySource(room,p)||!p.messageId||!p.contextBlock||!hasCurrentContextBoundary(p.contextBlock)||p.previousCarrierCleanup||(p.cleanupCarrierMessageIds||[]).length||!carrierSelectionMatches(p,frame,headKey))return null;
   const visible=new Set(frame.messages.map(m=>String(messageIdOf(m)))),stored=frame.messages.find(m=>String(messageIdOf(m))===String(p.messageId));
   if(!stored||messageTextOf(stored)!==buildInjectedMessage(p.originalText,p.contextBlock))return null;
   for(const manifest of [room.unified?.memoryManifest,room.unified?.observeManifest,...Object.values(room.aiSourceManifests||{})])if(manifest?.length&&!sourceStillPresent(manifest.filter(m=>visible.has(m.id)),frame.messages))return null;
@@ -71295,6 +71310,7 @@ const fullHistoryWanted=new Set();
     WSUITE.suite?.replaceItems(room,room.autoRecallContextText||'');
     replaceThreadsPendingItem(room);
     ensureDirectReleasePendingItems(room,p);
+    const ruleSource=ruleDeliverySource(room,p);
     const refreshing=reason==='start'||reason==='before-send'||reason==='before-reroll'||carrierChanged||!!p.recallNeedsRefresh;
     unrankedLogsRead=null;
     let memo=!refreshing?kept:memoOn.staleThreads||memoOn.awayPeople?rpMemoRead(room,memoOn,relationshipOpts.stage||''):null;
@@ -71362,7 +71378,10 @@ const fullHistoryWanted=new Set();
     const verifiedWrite=async(text,expected=null)=>{
       // Persistence may yield to OFF/navigation. Validate the saved next state
       // at every actual PATCH (including retries), then again after read-back.
-      const assertCurrent=()=>assertCarrierReadCurrent(next);
+      const assertCurrent=()=>{
+        assertCarrierReadCurrent(next);
+        if(ruleDeliverySource(room,next)!==ruleSource)throw Error('주입 확인 중 진행규칙이 변경되어 전송을 보류했습니다. 다음 확인 때 새 규칙으로 다시 준비합니다.');
+      };
       assertCurrent();carrierWriteAttempted=true;let encoding='';
       await patchMessage(apiChatIdOf(room),newId,text,expected,{assertCurrent,onEncoding:value=>{encoding=value;}});
       assertCurrent();const checked=await verifyInjectedCarrier(room,{...p,messageId:newId,originalText:original},text);assertCurrent();
@@ -71385,7 +71404,7 @@ const fullHistoryWanted=new Set();
     let reserve=rpMemoReserve(memo,candidateItems);
     if(reserve&&!refreshing&&requiredWholeOver(room,candidateItems,original,allFitLimit(room),APP.carrierByteBudget,false,reserve))reserve=null;
     let selection=await chooseAllFitItemsWithinBytes(room,candidateItems,original,room.autoRecallContextText||'',{forceLocal:true,...prepared,wholeRequired:sendReason&&state.nameSceneByChatId.get(String(room.chatId))?sceneAdds(room):null,...(reserve?{reserve}:{}),...(standby.length?{standby}:{})},fitText);
-    if(room.pending!==p||allFitSourceStamp(room)!==sourceStamp)throw Error('선별 중 기억 또는 설정이 변경되어 재적용을 보류했습니다. 다음 확인 때 새 자료로 다시 계산합니다.');
+    if(room.pending!==p||allFitSourceStamp(room)!==sourceStamp||ruleDeliverySource(room,p)!==ruleSource)throw Error('선별 중 기억 또는 설정이 변경되어 재적용을 보류했습니다. 다음 확인 때 새 자료로 다시 계산합니다.');
     active=selection.items;
     let memoSent=selection.reserved?memo:null,block=buildContextBlockFromItems(rpMemoAttach(active,memoSent),room),injected=buildInjectedMessage(original,block);
     if(memoSent&&(injected.length>allFitLimit(room)||carrierBodyBytes(injected)>APP.carrierByteBudget)){memoSent=null;block=buildContextBlockFromItems(active,room);injected=buildInjectedMessage(original,block);}
@@ -71482,7 +71501,7 @@ const fullHistoryWanted=new Set();
     try{for(const kind of ['cognition','speech']){const sent=active.find(i=>injectionCadenceKind(i)===kind&&i.requiredFit);if(sent)next.items=next.items.map(i=>injectionCadenceKind(i)===kind&&i.content!==sent.content?{...i,content:sent.content,fitFrom:i.fitFrom||requiredFitStamp(i.content)}:i);}
     {const fitIds=active.find(i=>injectionCadenceKind(i)==='cognition'&&i.requiredFit)?.fitIds;if(fitIds){const out=new Set(fitIds.out),short=new Set(fitIds.compact);next.cognitionIncludedIds=(next.cognitionIncludedIds||[]).filter(id=>!out.has(id));if(next.cognitionPick)next.cognitionPick={...next.cognitionPick,full:next.cognitionPick.full.filter(id=>!out.has(id)&&!short.has(id)),brief:[...next.cognitionPick.brief.filter(id=>!out.has(id)),...next.cognitionPick.full.filter(id=>short.has(id))]};}}}catch(error){console.debug('[Wish] required fit copy skipped',error);}
     // carrierEncoding: what the verified carrier went in, for the check tab's KB view. With no PATCH, kept only for the same message.
-    next.verified=true;next.verifiedAt=Date.now();next.serverChars=verification.serverChars;if(verification.encoding)next.carrierEncoding=verification.encoding;else if(p.messageId!==newId)delete next.carrierEncoding;delete next.lastSyncError;delete next.lastSyncErrorCode;delete next.lastSyncErrorAt;room.pending=next;if(reason==='before-send'){if(recallBranches?.length)next.recallBranchesSend=[...recallBranches];else delete next.recallBranchesSend;}
+    next.verified=true;next.verifiedRuleSource=ruleSource;next.verifiedAt=Date.now();next.serverChars=verification.serverChars;if(verification.encoding)next.carrierEncoding=verification.encoding;else if(p.messageId!==newId)delete next.carrierEncoding;delete next.lastSyncError;delete next.lastSyncErrorCode;delete next.lastSyncErrorAt;room.pending=next;if(reason==='before-send'){if(recallBranches?.length)next.recallBranchesSend=[...recallBranches];else delete next.recallBranchesSend;}
     // 새 carrier가 이미 검증됐으므로 이후 이전 carrier 정리가 실패해도 매턴 주입은 유지됩니다.
     const cleanupCarrier=previousCarrier||next.previousCarrierCleanup,cleanupIds=Array.isArray(next.cleanupCarrierMessageIds)?next.cleanupCarrierMessageIds:[];
     if(cleanupCarrier?.messageId||cleanupIds.length){
