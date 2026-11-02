@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.96
+// @version      0.5.97
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.97 · 최종 기억 검토의 판정값 공백 처리
+ * 최종 검토·부분 교정 응답의 열거값 앞뒤 공백만 허용된 값으로 읽습니다.
+ * 원문 인용·참조·본문과 실제 blocked 판정, 기존 교정·재검증 절차를 유지합니다.
+ * UI·설정·저장 형식·권한·API 재시도 횟수는 변경하지 않습니다.
+ */
 
 /* 0.5.96 · 진행규칙과 기억 자료의 전달 경계 보완
  * 진행규칙은 매 응답에 적용할 사용자 지시로 구분하고 기억 뒤에 한 번 배치합니다.
@@ -49935,7 +49941,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.96-suite';
+  const SCRIPT_VERSION = '0.5.97-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -58824,6 +58830,19 @@ function isolateRows(data,schema,skipState=false,path='응답'){
     walk(data,schema,path);
     return out;
   }
+// Review/repair must keep every issue and exact quotation. The general AI
+// normalizer also fills or drops fields, so only trim declared enum tokens here.
+function normalizeReviewEnums(value,schema) {
+    if(!schema)return value;
+    if(schema.type==='string'&&Array.isArray(schema.enum)&&typeof value==='string'){
+      const trimmed=value.trim();return schema.enum.includes(trimmed)?trimmed:value;
+    }
+    if(schema.type==='array'&&Array.isArray(value))return value.map(item=>normalizeReviewEnums(item,schema.items));
+    if(schema.type==='object'&&value&&typeof value==='object'&&!Array.isArray(value))
+      return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,normalizeReviewEnums(item,Object.hasOwn(schema.properties||{},key)?schema.properties[key]:null)]));
+    return value;
+  }
+
 function validateShape(value,schema,path='응답') {
     const problems=[],kind=v=>v===null?'null':Array.isArray(v)?'배열 '+v.length+'개':typeof v==='string'?'문자열 '+v.length+'자':typeof v;
     const add=(message,at,rule,actual)=>problems.push({message,path:at,expected:rule?.enum?rule.enum.join('/'):rule?.type||'허용된 값',actual});
@@ -59847,7 +59866,7 @@ JSON만 출력한다. 허용한 스키마 밖의 필드를 만들지 않는다.`
     const result=await callAiProvider(settings,system,prompt,{taskKind:'extract',responseMimeType:'application/json',responseJsonSchema:schema,operationLabel:unifiedStage});
     if(JSON.stringify(planStateReviewRepair(d,plan.issues))!==JSON.stringify(plan))throw fail('현재상태 교정 중 원문 또는 임시 기억이 바뀌었습니다. 교정 결과를 적용하지 않았습니다.');
     let response;
-    try{response=WLOG.parseJson(result.text,'현재상태 부분 자동 교정',result.diagnostic);validateShape(response,schema);}catch(error){throw fail('현재상태 교정 응답 형식을 확인하지 못했습니다. '+String(error.message||error));}
+    try{response=normalizeReviewEnums(WLOG.parseJson(result.text,'현재상태 부분 자동 교정',result.diagnostic),schema);validateShape(response,schema);}catch(error){throw fail('현재상태 교정 응답 형식을 확인하지 못했습니다. '+String(error.message||error));}
     if(response.status==='blocked'){
       if(response.updates.length||response.thread_updates?.length||response.knowledge_updates?.length||!response.reason.trim())throw fail('현재상태 교정 보류 응답의 사유·변경분이 일치하지 않습니다.');
       throw fail('현재상태를 원문으로 확실하게 교정하지 못했습니다. '+response.reason.trim());
@@ -59955,7 +59974,7 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     const result=await callAiProvider(aiSettings,system,prompt,{taskKind:'extract',responseMimeType:'application/json',responseJsonSchema:schema,operationLabel:'기억 일관성 최종 검토 · '+(index+1)+(sourcePackets.length>1?'–'+(index+sourcePackets.length):'')+'/'+total});
     if(rawSignature(room,cog,packs)!==signature)throw fail('최종 검토 도중 임시 기억이 바뀌었습니다. 변경된 내용을 다시 검토해야 합니다.');
     let review;
-    try{review=WLOG.parseJson(result.text,'기억 일관성 최종 검토',result.diagnostic);validateShape(review,schema);}catch(e){throw fail('최종 검토 응답 형식을 확인하지 못했습니다. 임시 결과를 유지했습니다. '+String(e.message||e));}
+    try{review=normalizeReviewEnums(WLOG.parseJson(result.text,'기억 일관성 최종 검토',result.diagnostic),schema);validateShape(review,schema);}catch(e){throw fail('최종 검토 응답 형식을 확인하지 못했습니다. 임시 결과를 유지했습니다. '+String(e.message||e));}
     if(review.issues.length>12||review.status==='pass'&&review.issues.length||review.status==='blocked'&&!review.issues.length)throw fail('최종 검토의 판정과 오류 목록이 일치하지 않습니다. 임시 결과를 유지했습니다.');
     for(const issue of review.issues){
       if(!issue.message.trim())throw fail('최종 검토에서 구체적인 확인 사유를 받지 못했습니다. 임시 결과를 유지했습니다.');
