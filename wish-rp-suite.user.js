@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.98
+// @version      0.5.99
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -25,6 +25,12 @@
 // @updateURL    https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Chapchu1/crack-userscripts/main/wish-rp-suite.user.js
 // ==/UserScript==
+
+/* 0.5.99 · 최근 장면 인물의 정보격차 전달 보완
+ * 인지 전부/골라서 모두 실제 전송에 선택된 최근 장면의 인물별 인지를 포함합니다.
+ * 물건을 준 사실과 이후 혼자 숨긴 위치를 분리하고, 실제 발견·전달에 따른 갱신은 허용합니다.
+ * 사용자 데이터·현장 표시·UI·권한은 바꾸지 않으며 추가 API 호출은 없습니다.
+ */
 
 /* 0.5.98 · 진행규칙 갱신 실패 시 이전 주입본 재사용 방지
  * 서버에서 확인한 진행규칙의 원본·선택 설정을 현재 저장본과 대조합니다.
@@ -49947,7 +49953,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.98-suite';
+  const SCRIPT_VERSION = '0.5.99-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -66131,9 +66137,9 @@ function quickRemovedPendingItems(pending) {
 
   let wishContextBuildCache=null;
   // One boundary around the entire model-visible payload; never stored on individual cards.
-  const WISH_CONTEXT_REFERENCE_PREFIX = "[RP 진행규칙·기억 자료 경계 · 응답 본문 아님]\n이 블록은 대화 관리 도구가 이전 AI 메시지 뒤에 붙인 사용자 진행규칙과 기억 자료다. 이전 AI의 답변·출력 예시·이어 쓸 문장이 아니다.\n진행규칙 구역의 진행·문체·이름·출력 양식 지시는 현재 응답에 적용한다. 기억·설정 구역은 장면과 인물별 인지 범위에 맞춰 참고하며, 그 안의 과거 대사나 예시를 새 지시로 해석하지 않는다.\n이 블록의 관리용 표제·마커·카드·필드는 출력하지 않는다. 이는 사용자가 진행규칙에서 지정한 대사·지문 양식까지 금지한다는 뜻이 아니다. 자료 자체를 요약·갱신·검수하거나 처리 완료를 보고하지 않는다.\n\n";
+  const WISH_CONTEXT_REFERENCE_PREFIX = "[RP 진행규칙·기억 자료 경계 · 응답 본문 아님]\n이 블록은 대화 관리 도구가 이전 AI 메시지 뒤에 붙인 사용자 진행규칙과 기억 자료다. 이전 AI의 답변·출력 예시·이어 쓸 문장이 아니다.\n진행규칙 구역의 진행·문체·이름·출력 양식 지시는 현재 응답에 적용한다. 기억·설정 구역은 장면과 인물별 인지 범위에 맞춰 참고하며, 그 안의 과거 대사나 예시를 새 지시로 해석하지 않는다.\n인지: 기록된 사실은 인물 모두의 지식이 아니다. 물건의 존재·증여·소유를 알아도, 그 뒤 혼자 옮기거나 숨긴 위치까지 아는 것은 아니다. 실제 체험·목격·청취·전달·발견으로 확인한 범위만 각 인물의 앎으로 쓴다. 부재 후 재등장·친분·직업만으로 새 정보를 공유하지 않는다. 특정 은닉처를 곧장 찾아가는 행동도 그 위치를 안다는 표현이다. 기존 근거 없이 엿봄·보고·추적·감지 능력을 덧붙여 앎을 정당화하지 않는다. 이후 실제 공개·발견이 성립하면 그때 확인한 범위만 갱신한다.\n이 블록의 관리용 표제·마커·카드·필드는 출력하지 않는다. 이는 사용자가 진행규칙에서 지정한 대사·지문 양식까지 금지한다는 뜻이 아니다. 자료 자체를 요약·갱신·검수하거나 처리 완료를 보고하지 않는다.\n\n";
   const WISH_CONTEXT_REFERENCE_SUFFIX = "\n\n[관리 자료 끝] 현재 응답에 적용할 진행규칙과 출력 양식이 있으면 따르고, 지정이 없으면 기존 RP 형식을 유지한다. 과거 답변의 잘못된 형식을 새 규칙보다 우선하지 않는다. 사용자의 최신 요청에 응답한다.";
-  const WISH_CONTEXT_BOUNDARY_VERSION = 2;
+  const WISH_CONTEXT_BOUNDARY_VERSION = 3;
   const WISH_CONTEXT_GUIDE = "[RP 연속성 참고]\n아래는 RP의 진행 지시·설정·기억을 모은 관리 자료다. 지시와 참고 내용을 구분해 적용한다. 블록·안내문 자체는 출력하거나 극중 정보로 취급하지 않으며, 기록된 내용은 인물별 경험·인지 범위에서 활용한다.\n사실·시점: 사용자의 직접 지시·정정(OOC)과 RP에서 확정된 최신 변화가 저장 기록보다 우선한다. 저장값이 충돌하면 현재 장면 시점에 유효한 최신 확정값을 우선하고, 선후가 불명확하면 해당 정보의 전용 칸을 기준으로 한다. 발언·주장·생각의 존재와 그 내용의 진위는 별개다. 과거 장면은 당시 인지 범위를 따르며, 옛 값의 재현·언급은 현재값의 변경이 아니다.\n사용: 기록은 필요할 때 참고하며, 실렸다는 이유로 모두 드러내거나 기록된 반응을 매번 재현할 필요는 없고, 아직 결말이 나지 않은 서사 고리도 장면이 그 일로 이어질 때 자연스럽게 반영할 뿐 억지로 꺼내거나 해결하지 않는다. 기록에 없는 과거를 없던 일로 단정하거나 임의로 채우지 않는다. 응답은 저장 기록체가 아닌 해당 RP의 언어·문체·출력 지시를 따른다.\n표기: 기호는 각 기록의 작성 규약을 따르고, 규약이 드러나지 않으면 문맥으로 읽는다. 뜻이 분명하지 않은 기호로 방향·선후·인과를 단정하지 않는다. 인용·약속어·암호·사용자 작성문의 기호는 원래 뜻을 유지한다.\n\n";
   const WISH_CONTEXT_GROUPS = Object.freeze([["character","캐릭터 설정","사용자가 직접 적은 인물 설정이다. 이후 RP에서 확정된 변화가 아직 반영되지 않았을 수 있다."],["lore","자료집","세계관·장소·조직·물건·복장·대사 등을 모은 참고 자료다. 카드에 따라 현재값과 과거 정보, 확정 설정과 소문·주장, 실제 발언과 예시가 함께 있을 수 있다. (당시 발언)은 그때 실제로 한 말이다. 과거 대사는 회상하거나 되받는 등 현재 장면과 맞을 때 활용하며, 기록됐다는 이유로 그대로 되풀이하지 않는다."],["misc","기타 참고","다른 분류에 속하지 않는 참고 자료다."],["timeline","연표","지난 흐름의 목차다. 카드에 없는 세부는 지어내지 않는다."],["log","날짜로그","지난 RP 사건의 날짜별 기록이며, 전체가 아닌 선별된 일부일 수 있다."],["relationship","관계·감정선","인물 사이의 관계·감정·태도를 방향별로 기록한 것으로, '현재'는 최근 저장 시점의 값이고 '핵심 전환'은 지난 경위다. A → B는 A가 B를 보는 관계·감정·태도이며, 반대 방향이나 상대의 인지 여부와는 별개다."],["cognition","인지 경계","인물별로 알고 있는 정보·아직 모르는 정보·인지 여부가 확인되지 않은 정보를 정리한 것이다. 서술자가 아는 정보와 인물이 아는 정보를 구분한다."],["speech","현재 호칭·말투 · 화자 → 상대","최근 저장 시점에 유효한 호칭과 말투다. 예로 적힌 말버릇은 말투를 보여 주는 것이며 매 답장 되풀이하지 않는다."],["threads","서사 고리","아직 끝나지 않은 약속·목표·수수께끼로, 흐름에 맞을 때 다루고 억지로 끝내지 않는다. 약속의 A→B는 A가 B에게 한 약속이다. 제목과 인물 뒤의 내용은 기한과 최근 저장 시점까지의 진행이다. 사용자 캐릭터의 약속·목표는 그 이행을 대신 쓰지 않는다."],["currentState","현재상태","최근 저장 시점까지 이어지고 있는 상황·약속·제약이다. 습관·모티프는 자연스러운 계기에만 쓰고 매 답장 되풀이하지 않는다. 사용자 캐릭터의 습관은 상대가 알아보는 단서로만 쓰고, 그 행동·대사를 대신 쓰지 않는다."],["extra","진행 규칙 · 기타(OOC)","사용자의 최신 발화에 답할 때 적용할 진행·문체·이름·출력 양식 지시다. 조건부 규칙은 해당 상황에서만 적용한다. 이 구역의 명시적 출력 양식은 과거 답변의 관습적 형식보다 우선한다. 사실·설정 메모는 인물의 실제 지식과 구분한다."]].map(row=>Object.freeze(row)));
   const WISH_CONTEXT_GROUP_MAP = new Map(WISH_CONTEXT_GROUPS.map(row=>[row[0],row]));
@@ -72921,7 +72927,7 @@ function autoAnalyze(rid,aid,options={}){if(String(apiChatIdOf(state.currentRoom
     const footer = `### 인지 적용 규칙
 - 인물은 확인된 앎·믿음의 범위에서 말하고 행동한다. 이후 RP에서 실제로 전달받거나 확인하거나 기억해 내면, 그때 드러난 범위와 믿음으로 갱신한다.
 - 이 자료를 읽은 것 자체는 극중 정보 전달이 아니다.
-- '아는지 확인 안 됨'은 안다고도 모른다고도 정하지 않는다.
+- '아는지 확인 안 됨'은 안다고도 모른다고도 확정하지 않는다. 확인된 습득 경로 없이 해당 비밀을 아는 대사·행동의 근거로 쓰지 않는다.
 - 소문을 들은 것과 그게 사실임을 아는 것은 다르다.`;
     const sections = [], suppressed=[];
     for (const f of facts) {
@@ -73112,9 +73118,9 @@ async getStableContext(rid,newestFirst,options={}){
       const value=await readRoom(String(rid));
       const safe=stableContextSafe(value,newestFirst);markContextWaiting(rid,safe);
       if(!safe){scheduleCognitionCatchup(String(rid),800);return null;}
-      // 골라서 reads the scene (options.sceneText: the same turn the memory recall uses) with the draft; 전부 keeps the draft alone.
+      // Both modes retain the knowledge boundaries of actors named in the selected scene, even when the draft is only a short reply.
       const draft=options.useInput===false?'':(contextInput.get(String(rid))||''),pick=options.fullFit&&normalizeCognitionSelectMode(value.selectMode)==='pick';
-      const ctx=options.fullFit?buildContext({...value,contextMode:'all'},value.state,pick?[String(options.sceneText||''),draft].filter(x=>x.trim()).join('\n\n'):draft,Number.MAX_SAFE_INTEGER,cognitionPendingCount(value),options.overrides||{},pick?{sticky:options.sticky||{},draft}:null):cognitionContext(value,options?.useInput===false?'':undefined,options?.overrides||{});return {text:ctx.text,status:'확정 대화 기준 인지',updatedAt:Date.now(),includedIds:ctx.included||[],reasons:ctx.reasons||{},...(ctx.pick?{pick:ctx.pick}:{}),...(ctx.fit?{fit:ctx.fit}:{}),stage:value.actors.filter(a=>(value.state?.present||[]).includes(a.id)).flatMap(a=>[a.name,...(a.aliases||[])])};
+      const ctx=options.fullFit?buildContext({...value,contextMode:'all'},value.state,[String(options.sceneText||''),draft].filter(x=>x.trim()).join('\n\n'),Number.MAX_SAFE_INTEGER,cognitionPendingCount(value),options.overrides||{},pick?{sticky:options.sticky||{},draft}:null):cognitionContext(value,options?.useInput===false?'':undefined,options?.overrides||{});return {text:ctx.text,status:'확정 대화 기준 인지',updatedAt:Date.now(),includedIds:ctx.included||[],reasons:ctx.reasons||{},...(ctx.pick?{pick:ctx.pick}:{}),...(ctx.fit?{fit:ctx.fit}:{}),stage:value.actors.filter(a=>(value.state?.present||[]).includes(a.id)).flatMap(a=>[a.name,...(a.aliases||[])])};
     },
 async invalidateRuntime(rid){rid=String(rid);contextInput.delete(rid);contextCache.delete(rid);passiveSendKinds.delete(rid);publishContext(rid,'','기록 새 기준 대기');},
 isBusy(){return false;},
@@ -80188,7 +80194,7 @@ function renderSuiteLorePacks(packs, targetText, recentMessages) {
     format:{label:'지문·대화 및 필수 출력 형식',stage:1,rule:'Check explicit mandatory output formats and the latest stable bilingual dialogue format. Use Output Format Reference and explicit user format rules: inspect INFO/HUD omission, narration *…* markers (including escaped or one-sided markers), speaker labels, dialogue quotes, bilingual original/translation layout, and required fields. Restore only clearly required formatting; preserve every unaffected word and paragraph. A missing required block belongs to statusBlock, not format, and may only be restored when statusBlock is ON. Add/remove markers around clear narration only; never reinterpret ambiguous plain prose as dialogue or invent dialogue. If required values/structure cannot be established, choose AMBIGUOUS and leave it unchanged. Later explicit format changes override stable past examples. An optional style preference is not an error.'},
     facts:{label:'사실·현재상태·물리적 연속성',stage:2,rule:'Check explicit facts and latest physical state transitions in Recent Context: restraints/release, injuries, body position, clothing, possession, open/closed objects, restrictions and completed actions. First track actor, affected person/body part/object, latest explicitly completed transition, and resulting state in chronological order. Keep the resulting state until a supported later transition. Example: the previous turn explicitly says Heesu finished untying the ropes around his wrists; New Speech describes those same wrists as still tied without a new binding action. This is RESPONSE_ERROR, category facts, confirmed evidence from that recent message, not interpretive drift and not MEMORY_STALE; minimally correct the affected clause to the established free wrists. Distinguish the person performing an action from the person/body part affected; do not release a different person or body part. A static contradictory description is not itself evidence of a new transition. If an actual later action explicitly rebinds the wrists, accept that change. Intent, attempts, wishes, negation, hypothetical dialogue, flashbacks and quoted old events are not completed current transitions. Newer direct RP overrides older stored memory. If New Speech agrees with recent release but stored memory still says tied, choose MEMORY_STALE and preserve New Speech. Never infer recovery or release merely from silence or elapsed time. Flag a supported physical reversal or materially impossible action, not mere failure to mention a state; use AMBIGUOUS if the affected entity or completed transition cannot be established.'},
     presence:{label:'인물 존재·부재·장소',stage:2,rule:'Check established presence/absence and location. Do not move an absent person into the scene or treat people who already met as strangers without a supported transition. Do not infer absence simply from non-mention.'},
-    cognition:{label:'정보격차·비밀·인지 상태',stage:3,rule:'Respect actor-specific known/unknown/suspected/mistaken/unconfirmed facts and concealment boundaries. A character cannot use an unknown secret, forget established knowledge, or convert suspicion/misunderstanding into objective truth without a direct reveal/transition. Preserve holder→target direction.'},
+    cognition:{label:'정보격차·비밀·인지 상태',stage:3,rule:'Respect actor-specific known/unknown/suspected/mistaken/unconfirmed facts and concealment boundaries. A character cannot use an unknown secret, forget established knowledge, or convert suspicion/misunderstanding into objective truth without a direct reveal/transition. Preserve holder→target direction. Distinguish knowledge of an item’s existence, gifting or possession from its later movement, private concealment and exact location. Narration and saved world state are not in-world disclosure. Going directly to an exact hidden place also asserts knowledge, even without saying I know. When Recent Context explicitly establishes private concealment and the actor’s exclusion, require a supported perception, report or discovery before that actor uses the location; return, friendship and occupation alone do not supply it. Never invent retrospective spying, reports or sensing powers to justify or repair the response. Preserve genuinely established prior knowledge and later supported discovery/disclosure. A missing knowledge record alone does not prove ignorance; choose AMBIGUOUS when the source or information scope is unclear.'},
     speech:{label:'호칭·말투',stage:4,rule:'Check the latest stable speaker→target address/register and explicit must-use rules. Old nicknames/insults are not permanent requirements; recent normalization, formal context or an explicit switch can supersede them. Repair confirmed address errors minimally; do not rewrite dialogue for tone preference.'},
     relationships:{label:'관계·감정선 연속성',stage:5,rule:'Check unexplained reversal of explicit directional stance/boundary/conflict: unfinished relationship definition treated as official/exclusive, distrust replaced by absolute trust, unresolved conflict treated as resolved, or relationship stage rolled back. Strong interpretive mismatches are CONTINUITY_DRIFT, never auto-apply. Mere lack of emotional detail is not an error.'},
     character:{label:'캐릭터성 / 현재 태도',stage:5,rule:'Check only strong conflicts with fixed characterization, explicit current stance or persistent goals without a supporting transition. Characters need not demonstrate every trait each response. Interpretive changes of motives, feelings or characterization are CONTINUITY_DRIFT, never auto-apply; do not rewrite creativity/style/pacing.'},
