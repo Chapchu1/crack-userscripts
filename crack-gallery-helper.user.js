@@ -1,18 +1,20 @@
 // ==UserScript==
 // @name         크랙 이미지 보관함 · 사진 정보 확인 (시험용)
 // @namespace    crack-gallery-helper
-// @version      0.1.1
-// @description  보관함에 이미 표시된 이미지와 화면에 있는 이름·힌트를 확인합니다. 서버 잠금 해제나 흐린 원본 복원 기능은 아닙니다.
+// @version      0.2.0
+// @description  보관함 이미지와 해당 사진에 연결된 페이지 내부 항목의 이름·힌트를 확인합니다. 서버 잠금 해제나 흐린 원본 복원 기능은 아닙니다.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @noframes
 // @grant        GM_registerMenuCommand
 // @grant        GM_setClipboard
+// @grant        unsafeWindow
+// @sandbox      JavaScript
 // ==/UserScript==
 
 (() => {
   'use strict';
-  const VERSION = '0.1.1';
+  const VERSION = '0.2.0';
   const MARK = 'data-cgh-installed';
   if (document.documentElement.hasAttribute(MARK)) return;
   document.documentElement.setAttribute(MARK, VERSION);
@@ -98,7 +100,143 @@
       }
       if (node === root) break;
     }
-    return { src: usableSource(img), names, genericLabels, hints, blur: [...new Set(blur)], referrerPolicy: img.referrerPolicy };
+    return { src: usableSource(img), node: img, names, genericLabels, hints, blur: [...new Set(blur)], referrerPolicy: img.referrerPolicy, detail: null };
+  }
+  // Read data properties only: do not invoke application getters or callbacks.
+  function data(object, key) {
+    try { const d = Object.getOwnPropertyDescriptor(object, key); return d && Object.prototype.hasOwnProperty.call(d, 'value') ? d.value : undefined; }
+    catch { return undefined; }
+  }
+  const fieldKey = key => String(key).replace(/[_-]/g, '').toLowerCase();
+  const URL_FIELDS = new Set(['url','src','image','imageurl','thumbnail','thumbnailurl','blurredurl','blurimageurl','blurredimageurl','originalurl','mediaurl']);
+  const NAME_FIELDS = new Set(['name','title','label','caption','imagename','situationname','imagekeyword','keyword']);
+  const HINT_FIELDS = new Set(['hint','unlockhint','unlockcondition','unlockconditions','condition','conditiondescription','openingcondition']);
+  const CONTAINERS = new Set(['image','images','item','items','data','media','asset','assets','situation','situations','imagedata','thumbnail','thumbnails','gallery','galleryimages','situationimages','list','result','results','content','metadata','imageinfo']);
+  const TRANSFORMS = new Set(['w','width','h','height','q','quality','fit','format','blur']);
+  function sourceKeys(raw) {
+    const keys = new Set();
+    function add(value, depth) {
+      if (typeof value !== 'string' || value.length > 8192) return;
+      try {
+        const u = new URL(value, document.baseURI);
+        if (!/^https?:$/.test(u.protocol)) return;
+        u.hash = '';
+        // Disregard rendering parameters only. Identity parameters and tokens stay intact.
+        for (const key of Array.from(u.searchParams.keys())) if (TRANSFORMS.has(key.toLowerCase())) u.searchParams.delete(key);
+        u.searchParams.sort(); keys.add(u.href);
+        if (depth === 0 && /\/_next\/image$/.test(u.pathname)) add(u.searchParams.get('url'), 1);
+      } catch { /* Not a usable HTTP image address. */ }
+    }
+    add(raw, 0); return keys;
+  }
+  function imageFacts(item) {
+    const img = item.node;
+    const size = img.naturalWidth && img.naturalHeight ? `${img.naturalWidth} × ${img.naturalHeight}` : '아직 확인 안 됨';
+    const params = [];
+    try {
+      const u = new URL(item.src, document.baseURI);
+      for (const [key, value] of u.searchParams) {
+        if (TRANSFORMS.has(key.toLowerCase()) && /^(?:\d{1,5}(?:\.\d+)?|true|false|auto|jpe?g|png|webp|avif|cover|contain)$/i.test(value)) params.push(`${key}=${value}`);
+      }
+    } catch { /* No source URL is copied into the report. */ }
+    return `받은 이미지 크기: ${size}\n주소의 크기·흐림 옵션: ${params.join(', ') || '확인 안 됨'}`;
+  }
+  function inspectMetadata(item, root) {
+    const result = { status:'', names:[], hints:[], keys:[], facts:imageFacts(item) };
+    if (!item.node.isConnected || !root?.contains(item.node) || usableSource(item.node) !== item.src) {
+      result.status = '사진이 변경됨: 확인창을 닫고 다시 열어 주세요'; return result;
+    }
+    const started = performance.now(), seeds = [], fibers = new Set();
+    let limited = false, linked = 0;
+    const tooLate = () => performance.now() - started > 45;
+    const remember = value => {
+      if (!value || typeof value !== 'object' || seeds.includes(value)) return;
+      if (seeds.length >= 60) { limited = true; return; }
+      seeds.push(value);
+    };
+    function gather(img, boundary) {
+      for (let node = img, n = 0; node && node !== boundary && n < 6; node = node.parentElement, n++) {
+        if (tooLate()) { limited = true; break; }
+        let keys; try { keys = Object.getOwnPropertyNames(node); } catch { continue; }
+        for (const key of keys) {
+          if (/^__reactProps\$/.test(key)) { linked++; remember(data(node,key)); }
+          if (!/^__(?:reactFiber|reactInternalInstance)\$/.test(key)) continue;
+          linked++;
+          let fiber = data(node,key);
+          for (let depth = 0; fiber && typeof fiber === 'object' && depth < 12 && !fibers.has(fiber); depth++) {
+            fibers.add(fiber);
+            const dom = data(fiber,'stateNode');
+            if (dom && typeof dom === 'object') {
+              try { if (boundary.isSameNode(dom) || !boundary.contains(dom)) break; }
+              catch { /* A React component instance is not a DOM Node. Do not read its properties. */ }
+            }
+            remember(data(fiber,'memoizedProps'));
+            fiber = data(fiber,'return');
+          }
+        }
+      }
+    }
+    // Obtain the page-world wrapper for this exact image, without reading global application state.
+    const marker = 'data-cgh-inspect', old = item.node.getAttribute(marker);
+    try {
+      if (typeof unsafeWindow !== 'undefined') {
+        const nonce = 'cgh'+Math.random().toString(36).slice(2);
+        item.node.setAttribute(marker,nonce);
+        const pageImg = unsafeWindow.document.querySelector(`[${marker}="${nonce}"]`);
+        const pageRoot = pageImg?.closest(MODAL);
+        if (pageImg && pageRoot && root.isSameNode(pageRoot)) gather(pageImg,pageRoot);
+      }
+    } catch { /* Fall back to the current wrapper when page-world access is unavailable. */ }
+    finally { if (old === null) item.node.removeAttribute(marker); else item.node.setAttribute(marker,old); }
+    gather(item.node,root);
+    const wanted = sourceKeys(item.src), queue = seeds.map(value => [value,0]), seen = new Set(), candidates = new Map(), schema = new Set();
+    let visited = 0, matched = 0;
+    while (queue.length) {
+      if (visited >= 600 || tooLate()) { limited = true; break; }
+      const [object, depth] = queue.shift();
+      if (!object || typeof object !== 'object' || seen.has(object)) continue;
+      seen.add(object); visited++;
+      if (Array.isArray(object)) {
+        const length = data(object,'length');
+        if (length > 600 || (depth >= 6 && length > 0) || queue.length + length > 800) { limited = true; break; }
+        for (let i=0;i<length;i++) { const child = data(object,String(i)); if (child && typeof child === 'object') queue.push([child,depth+1]); }
+        continue;
+      }
+      let keys; try { keys = Object.getOwnPropertyNames(object); } catch { continue; }
+      if (keys.length > 120) { limited = true; break; }
+      const fields = keys.map(key => [key,fieldKey(key),data(object,key)]);
+      const matches = fields.some(([,key,value]) => URL_FIELDS.has(key) && typeof value === 'string' && Array.from(sourceKeys(value)).some(s=>wanted.has(s)));
+      if (matches) {
+        matched++;
+        const names=[], hints=[];
+        for (const [key, normalized, value] of fields) {
+          if (typeof value !== 'string' || !value.trim()) continue;
+          if ((NAME_FIELDS.has(normalized) || HINT_FIELDS.has(normalized)) && value.length > 4000) { limited = true; continue; }
+          if (NAME_FIELDS.has(normalized) && !GENERIC_IMAGE.test(value.trim())) names.push(`${key}: ${value}`);
+          if (HINT_FIELDS.has(normalized)) hints.push(`${key}: ${value}`);
+        }
+        if (names.length || hints.length) {
+          names.sort(); hints.sort(); const candidate = {names,hints}; candidates.set(JSON.stringify(candidate),candidate);
+        }
+      }
+      for (const [key, normalized, value] of fields) {
+        if (schema.size < 18 && /^[a-zA-Z][a-zA-Z0-9_]{0,40}$/.test(key) && !/token|pass|secret|auth|cookie|prompt|message|apikey|^on[A-Z]/i.test(key)) schema.add(key);
+        if (!CONTAINERS.has(normalized) || !value || typeof value !== 'object') continue;
+        if (depth >= 6 || queue.length >= 800) { limited = true; continue; }
+        queue.push([value,depth+1]);
+      }
+    }
+    result.keys = Array.from(schema);
+    if (limited) result.status = '검사 한도에 도달: 이름·힌트 판단 보류';
+    else if (!linked || !seeds.length) result.status = '내부 항목에 접근하지 못함 (미제공 여부는 판단 불가)';
+    else if (candidates.size > 1) result.status = '일치 항목이 여러 개이고 정보가 달라 판단 보류';
+    else if (candidates.size === 1) { Object.assign(result,candidates.values().next().value); result.status = '선택한 사진 주소와 일치하는 이미지 항목 확인'; }
+    else result.status = matched ? '이미지 주소는 일치하지만 이름·힌트 필드는 찾지 못함' : '선택한 사진과 일치 항목을 찾지 못함';
+    return result;
+  }
+  function detailText(detail) {
+    if (!detail) return '내부 이미지 항목: 아직 확인 안 함 (상세 확인 버튼)';
+    return `내부 이미지 항목: ${detail.status}\n내부 이름·설명: ${detail.names.join(' / ') || '확인 안 됨'}\n내부 힌트: ${detail.hints.join(' / ') || '확인 안 됨'}\n${detail.facts}\n확인 가능한 항목명: ${detail.keys.join(', ') || '없음'}`;
   }
   function collect(root) {
     if (!root) return [];
@@ -159,21 +297,27 @@
       const generic = element('p', '', { class: 'small' });
       const hint = element('div', '', { class: 'value' });
       const effect = element('p', '', { class: 'small' });
+      const detail = element('p', '', { class: 'small value', 'aria-live':'polite' });
       const controls = element('div', '', { class: 'row' });
       const previous = button('이전', () => { index--; render(); });
       const next = button('다음', () => { index++; render(); });
+      const inspect = button('상세 확인', () => {
+        try { items[index].detail = inspectMetadata(items[index],root); }
+        catch { items[index].detail = {status:'내부 항목 검사 실패: 브라우저 또는 페이지 구조가 지원되지 않음',names:[],hints:[],keys:[],facts:imageFacts(items[index])}; }
+        detail.textContent = detailText(items[index].detail);
+      });
       const copy = button('결과 복사', () => {
         const item = items[index];
-        const report = `크랙 사진 정보 확인 ${VERSION}\n대상 화면: ${target}\n이미지: ${index + 1}/${items.length} (현재 보관함에서 확인한 수)\n이름·설명: ${item.names.join(' / ') || '화면에서 확인 안 됨'}\n공통 대체문구: ${item.genericLabels.join(' / ') || '없음'}\n힌트: ${item.hints.join(' / ') || '화면에서 확인 안 됨'}\n화면 흐림 효과: ${item.blur.join(' / ') || '해당 이미지·상위 요소에서 확인 안 됨'}\n서버 해금 상태 및 비공개 데이터: 검사하지 않음`;
+        const report = `크랙 사진 정보 확인 ${VERSION}\n대상 화면: ${target}\n이미지: ${index + 1}/${items.length} (현재 보관함에서 확인한 수)\n이름·설명: ${item.names.join(' / ') || '화면에서 확인 안 됨'}\n공통 대체문구: ${item.genericLabels.join(' / ') || '없음'}\n힌트: ${item.hints.join(' / ') || '화면에서 확인 안 됨'}\n화면 흐림 효과: ${item.blur.join(' / ') || '해당 이미지·상위 요소에서 확인 안 됨'}\n${detailText(item.detail)}\n서버 추가 조회·잠금 상태 변경: 하지 않음`;
         try {
           if (typeof GM_setClipboard === 'function') { GM_setClipboard(report, 'text'); status.textContent = '결과를 복사했어요.'; }
           else { status.textContent = report; }
         } catch { status.textContent = report; }
       });
-      controls.append(previous, next, copy);
+      controls.append(previous, next, inspect, copy);
       image.addEventListener('error', () => { status.textContent = '같은 이미지 주소를 다시 표시하지 못했어요. 보관함을 다시 열어 확인해 주세요.'; });
       panel.append(element('p', `대상: ${target}`, { class: 'small' }), counter, image, status, element('strong', '이름·설명 (화면 속 속성)'), name, generic, element('strong', '힌트 (명시된 속성)'), hint, effect,
-        element('p', '이름은 개방 조건과 다를 수 있어요. 정보가 안 보인다는 결과만으로 서버에도 없다고 판단할 수는 없어요.', { class: 'small' }), controls);
+        element('p', '이름은 개방 조건과 다를 수 있어요. 정보가 안 보인다는 결과만으로 서버에도 없다고 판단할 수는 없어요.', { class: 'small' }), detail, controls);
       function render() {
         const item = items[index];
         counter.textContent = `${index + 1} / ${items.length} · 현재 화면에서 확인한 이미지`;
@@ -184,6 +328,7 @@
         generic.textContent = item.genericLabels.length ? `공통 대체문구: ${item.genericLabels.join(' / ')} (사진 이름이 아님)` : '';
         hint.textContent = item.hints.join('\n') || '화면에서 확인 안 됨';
         effect.textContent = item.blur.length ? `화면 흐림 효과 확인: ${item.blur.join(', ')}` : '화면 흐림 효과: 해당 이미지·상위 요소에서는 확인 안 됨';
+        detail.textContent = detailText(item.detail);
         previous.disabled = index === 0;
         next.disabled = index === items.length - 1;
       }
