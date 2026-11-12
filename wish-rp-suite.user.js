@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.100
+// @version      0.5.101
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -14907,10 +14907,12 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
           complete({ok:response.ok,status:Number(response.status||0),text:String(await response.text()),finalUrl:String(response.url||parsedUrl.href),responseHeaders:'retry-after: '+(response.headers?.get('Retry-After')||''),transport:'fetch-fallback'});
         }catch(e){if(signal?.aborted)return abort();finish(primaryError);}
       };
+      // Select a fallback before dispatch when the privileged transport is unavailable.
+      if(typeof GM_xmlhttpRequest!=='function')return nativeFetchFallback(error('외부 API 전송 기능을 사용할 수 없습니다.','AI_TRANSPORT_UNAVAILABLE'));
       try{handle=GM_xmlhttpRequest({method:options.method||'POST',url:parsedUrl.href,headers:options.headers||{},data:options.body==null?undefined:String(options.body),responseType:'text',timeout:Math.max(1,deadline-Date.now()),nocache:true,
         onload:res=>complete({ok:res.status>=200&&res.status<300,status:res.status,text:String(res.responseText||''),finalUrl:String(res.finalUrl||parsedUrl.href),responseHeaders:String(res.responseHeaders||'')}),
         ontimeout:()=>finish(error('외부 API 요청 시간이 초과되었습니다.','AI_TIMEOUT')),
-        onerror:()=>nativeFetchFallback(error('외부 API 네트워크 오류가 발생했습니다.','AI_NETWORK')),
+        onerror:()=>{const e=Object.assign(error('외부 API 네트워크 오류가 발생했습니다. 처리 여부를 확인할 수 없어 자동 재전송하지 않습니다.','AI_NETWORK'),{noAutoRetry:true});if(/^(GET|HEAD)$/i.test(options.method||'POST'))return nativeFetchFallback(e);finish(e);},
         onabort:()=>finish(error('외부 API 요청이 취소되었습니다.','WISH_USER_ABORT'))
       });}catch(e){finish(e);}
     });
@@ -15502,6 +15504,7 @@ USER 캐릭터의 다음 항목은 직접 RP, USER의 명시적 서술 또는 �
   }
 
   function isRetryableAiError(error) {
+    if(error?.noAutoRetry||error?.code==='AI_NETWORK')return false;
     const message = String(error?.message || error || '');
     return /(?:\b429\b|\b500\b|\b502\b|\b503\b|\b504\b|resource\s*exhausted|too\s*many\s*requests|temporar(?:y|ily)|overloaded|try\s*again\s*later|일시.*혼잡|네트워크 오류)/i.test(message);
   }
@@ -24927,8 +24930,8 @@ ${dialogueText}`;
       return {has:true,value:out};
     }
     if(baseHas&&localHas&&remoteHas&&Array.isArray(base)&&Array.isArray(local)&&Array.isArray(remote)){
-      const all=[...base,...local,...remote],key=rpcmRoomArrayKey(all);
-      if(key){
+      const versions=[base,local,remote],key=versions.filter(rows=>rows.length).map(rpcmRoomArrayKey).find(Boolean)||'';
+      if(key&&versions.every(rows=>!rows.length||rpcmRoomArrayKey(rows)===key)){
         const bm=new Map(base.map(row=>[String(row[key]),row])),lm=new Map(local.map(row=>[String(row[key]),row])),rm=new Map(remote.map(row=>[String(row[key]),row]));
         const order=[...remote.map(row=>String(row[key])),...local.map(row=>String(row[key])).filter(id=>!rm.has(id))],out=[];
         for(const id of order){
@@ -48832,6 +48835,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
       if(error?.noAutoRetry&&/^FIREBASE_APPCHECK_/.test(code))return {kind:'auth',retry:false,delay:60000};
       if(error?.noAutoRetry)return {kind:'other',retry:false,delay:0};
       if(code==='FIREBASE_APPCHECK_NETWORK')return {kind:'network',retry:true,delay:2500};
+      if(code==='AI_NETWORK')return {kind:'network',retry:false,delay:2500};
       if(status!==429&&code!=='FIREBASE_APPCHECK_RATE'&&(/app[ -]?check|unauthenticated|permission.denied|인증 오류/i.test(text)||status===401||status===403))return {kind:'auth',retry:false,delay:60000};
       if(status===429||code==='FIREBASE_APPCHECK_RATE'||/resource.exhausted|요청 한도 초과|quota.exceeded/i.test(text)){
         const permanent=/per.?day|daily|billing|free.tier.*limit.?[:=]?\s*0|limit\s*[:=]\s*0|일일/i.test(text);
@@ -48863,6 +48867,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
     function settle(job,error,result){
       if(job.done)return;
       if(error&&typeof error==='object'){
+        if(error.code==='AI_NETWORK')error.noAutoRetry=true;
         const timing=requestTiming(job);
         error.diagnostic={...error.diagnostic,...timing};
         if(error.code==='AI_TIMEOUT')error.message=job.activeStartedAt!=null?'AI 처리·응답을 기다리다 전체 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.':timing.attempts?'AI 재시도 순서를 기다리다 전체 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.':'다른 AI 작업의 순서를 기다리다 전체 요청 제한 시간을 넘었습니다. API 요청은 시작하지 않았고 기존 기록은 유지됩니다.';
@@ -49959,7 +49964,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.100-suite';
+  const SCRIPT_VERSION = '0.5.101-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -52463,7 +52468,7 @@ function parseImportedJsonText(value, label = '가져오기 파일', { strict = 
     };})();
 
 const WishUsage=(()=>{
-    const PREFIX='wish-usage-ledger-v1:',KEY=PREFIX+(()=>{try{const T='wish-usage-tab-v1';let id=sessionStorage.getItem(T);if(!id){id=crypto.randomUUID();sessionStorage.setItem(T,id);}return id;}catch{return crypto.randomUUID();}})(),RATES='wish-usage-rates-v1';let data=null,timer=null;
+    const PREFIX='wish-usage-ledger-v1:',KEY=PREFIX+crypto.randomUUID(),RATES='wish-usage-rates-v1';let data=null,timer=null;
     const day=(at=Date.now())=>{const d=new Date(at);return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');};
     const since=(at=Date.now())=>{const d=new Date(at);d.setDate(1);d.setMonth(d.getMonth()-11);return day(d);};
     // Official standard (non-batch) text pricing, re-verified 2026-10-18. USD per 1M tokens: [input, output(incl. thinking), cached input].
@@ -53258,7 +53263,7 @@ function buildDeepSeekMessages(systemPrompt, userPrompt, wantsJson) {
         reasoning:{ effort:normalizeOpenAiReasoningEffort(cfg.openAiReasoningEffort, cfg.openaiModel) }, max_output_tokens:openAiMaxTokens(cfg, options) };
       if (wantsJson) body.text = { format:withSchema ? { type:'json_schema', name:'wish_response', strict:true, schema } : { type:'json_object' } };
       // A cut/refused response was billed too: record HTTP usage before inspecting output.
-      const data = await WishUsage.track(cfg, options, () => aiGmRequestJson({ url:'https://api.openai.com/v1/responses', headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${cfg.openaiApiKey}` }, body, timeout:Number(options.timeoutMs) || 120000, label:'OpenAI' }));
+      const data = await WishUsage.track(cfg, options, () => aiGmRequestJson({ url:'https://api.openai.com/v1/responses', headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${cfg.openaiApiKey}` }, body, timeout:Number(options.timeoutMs) || 120000, signal:options.signal, abortContext:options.abortContext, deadline:options.deadline, label:'OpenAI' }));
       const status = String(data?.status || ''), reason = String(data?.incomplete_details?.reason || ''), output = Array.isArray(data?.output) ? data.output : [];
       const messages = output.filter(item => item?.type === 'message' && item?.role === 'assistant');
       const diagnostic = { finishReason:reason || status, outputTokens:Number(WishUsage.tokens(data).output) || 0 };
@@ -55807,14 +55812,14 @@ return {historyText,historyLength,historyWindow,historyView,reviewRows,storeHist
       '- 끝난 일은 뒤 RP에서 다시 떠올릴 만한 것만 closed 행으로 남긴다(지킨 약속, 깨진 약속, 회수된 복선, 풀린 수수께끼). 한 장면 안에서 바로 끝난 작은 일은 넣지 않는다.',
       '- opened에는 그 일이 열린 장면의 날짜와 그것을 보여 주는 원문 한 조각을, closed에는 결말 장면의 날짜와 원문 한 조각을 쓴다.',
       '- 참고로 받은 수동·보호 threads는 사용자가 직접 관리하는 일이라 다시 쓰지 않는다. 로그에 그 일의 결말 장면이 있을 때만 같은 kind·title로 closed 행을 쓴다.'];
-    function guide(job){
+    function guide(job,exactEvidence=false){
       return joinGuides(HEAD[job],getGuideText('apiThreads'),['',...(job==='snapshot'?SNAPSHOT:['[threads 출력]',
         '- 입력 memory.threads는 지금 열린 서사 고리 전체다. ref는 기존 항목을 가리키고, manual=true는 사용자가 직접 관리하는 항목이다. memory.thread_closed_index는 최근 닫힌 서사 고리 목록이며, 같은 일을 다시 열지 않도록 참고한다.',
         '- 이번 [신규 완료 RP] 안에서 생기고 끝난 일은 열지 않는다. 그 장면이 중요하면 사건으로 남는다.',
         '- upsert에는 새로 열린 일과 이번에 실제로 진행된 기존 항목을 쓴다. 기존 항목은 kind·title·detail·who·due를 고친 뒤의 전체값으로 쓰고, date는 입력값 그대로 둔다. 새 항목의 date는 그 일이 열린 장면의 날짜다.',
         '- manual=true 항목은 upsert로 고치지 않는다. 결말 장면이 있으면 다른 항목처럼 close에 쓴다.',
         '- close에는 이번에 닫는 기존 항목을 쓴다. title은 그 항목의 제목, date는 결말 장면의 날짜다. USER의 정정으로 처음부터 없던 일이 된 항목도 cancelled로 닫고, how에 정정된 내용을 쓴다.',
-        EVIDENCE[job],
+        EVIDENCE[exactEvidence?'delta':job],
         '- 이 하위 작업의 결과는 memory.threads에 넣는다.',''])].join('\n'));
     }
     // Request input: every open item (switched-off ones too, or the AI would open them again) under position refs thread_0…,
@@ -58540,7 +58545,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     const rpWire=wishUnifiedRpWire(p,options.nativeWire!==false),rp=rpWire.rp;guide+=rpWire.guide;
     if(relationshipRange.guarded)guide+='\n[관계 전용 재구축 뒤 과거 재처리 보호]\n인지·호칭의 신규 RP 범위와 관계의 범위는 다를 수 있다. observe.relationship_scope.allowed_completed_rp_indices에 있는 완료 RP 번호만 relationship_upsert의 새 변화·evidence로 사용한다. 목록이 비면 relationship_upsert=[]다. 목록 앞의 RP는 관계 전용 재구축에 이미 반영된 과거이며 최신 관계를 그 당시로 되돌리지 않는다. 이 제한은 다른 인지·호칭·은폐 갱신 범위를 변경하지 않는다.\n';
     // Input rows use the answer's ref labels. A concealment keeps the name its holder goes by (public_name, read-only context).
-    const data={suiteAutomation:room.suiteAutomation,suite:SuiteIntegration.referenceCards(room),sceneTimeHints:{memory:p.memory?sceneTimeHintRows(p.mem):undefined,observe:p.observe?sceneTimeHintRows(p.obs):undefined},memory:p.memory?{...(mOn('state')?{state:db.stateSections}:{}),events:db.events,...(mOn('references')?{references:db.references}:{}),...(mOn('threads')?{threads:db.threads,thread_closed_index:db.threadClosedIndex}:{}),...(tlAsk?{timeline:db.timeline}:{}),...(hiddenFacts?{concealments:memoryConcealments(cog)}:{})}:undefined,
+    const data={suiteAutomation:room.suiteAutomation,sceneTimeHints:{memory:p.memory?sceneTimeHintRows(p.mem):undefined,observe:p.observe?sceneTimeHintRows(p.obs):undefined},memory:p.memory?{...(mOn('state')?{state:db.stateSections}:{}),events:db.events,...(mOn('references')?{references:db.references}:{}),...(mOn('threads')?{threads:db.threads,thread_closed_index:db.threadClosedIndex}:{}),...(tlAsk?{timeline:db.timeline}:{}),...(hiddenFacts?{concealments:memoryConcealments(cog)}:{})}:undefined,
       observe:p.observe?{relationship_scope:relationshipRange.guarded?{allowed_completed_rp_indices:relationshipRange.indices}:undefined,...(oOn('relationships')?{relationships:WishRelationships.contextRows(room,wishTurnText(p.obs)+'\n'+WishRelationships.continuityText(options.continuityReference)).map(r=>wishRelationView(r,db.people))}:{}),people:db.people,...(oOn('facts')?{facts:db.facts}:{}),...(oOn('speech')?{speech:(room.speechRelations||[]).map(r=>wishSpeechView(r,db.people))}:{}),...(oOn('concealments')?{concealments:(cog.state.concealments||[]).map(c=>({holder_ref:c.holderId,target_ref:c.targetId,fact_ref:c.factId,active:c.active!==false,scope:String(c.scope||''),...(c.publicName?{public_name:String(c.publicName)}:{})}))}:{})}:undefined,
       continuityReference:options.continuityReference||undefined,
       readOnlySuite:SuiteIntegration.referenceCards(room),fixed:wishFixedReference(db),readOnlyPacks:packs.map(pack=>({name:pack.name,entries:(pack.entries||[]).filter(e=>!db.references.some(r=>r.id===e.id)).map(e=>({title:e.name,type:e.type,content:loreTextAtLevel(e,'full'),speech:e.speechRule&&{...e.speechRule,register:wishReplyRegister(e.speechRule.register)}}))})).filter(p=>p.entries.length),rp};
@@ -59002,7 +59007,7 @@ function applyObserveRows(cog,speech,data,rp,cutoff,relationshipRows=[],relation
         if(old.automatic&&!linkedNew)old.isPlayer=old.isPlayer||a.isPlayer===true;
         people.set(a.ref,old.id);
       }
-      else{const row={id:'cg_'+crypto.randomUUID().replace(/-/g,''),name:a.name,aliases:wishUnique(a.aliases),isPlayer:a.isPlayer===true,automatic:true,archived:false};next.actors.push(row);next.state.catalog.actors.push(row.id);people.set(a.ref,row.id);}
+      else{const row={id:'cg_'+crypto.randomUUID().replace(/-/g,''),name:a.name,aliases:wishUnique(a.aliases),isPlayer:a.isPlayer===true,automatic:true,presenceMode:'auto',archived:false};next.actors.push(row);next.state.catalog.actors.push(row.id);people.set(a.ref,row.id);}
     }catch(e){skip(e);}
     // The model sometimes writes a person's exact name instead of the ref. Accept it only when exactly one
     // person (existing or declared in this response) has that name; anything else still fails as before.
@@ -61165,7 +61170,7 @@ function sameStructure(j,s){ if(Array.isArray(j.rowSig)){const cur=s.rows.map(ro
 
 function segments(rows,limit=LIMIT){const out=[];let start=0;const blockLen=(t,i)=>text([t]).length+String(i+1).length-1; // 2.7.1: 결과 동일 · 구간 길이를 누적 계산
     while(start<rows.length){let end=start+1,chars=blockLen(rows[start],0);while(end<rows.length){const n=chars+2+blockLen(rows[end],end-start);if(n>limit)break;chars=n;end++;}out.push({index:out.length+1,start,end,chars,messages:rows.slice(start,end).reduce((n,t)=>n+(t.messageCount||(t.userText?2:1)),0),status:'pending',error:''});start=end;}return out;}
-  async function source(r){const s=await prepareBulkSource(r,null,null);if(!s.turns.length)throw WLOG.tag(Error('재구축할 확정 USER·AI 대화가 없습니다.'),'NO_CONFIRMED_RP');const rows=units(s);return {...s,rows,hash:await sha256Hex(new TextEncoder().encode(JSON.stringify(bulkSourceManifest(s.messages))))};}
+  async function source(r){const s=await prepareBulkSource(r,null,null);if(!s.turns.length)throw WLOG.tag(Error('재구축할 확정 USER·AI 대화가 없습니다.'),'NO_CONFIRMED_RP');const rows=units(s);return {...s,rows,hash:await sha256Hex(new TextEncoder().encode(JSON.stringify(['wish-source-exact-v1',s.messages.map(m=>[m.id,m.role,m.text,m.timeHints])])))};}
   function seed(r,c,ps){
     const room=clone(r);for(const slot of room.slots)if(['currentState','logSummary'].includes(slot.id))slot.content='';
     room.autoLogPinnedKeys=[];room.autoLogExcludedKeys=[];room.manualLogSelectedKeys=[];room.speechRelations=(room.speechRelations||[]).filter(x=>x.source!=='unified-ai');room.relationships=WishRelationships.normalize(room.relationships).filter(x=>x.manual);room.relationshipBaseline=null;
@@ -61244,7 +61249,7 @@ function normalizeApiResult(raw,req){
     }
   }
   async function run(r){return await WLOG.run("전체 재구축 구간 분석 중",async task=>{return guard(r,async check=>{const j=get(r)||await load(r);if(!j?.segments?.length)throw Error('먼저 대화 읽기를 실행해 주세요.');const cfg=loadAiSettings();if(!isAiAutomationReady(cfg))throw WLOG.tag(Error('보조 AI 연결 설정이 필요합니다.'),'AI_NO_CONFIG');
-    try{const s=await source(r);check();if(s.anchorMessageId!==j.anchor)throw WLOG.tag(Error('읽어 둔 대화가 바뀌었습니다. 대화를 다시 읽어 주세요.'),'REBUILD_SOURCE_CHANGED');if(!sameStructure(j,s))throw WLOG.tag(Error('읽어 둔 대화에서 중간 메시지가 삭제·교체되었거나 순서가 바뀌었습니다. 대화를 다시 읽어 주세요.'),'REBUILD_SOURCE_CHANGED');const currentBasis=basis(r,await bridge().snapshotRaw(apiChatIdOf(r)),packs(r));if(currentBasis!==j.basis)throw WLOG.tag(Error('기억·인물·자료·설정이 바뀌었습니다. 대화를 다시 읽어 주세요. ('+changedBasis(j.basis,currentBasis)+')'),'REBUILD_DATA_CHANGED');
+    try{const s=await source(r);check();if(!j.sourceHash||s.hash!==j.sourceHash)throw WLOG.tag(Error('읽어 둔 대화 본문이 바뀌었거나 원문 확인 정보가 없습니다. 임시 결과를 보존했습니다. 대화를 다시 읽어 주세요.'),'REBUILD_SOURCE_CHANGED');if(s.anchorMessageId!==j.anchor)throw WLOG.tag(Error('읽어 둔 대화가 바뀌었습니다. 대화를 다시 읽어 주세요.'),'REBUILD_SOURCE_CHANGED');if(!sameStructure(j,s))throw WLOG.tag(Error('읽어 둔 대화에서 중간 메시지가 삭제·교체되었거나 순서가 바뀌었습니다. 대화를 다시 읽어 주세요.'),'REBUILD_SOURCE_CHANGED');const currentBasis=basis(r,await bridge().snapshotRaw(apiChatIdOf(r)),packs(r));if(currentBasis!==j.basis)throw WLOG.tag(Error('기억·인물·자료·설정이 바뀌었습니다. 대화를 다시 읽어 주세요. ('+changedBasis(j.basis,currentBasis)+')'),'REBUILD_DATA_CHANGED');
       for(let pos=0;pos<j.segments.length;pos++){const seg=j.segments[pos];if(seg.status==='complete')continue;check();seg.status='running';seg.error='';j.status='running';j.message=`${seg.index}/${j.segments.length}구간 판독 중`;await save(r,j);
         try{const rows=s.rows.slice(seg.start,seg.end),p={memory:true,observe:true,mem:rows,obs:rows},req=U3.request(j.draft.room,j.draft.cog,j.draft.packs,p,{rebuild:true,...U3.continuityOptions(s.rows,rows,rows)});
           req.threadTurn=WishThreads.userCount(s.rows.slice(0,seg.end).flatMap(t=>t.relationshipSourceMessages||[]));req.holdContext={bundle:'rebuild',jobCreatedAt:j.createdAt,segmentIndex:seg.index,segmentCount:j.segments.length};req.storedSpeech=(r.speechRelations||[]).filter(x=>x.source==='unified-ai');
@@ -61263,8 +61268,8 @@ function normalizeApiResult(raw,req){
         }}
       j.status='complete';j.message='전체 판독 완료 · 결과를 확인하고 적용해 주세요.'+(j.draft.notices?.length?' · 일부 보류 '+j.draft.notices.length+'건':'');await save(r,j);return true;
     }catch(e){j.status=control?.cancelled?'paused':'failed';j.message=String(e.message||e);await save(r,j);throw e;}});});}
-  async function commit(r,j,check){const s=await source(r);check();if(s.anchorMessageId!==j.anchor)throw WLOG.tag(Error('재구축 기준 메시지가 바뀌었습니다. 대화를 다시 읽어 주세요.'),'REBUILD_SOURCE_CHANGED');if(!sameStructure(j,s))throw WLOG.tag(Error('읽어 둔 대화에서 중간 메시지가 삭제·교체되었거나 순서가 바뀌었습니다. 대화를 다시 읽어 주세요.'),'REBUILD_SOURCE_CHANGED');const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);if(basis(r,c,ps)!==j.basis)throw WLOG.tag(Error('원래 기억·인물·자료가 변경되어 덮어쓰지 않았습니다.'),'REBUILD_DATA_CHANGED');
-    const next=clone(j.draft),manifest=sourceManifestOf(s.messages.map(m=>m.raw));restoreRejectedQuotes(ps,next);U3.rebaseAfterImport(next.room,j.anchor,manifest);if(j.sourceHash&&s.hash!==j.sourceHash)next.notices=[...(next.notices||[]),'읽기 이후 과거 메시지 본문이 수정되었습니다. 이미 판독된 구간은 수정 전 본문 기준입니다. 필요하면 대화를 다시 읽어 재구축해 주세요.'];if(next.notices?.length)next.room.unified.status+=' · 확인 '+next.notices.length+'건 (실패·주의 기록)';next.room.memoryBranchBlocked=false;next.room.aiSourceManifests={currentState:manifest,logSummary:manifest};
+  async function commit(r,j,check){const s=await source(r);check();if(!j.sourceHash||s.hash!==j.sourceHash)throw WLOG.tag(Error('읽어 둔 대화 본문이 바뀌었거나 원문 확인 정보가 없습니다. 임시 결과를 보존했습니다. 대화를 다시 읽어 주세요.'),'REBUILD_SOURCE_CHANGED');if(s.anchorMessageId!==j.anchor)throw WLOG.tag(Error('재구축 기준 메시지가 바뀌었습니다. 대화를 다시 읽어 주세요.'),'REBUILD_SOURCE_CHANGED');if(!sameStructure(j,s))throw WLOG.tag(Error('읽어 둔 대화에서 중간 메시지가 삭제·교체되었거나 순서가 바뀌었습니다. 대화를 다시 읽어 주세요.'),'REBUILD_SOURCE_CHANGED');const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);if(basis(r,c,ps)!==j.basis)throw WLOG.tag(Error('원래 기억·인물·자료가 변경되어 덮어쓰지 않았습니다.'),'REBUILD_DATA_CHANGED');
+    const next=clone(j.draft),manifest=sourceManifestOf(s.messages.map(m=>m.raw));restoreRejectedQuotes(ps,next);U3.rebaseAfterImport(next.room,j.anchor,manifest);if(next.notices?.length)next.room.unified.status+=' · 확인 '+next.notices.length+'건 (실패·주의 기록)';next.room.memoryBranchBlocked=false;next.room.aiSourceManifests={currentState:manifest,logSummary:manifest};
     next.room.aiUpdateCursors={currentState:{messageId:j.anchor,updatedAt:nowIso()},logSummary:{messageId:j.anchor,updatedAt:nowIso()}};
     Object.assign(next.room.autoMemory,{lastProcessedMessageId:j.anchor,lastCommittedMessageId:j.anchor,committedTurns:0,lastError:'',dirtyScore:0});
     Object.assign(next.cog,{rev:(c.rev||0)+1,lastAnalysis:j.anchor,tip:j.anchor,sourceManifest:manifest,snapshots:{},pending:[],scanJob:null,updated:Date.now()});
@@ -65905,11 +65910,12 @@ const RECALL_B_MODELS=new Map([['gemini-3.8-flash','gemini-3.8-flash'],['gemini-
       // Gemini B·C1 (recallBModel): the scores of a review asked in that shape keep a key of their own; every other connection,
       // model and the index economy keep today's key.
       const recallB=indexed?'':recallBModel(settings);
-      const answerKey=JSON.stringify(['selection-answer-v1',WishPromptGuides.selectorStamp(),indexed,cfg,settings.provider,getAiSelectedModel(settings),recallSceneText(scene,true),...(recallB?['recall-b1:'+recallB]:[])]);
-      const entryKey=aiHashTiny(answerKey)+':'+answerKey.length,entry=recallScoreEntry(entryKey),scored=entry.rows;
+      const stateText=String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000);
+      const answerKey=JSON.stringify(['selection-answer-v2',String(room.chatId||''),stateText,WishPromptGuides.selectorStamp(),indexed,cfg,settings.provider,getAiSelectedModel(settings),recallSceneText(scene,true),...(recallB?['recall-b1:'+recallB]:[])]);
+      const entryKey=await sha256Hex(new TextEncoder().encode(answerKey)),entry=recallScoreEntry(entryKey),scored=entry.rows;
       if(!options.scoresOnly)recallScoreRestore(entry,entryKey);
       const order=hoist(local.map(x=>x.id)),position=new Map(order.map((id,p)=>[id,p]));
-      const pinned=new Set(WishRelationships.normalize(room.relationships||[]).filter(r=>r.pinned).map(r=>'relationship:'+r.id)),rows=order.filter(id=>!head.includes(id)&&!(injectionCadenceKind(optional[id])==='relationship'&&pinned.has(optional[id].slotId))).map(id=>({id,item:optional[id],key:aiHashTiny(JSON.stringify([injectionCadenceKind(optional[id]),String(optional[id].title||''),String(optional[id].content||'')]))}));
+      const pinned=new Set(WishRelationships.normalize(room.relationships||[]).filter(r=>r.pinned).map(r=>'relationship:'+r.id)),rows=await Promise.all(order.filter(id=>!head.includes(id)&&!(injectionCadenceKind(optional[id])==='relationship'&&pinned.has(optional[id].slotId))).map(async id=>({id,item:optional[id],key:await sha256Hex(new TextEncoder().encode(JSON.stringify([injectionCadenceKind(optional[id]),String(optional[id].title||''),String(optional[id].content||'')])))})));
       const missing=()=>rows.slice(0,RECALL_SELECTION_BATCHES_MAX*batchRows).filter(r=>!scored.has(r.key)),live=()=>!options.prefetch||options.prefetch.live();
       if(!options.scoresOnly&&missing().length&&entry.inflight)await entry.inflight;
       if(!options.scoresOnly&&missing().length&&!entry.failed&&entry.rounds<2&&live()){
@@ -65917,7 +65923,6 @@ const RECALL_B_MODELS=new Map([['gemini-3.8-flash','gemini-3.8-flash'],['gemini-
         const job=(async()=>{
           if(!isAiProviderReady(settings))throw Error('보조 AI 연결 없음');
           if(indexed)await WishEconomy.backup(room);
-          const stateText=String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000);
           const source=ask.map(({id,item})=>({id,title:String(item.title||''),kind:injectionCadenceKind(item),text:String(item.content||''),local_match:direct(item)}));
           const payload=indexed?WishEconomy.prepare(room,source):source,batches=[];let batch=[],chars=0;
           for(const row of payload){const n=JSON.stringify(row).length;if(n>120000)throw Error('단일 후보가 AI 선별 입력 한도를 넘습니다.');if(batch.length&&(batch.length>=batchRows||chars+n>120000)){batches.push(batch);batch=[];chars=0;}batch.push(row);chars+=n;}if(batch.length)batches.push(batch);
@@ -67183,6 +67188,7 @@ function formatLocalRecordTime(value){
   let loreIndexingRunning = false;
   const loreIndexRerunRooms = new Map();
   const LORE_QUERY_VECTOR_CACHE = new Map();
+  const LORE_QUERY_VECTOR_FLIGHTS = new Map();
 
   function queueSemanticSearchRerun(room) {
     const chatId=String(room?.chatId||''),apiChatId=String(apiChatIdOf(room)||'');
@@ -69016,7 +69022,7 @@ async function prepareSemanticSearchIndex(room, onProgress = null, options = {})
   function semanticQueryCacheKey(room, query) {
     const clean = stripAutomationNoise(String(query || ''), true).trim().slice(-4000);
     if (!clean || room?.loreConfig?.semanticEnabled === false) return '';
-    return `${room.loreConfig.embeddingModel}|${room.loreConfig.embeddingDimensions}|${aiHashTiny(clean)}`;
+    return JSON.stringify([room.loreConfig.embeddingModel,room.loreConfig.embeddingDimensions,clean]);
   }
 
   function cachedSemanticQueryVector(room, query) {
@@ -69034,16 +69040,21 @@ async function prepareSemanticSearchIndex(room, onProgress = null, options = {})
     if (!hasLore && !hasLogs) return null;
     const key = semanticQueryCacheKey(room,clean);
     if (LORE_QUERY_VECTOR_CACHE.has(key)) return LORE_QUERY_VECTOR_CACHE.get(key);
+    if (LORE_QUERY_VECTOR_FLIGHTS.has(key)) return LORE_QUERY_VECTOR_FLIGHTS.get(key);
     // 429 대기 중에는 질의 임베딩도 부르지 않고 키워드 순위로 계속합니다.
     if (semanticEmbedWaitMs() > 0) return null;
     // USER 전송 경로에서는 의미 검색 장애가 메시지 전송 자체를 오래 막지 않게 짧게 실패하고
     // 호출자가 키워드 기반 로컬 선택으로 계속 진행합니다. 인덱스 생성은 기본 120초를 유지합니다.
-    let vector = null;
-    try { vector = (await embedSemanticTexts([clean], room, 'RETRIEVAL_QUERY', 5000))[0] || null; }
-    catch (error) { if (Number(error?.diagnostic?.httpStatus) === 429) return null; throw error; }
-    if (LORE_QUERY_VECTOR_CACHE.size > 30) LORE_QUERY_VECTOR_CACHE.clear();
-    if (vector) LORE_QUERY_VECTOR_CACHE.set(key, vector);
-    return vector;
+    const task=(async()=>{
+      let vector = null;
+      try { vector = (await embedSemanticTexts([clean], room, 'RETRIEVAL_QUERY', 5000))[0] || null; }
+      catch (error) { if (Number(error?.diagnostic?.httpStatus) === 429) return null; throw error; }
+      if (LORE_QUERY_VECTOR_CACHE.size > 30) LORE_QUERY_VECTOR_CACHE.clear();
+      if (vector) LORE_QUERY_VECTOR_CACHE.set(key, vector);
+      return vector;
+    })();
+    LORE_QUERY_VECTOR_FLIGHTS.set(key,task);
+    try{return await task;}finally{if(LORE_QUERY_VECTOR_FLIGHTS.get(key)===task)LORE_QUERY_VECTOR_FLIGHTS.delete(key);}
   }
 
   function semanticLogScores(room, blocks, queryVector) {
@@ -69837,7 +69848,7 @@ const NativeBundles=(()=>{
         delete data.memory.references;delete data.readOnlyPacks;
       }
       if(p.memory)req.threadTurn=WishThreads.userCount(j.rows.slice(0,seg.end).flatMap(t=>t.relationshipSourceMessages||[]));
-      req.wireSchema=schema;req.prompt=JSON.stringify(data);req.guide=joinGuides(req.inputNames,getGuideText('apiCommon')+'\n',getGuideText(guides[j.bundle])+'\n',p.memory?WishThreads.guide('bundle')+(j.timelineSeeded?WishTimeline.guide('delta'):'')+'\n':'',getGuideText('apiDate'),j.bundle==='people'?U3.personContract():'',contract(j))+'\n[응답 스키마]\n'+JSON.stringify(schema)+wishCheckBlock(req.check);
+      req.wireSchema=schema;req.prompt=JSON.stringify(data);req.guide=joinGuides(req.inputNames,getGuideText('apiCommon')+'\n',getGuideText(guides[j.bundle])+'\n',p.memory?WishThreads.guide('bundle',true)+(j.timelineSeeded?WishTimeline.guide('delta'):'')+'\n':'',getGuideText('apiDate'),j.bundle==='people'?U3.personContract():'',contract(j))+'\n[응답 스키마]\n'+JSON.stringify(schema)+wishCheckBlock(req.check);
       return {...req,p};
     }
     // dry: the staged result only (its drops), for the 외부 AI 복붙 window's check before the answer goes on.
