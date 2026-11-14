@@ -18,6 +18,7 @@
 // @grant        GM_addValueChangeListener
 // @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
+// @connect      firebaseappcheck.googleapis.com
 // @connect      *
 // @sandbox      raw
 // @run-at       document-start
