@@ -59579,7 +59579,6 @@ function stage(room,cog,packs,p,req,data,options={}) {
       originalError=staged.partialFailures?.find(x=>x.kind==='observe'&&x.error?.code==='WISH_PERSON_REF')?.error;
       if(!originalError)return staged;
     }catch(error){if(error?.code!=='WISH_PERSON_REF')throw error;originalError=error;}
-    if(options.deferPersonRepair)throw originalError;
     const choices=originalError.personChoices;
     if(!p.observe||!Array.isArray(choices)||!choices.length)throw originalError;
     const effective=blankOff(copy(data),req);lenientRefs(effective,req,p,{fixed:0});
@@ -59593,6 +59592,34 @@ function stage(room,cog,packs,p,req,data,options={}) {
       target.occurrences.push({path:field.path,row_index:rowIndices.get(rowKey)});
     }
     if(!targets.length)throw originalError;
+    // A malformed ID accompanied by an exact, unique existing declaration can
+    // be linked without asking AI to infer identity or discarding any facts.
+    const input=JSON.parse(req.prompt),sentRefs=new Set((input.observe?.people||[]).map(x=>x.ref));
+    const localLinks=new Map();
+    for(const target of targets){
+      const declared=(effective.observe.people_upsert||[]).filter(row=>row.ref===target.ref);
+      if(declared.length!==1)continue;
+      const row=declared[0],key=speechNameKey(row.name);
+      const matches=choices.filter(x=>key&&speechNameKey(x.name)===key);
+      if(matches.length!==1||!matches[0].stored||!sentRefs.has(matches[0].ref)||row.isPlayer!==undefined&&matches[0].isPlayer!==(row.isPlayer===true))continue;
+      localLinks.set(target.ref,matches[0].ref);
+    }
+    if(localLinks.size===targets.length){
+      const corrected=copy(data);
+      for(const field of fields)if(localLinks.has(field.row[field.key])){
+        let parent=corrected.observe;for(const key of field.path.slice(0,-1))parent=parent[key];parent[field.path.at(-1)]=localLinks.get(field.row[field.key]);
+      }
+      const checked=blankOff(copy(corrected),req);lenientRefs(checked,req,p,{fixed:0});
+      if(!personRepairConflicts(checked,choices)){
+        validateShape(corrected,req.schema);
+        await options.onRepairCandidate?.(copy(corrected));
+        const out=await stageWithRelationshipRepair(room,cog,packs,p,req,corrected,options);
+        const failure=out.partialFailures?.find(x=>x.kind==='observe');if(failure)throw failure.error;
+        out.notices||=[];out.notices.push('기존 인물 이름·역할 일치로 참조 '+localLinks.size+'건 자동 연결 · 추가 AI 호출 없음');
+        return out;
+      }
+    }
+    if(options.deferPersonRepair)throw originalError;
     // Index selection avoids asking the model to retype long storage IDs. Only
     // the selected fields change; there is no delete, new-person or text rewrite.
     const schema={type:'object',additionalProperties:false,required:['status'],properties:{status:{type:'string',enum:['fixed','blocked']},fixes:{type:'array',items:{type:'object',additionalProperties:false,required:['index','person_index'],properties:{index:{type:'number'},person_index:{type:'number'}}}}}};
@@ -59605,7 +59632,7 @@ function stage(room,cog,packs,p,req,data,options={}) {
 JSON만 출력한다.
 [응답 스키마]
 `+JSON.stringify(schema);
-    const input=JSON.parse(req.prompt),originalRp=observeRepairSource(input),sentRefs=new Set((input.observe?.people||[]).map(x=>x.ref));
+    const originalRp=observeRepairSource(input);
     const selectable=new Set(choices.flatMap((x,index)=>!x.stored||sentRefs.has(x.ref)?[index]:[]));
     if(!originalRp.trim()||!selectable.size)throw originalError;
     const prompt=JSON.stringify({people:choices.flatMap((x,index)=>selectable.has(index)?[{index,name:x.name,aliases:x.aliases,isPlayer:x.isPlayer}]:[]),targets,affected_rows:affectedRows,original_rp:originalRp,continuity_reference:input.continuityReference?.observe});

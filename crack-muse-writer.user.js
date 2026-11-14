@@ -559,6 +559,8 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
   const TOKEN_RECOMMENDED = 80000;
   const TOKEN_MODEL_LIMITS = Object.freeze({
     "gemini-4-argon": 1048576,
+    "gemini-4-carbon": 1048576,
+    "gemini-4-hydrogen": 1048576,
     "gemini-3.8-flash": 1048576,
     "gemini-3.7-flash": 1048576,
     "gemini-3.5-flash": 1048576,
@@ -686,6 +688,9 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
   // DeepSeek V4 가격은 공식 API 문서 기준: cache hit / cache miss / output.
   const MODEL_PRICING = {
     "gemini-4-argon": { input: 4.0, output: 20.0, cacheRead: 0.2, cacheWrite: 4.0 },
+    // Google Standard text pricing, 2026-11-14: https://aistudio.google.com/docs/pricing
+    // Carbon uses the identical Argon rates/date boundary in getModelPricing().
+    "gemini-4-hydrogen": { input: 1.5, output: 7.5, cacheRead: 0.075, cacheWrite: 1.5 },
     "gemini-3.8-flash": { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0.75 },
     "gemini-3.7-flash": { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0.75 },
     "gemini-3.1-flash-lite": { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0.25 },
@@ -711,13 +716,17 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
     return normalizeModelId(modelId) === "gemini-4-argon";
   }
 
+  function isGemini4Model(modelId) {
+    return ["gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen"].includes(normalizeModelId(modelId));
+  }
+
   function usesThinkingLevel(modelId) {
-    return normalizeModelId(modelId).startsWith("gemini-3") || isGeminiArgon(modelId);
+    return normalizeModelId(modelId).startsWith("gemini-3") || isGemini4Model(modelId);
   }
 
   function supportsMinimalThinking(modelId) {
     const model = normalizeModelId(modelId);
-    return usesThinkingLevel(model) && !isGeminiArgon(model)
+    return usesThinkingLevel(model) && !isGemini4Model(model)
       && model !== "gemini-3.8-flash" && model !== "gemini-3.7-flash";
   }
 
@@ -726,11 +735,12 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
 
   function getModelInputLimit(modelId) {
     const total = TOKEN_MODEL_LIMITS[normalizeModelId(modelId)] || 1048576;
-    return isGeminiArgon(modelId) ? total - ARGON_MAX_OUTPUT_TOKENS : total;
+    return isGemini4Model(modelId) ? total - ARGON_MAX_OUTPUT_TOKENS : total;
   }
 
   function getModelPricing(modelId, now = Date.now()) {
-    const model = normalizeModelId(modelId);
+    const normalized = normalizeModelId(modelId);
+    const model = normalized === "gemini-4-carbon" ? "gemini-4-argon" : normalized;
     // 공식 도입 단가는 2026-11-30까지. 날짜가 지나면 기본 단가로 계산한다.
     if (isGeminiArgon(model) && now < Date.UTC(2026, 11, 1)) {
       return { input: 2.0, output: 10.0, cacheRead: 0.1, cacheWrite: 2.0 };
@@ -740,7 +750,7 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
 
   function normalizeThinkingLevel(modelId, level) {
     const model = normalizeModelId(modelId);
-    const supportsLowToHighOnly = isGeminiArgon(model) || model === "gemini-3.8-flash" || model === "gemini-3.7-flash";
+    const supportsLowToHighOnly = isGemini4Model(model) || model === "gemini-3.8-flash" || model === "gemini-3.7-flash";
     const allowed = supportsLowToHighOnly
       ? ["low", "medium", "high"]
       : ["minimal", "low", "medium", "high"];
@@ -752,6 +762,8 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
   const PROVIDER_MODEL_OPTIONS = {
     google: [
       ["gemini-4-argon", "Gemini 4 Argon (제미나이 4 아르곤)"],
+      ["gemini-4-carbon", "Gemini 4 Carbon"],
+      ["gemini-4-hydrogen", "Gemini 4 Hydrogen"],
       ["gemini-3.8-flash", "Gemini 3.8 Flash"],
       ["gemini-3.7-flash", "Gemini 3.7 Flash"],
       ["gemini-3.5-flash", "Gemini 3.5 Flash"],
@@ -762,6 +774,8 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
     ],
     firebase: [
       ["gemini-4-argon", "Gemini 4 Argon (제미나이 4 아르곤)"],
+      ["gemini-4-carbon", "Gemini 4 Carbon"],
+      ["gemini-4-hydrogen", "Gemini 4 Hydrogen"],
       ["gemini-3.8-flash", "Gemini 3.8 Flash"],
       ["gemini-3.7-flash", "Gemini 3.7 Flash"],
       ["gemini-3.5-flash", "Gemini 3.5 Flash"],
@@ -1354,7 +1368,7 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
         : { value: "on", label: "ON · High", note: "긴 기억·로어 선별과 연속성 판단에 추론 권장" };
     }
     if (usesThinkingLevel(modelId)) {
-      const isPro = modelId.includes("pro") || isGeminiArgon(modelId);
+      const isPro = modelId.includes("pro") || isGeminiArgon(modelId) || normalizeModelId(modelId) === "gemini-4-carbon";
       const supportsMinimal = supportsMinimalThinking(modelId);
       let level;
       if (isPro) level = tokens <= 20000 ? "low" : tokens <= 80000 ? "medium" : "high";
@@ -1435,7 +1449,7 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
     if (homeFillEl) homeFillEl.style.width = `${Math.min(100, total / TOKEN_RECOMMENDED * 100)}%`;
     if (totalEl) totalEl.textContent = `${total.toLocaleString()} tokens (${exactLabel})`;
     if (statusEl) statusEl.textContent = severity.label;
-    if (metaEl) metaEl.textContent = `${modelLabel} · Muse 권장 ${TOKEN_RECOMMENDED.toLocaleString()} · ${isGeminiArgon(model) ? `입력·추론·출력 공유 한도 ${limit.toLocaleString()} (응답 여유 ${ARGON_MAX_OUTPUT_TOKENS.toLocaleString()})` : `공식 입력 한도 ${limit.toLocaleString()}`} · 권장량 ${(total / TOKEN_RECOMMENDED * 100).toFixed(1)}%`;
+    if (metaEl) metaEl.textContent = `${modelLabel} · Muse 권장 ${TOKEN_RECOMMENDED.toLocaleString()} · ${isGemini4Model(model) ? `입력·추론·출력 공유 한도 ${limit.toLocaleString()} (응답 여유 ${ARGON_MAX_OUTPUT_TOKENS.toLocaleString()})` : `공식 입력 한도 ${limit.toLocaleString()}`} · 권장량 ${(total / TOKEN_RECOMMENDED * 100).toFixed(1)}%`;
     if (breakdownEl) breakdownEl.innerHTML = rows.map((row) => `<div><span>${row.label}</span><b>${row.tokens.toLocaleString()}</b></div>`).join("");
     if (fillEl) fillEl.style.width = `${Math.min(100, total / TOKEN_RECOMMENDED * 100)}%`;
     if (thinkingEl) thinkingEl.innerHTML = `<b>추천 추론: ${recommendation.label}</b><span>${recommendation.note}</span>`;
@@ -2627,6 +2641,8 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
                     <span class="setting-label">AI 모델 선택</span>
                     <select id="cfg-model" class="expand-input">
                         <option value="gemini-4-argon">Gemini 4 Argon (제미나이 4 아르곤)</option>
+                        <option value="gemini-4-carbon">Gemini 4 Carbon</option>
+                        <option value="gemini-4-hydrogen">Gemini 4 Hydrogen</option>
                         <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
                         <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
                         <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
@@ -2714,6 +2730,7 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
                   <option value="high" ${savedLevel === "high" ? "selected" : ""}>High</option>
               </select>
               ${isGeminiArgon(currentModel) ? '<div style="font-size:10px; color:var(--text_secondary); margin-top:4px;">아르곤은 유료 API/결제 연결이 필요합니다. 속도가 느리면 Low로 낮춰 주세요.</div>' : ''}
+              ${currentModel === 'gemini-4-carbon' ? '<div style="font-size:10px; color:var(--text_secondary); margin-top:4px;">Carbon은 유료 API/결제 연결이 필요합니다. 속도가 느리면 Low로 낮춰 주세요.</div>' : ''}
           `;
     } else {
       container.innerHTML = `
@@ -4914,7 +4931,7 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
     if (usesThinkingLevel(model)) {
       const level = input?.value || GM_getValue("thinkLevel_" + model, "medium");
       const config = { thinkingConfig: { thinkingLevel: normalizeThinkingLevel(model, level) } };
-      if (isGeminiArgon(model)) config.maxOutputTokens = ARGON_MAX_OUTPUT_TOKENS;
+      if (isGemini4Model(model)) config.maxOutputTokens = ARGON_MAX_OUTPUT_TOKENS;
       return config;
     }
     const budget = parseInt(input?.value || GM_getValue("thinkBudget_" + model, 1024), 10);
@@ -4922,7 +4939,7 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
   }
 
   function geminiRequestOptions(model) {
-    return isGeminiArgon(model) ? { timeout: ARGON_REQUEST_TIMEOUT_MS } : {};
+    return isGemini4Model(model) ? { timeout: ARGON_REQUEST_TIMEOUT_MS } : {};
   }
 
   function readGeminiResponseText(data, model) {
@@ -4930,8 +4947,8 @@ const CFA = createCrackFirebaseAppCheck({id:'crack-muse',label:'Muse Writer',get
     const candidate = data?.candidates?.[0];
     const reason = candidate?.finishReason || candidate?.finish_reason || "";
     const continuation = data?.continuationToken || data?.continuation_token;
-    if (isGeminiArgon(model) && (reason === "MAX_TOKENS" || reason === "CONTINUATION" || continuation)) {
-      throw new Error("아르곤이 추론·출력 한도에 도달해 답변을 마치지 못했어요. 추론 강도를 Low로 낮추거나 참고자료를 줄여 주세요.");
+    if (isGemini4Model(model) && (reason === "MAX_TOKENS" || reason === "CONTINUATION" || continuation)) {
+      throw new Error(`${isGeminiArgon(model) ? "아르곤" : "선택한 모델"}이 추론·출력 한도에 도달해 답변을 마치지 못했어요. 추론 강도를 Low로 낮추거나 참고자료를 줄여 주세요.`);
     }
     const text = (candidate?.content?.parts || [])
       .filter((part) => part && part.thought !== true && typeof part.text === "string")
