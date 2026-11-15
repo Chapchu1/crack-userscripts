@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.103
+// @version      0.5.104
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -48900,10 +48900,15 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
     }
     function pump(){
       clearTimeout(wake);wake=0;if(active){publishStatus();return;}const now=Date.now();let earliest=Infinity;
-      for(const job of [...pending]){
+      for(const job of [...pending].sort((a,b)=>(Number(b.priority)||0)-(Number(a.priority)||0))){
         const error=valid(job);if(error){settle(job,error);return;}
         const ready=Math.max(job.notBefore||0,cooldowns.get(job.key)?.until||0);
         if(ready>now){earliest=Math.min(earliest,ready);continue;}
+        if(job.attempt===0){
+          // Queue waiting must not consume the actual provider execution budget.
+          job.deadline=now+job.timeoutMs;clearTimeout(job.deadlineTimer);
+          job.deadlineTimer=setTimeout(()=>settle(job,timeoutError()),job.timeoutMs);
+        }
         pending.splice(pending.indexOf(job),1);active=job;job.controller=new AbortController();job.attempt++;job.activeStartedAt=now;
         try{job.onStatus?.({phase:job.attempt>1?'retry':'running',attempt:job.attempt,remainingMs:job.deadline-now});}catch{}
         publishStatus();
@@ -48938,10 +48943,11 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
         if(!meta.waitForCooldown||(cd.kind==='rate'&&cd.retry===false))return Promise.reject(makeError('AI 연결이 잠시 쉬는 중입니다. '+Math.ceil(remaining/1000)+'초 뒤 다시 시도합니다.','AI_COOLDOWN',{retryAfterMs:remaining,...(cd.kind==='rate'&&cd.retry===false?{noAutoRetry:true}:{})}));
       }
       if(pending.length>=8)return Promise.reject(makeError('AI 작업이 이미 대기 중입니다. 진행 중인 작업이 끝난 뒤 다시 시도해 주세요.','AI_QUEUE_FULL'));
-      const enqueuedAt=Date.now(),job={...meta,identity,work,enqueuedAt,deadline:enqueuedAt+timeoutMs,notBefore:0,attempt:0,requestMs:0,activeStartedAt:null,done:false};
+      const queueTimeoutMs=1340000; // Existing maximum supported job budget also bounds queue residence.
+      const enqueuedAt=Date.now(),job={...meta,timeoutMs,identity,work,enqueuedAt,deadline:enqueuedAt+queueTimeoutMs,notBefore:0,attempt:0,requestMs:0,activeStartedAt:null,done:false};
       job.promise=new Promise((resolve,reject)=>{job.resolve=resolve;job.reject=reject;});
       job.onAbort=()=>settle(job,abortError());job.signal?.addEventListener?.('abort',job.onAbort,{once:true});job.abortContext?.rejects?.add(job.onAbort);
-      job.deadlineTimer=setTimeout(()=>settle(job,timeoutError()),timeoutMs);
+      job.deadlineTimer=setTimeout(()=>settle(job,timeoutError()),queueTimeoutMs);
       if(job.shouldRun)job.guardTimer=setInterval(()=>{const error=valid(job);if(error)settle(job,error);},500);
       if(identity)same.set(identity,job);pending.push(job);try{job.onStatus?.({phase:'queued',position:pending.length,waitMs:Math.max(0,remaining)});}catch{}pump();return job.promise;
     }
@@ -49984,7 +49990,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.103-suite';
+  const SCRIPT_VERSION = '0.5.104-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -53601,11 +53607,11 @@ async function callAiProvider(settings,systemPrompt,userPrompt,options={}){
     const scope=WSUITE.host?.refinerScope?.(),checkScope=()=>((scope==null||scope===WSUITE.host?.refinerScope?.())&&(!options.shouldRun||options.shouldRun()));
     const credential=cfg.provider==='firebase'?JSON.stringify(parseFirebaseConfigInput(cfg.firebaseConfig)):cfg.provider==='deepseek'?cfg.deepSeekApiKey:cfg.provider==='openai'?cfg.openaiApiKey:cfg.provider==='anthropic'?cfg.anthropicApiKey:cfg.provider==='vertex'?cfg.vertexJson:cfg.apiKey;
     const key=cfg.provider+':'+WSUITE.core.hash(String(credential||''));
-    return WLOG.run(label+' · AI 작업 대기 · 입력 '+inputChars.toLocaleString()+'자 · 전체 제한 '+Math.ceil(options.timeoutMs/1000)+'초',async task=>{
+    return WLOG.run(label+' · AI 작업 대기 · 입력 '+inputChars.toLocaleString()+'자 · 실행 제한 '+Math.ceil(options.timeoutMs/1000)+'초 (대기 별도)',async task=>{
       let timers=[];const retryNotices=new Set();
       try{
         if(!isAiProviderReady(cfg))throw WLOG.tag(new Error(`${getAiProviderLabel(cfg.provider)} 연결 정보가 비어 있습니다.`),'AI_NO_CONFIG');
-        const result=await WSUITE.aiQueue.run({key,label,deepSeekThinking,extendedBudget:longThinking||nativeOpenAi||cfg.provider==='anthropic',timeoutMs:options.timeoutMs,signal:options.signal,abortContext:options.abortContext,shouldRun:checkScope,waitForCooldown:options.waitForCooldown===true,
+        const result=await WSUITE.aiQueue.run({key,label,priority:options.responseRefiner===true?1:0,deepSeekThinking,extendedBudget:longThinking||nativeOpenAi||cfg.provider==='anthropic',timeoutMs:options.timeoutMs,signal:options.signal,abortContext:options.abortContext,shouldRun:checkScope,waitForCooldown:options.waitForCooldown===true,
           dedupeKey:options.shouldRun?'':JSON.stringify([scope,cfg,systemPrompt,userPrompt,options.taskKind,options.refinerTransport,options.responseMimeType,options.responseJsonSchema]),
           onStatus(status){
             timers.forEach(clearTimeout);timers=[];
@@ -53619,7 +53625,7 @@ async function callAiProvider(settings,systemPrompt,userPrompt,options={}){
                 try{options.onRetry(status.phase==='backoff'?'API가 일시적으로 혼잡합니다. '+Math.ceil(Math.max(0,Number(status.waitMs)||0)/1000)+'초 뒤 같은 모델로 다시 시도합니다…':'같은 모델로 다시 시도하고 있습니다…');}catch{}
               }
             }
-            const suffix=' · 입력 '+inputChars.toLocaleString()+'자 · 전체 제한 '+Math.ceil(options.timeoutMs/1000)+'초';
+            const suffix=' · 입력 '+inputChars.toLocaleString()+'자 · 실행 제한 '+Math.ceil(options.timeoutMs/1000)+'초';
             if(status.phase==='queued')task.stage(label+(status.waitMs>0?' · 연결 대기 '+Math.ceil(status.waitMs/1000)+'초':' · 순서 대기')+suffix);
             else if(status.phase==='backoff')task.stage(label+' · 일시 오류 후 '+Math.ceil(status.waitMs/1000)+'초 대기 · 1회 재시도 예정'+suffix);
             else{
@@ -53650,7 +53656,7 @@ async function callAiProvider(settings,systemPrompt,userPrompt,options={}){
         const timing=error?.diagnostic;
         if(timing&&Number.isFinite(timing.queueWaitMs)&&Number.isFinite(timing.requestMs)){
           Object.assign(details,{queueWaitMs:timing.queueWaitMs,requestMs:timing.requestMs,attempts:timing.attempts});
-          if(error.code==='AI_TIMEOUT')task.stage(label+' · 전체 경과 '+Math.round((Date.now()-started)/1000)+'초 · 큐·재시도 대기 '+Math.round(timing.queueWaitMs/1000)+'초 · API 처리 '+Math.round(timing.requestMs/1000)+'초 · 시도 '+timing.attempts+'회 · 전체 제한 '+Math.ceil(options.timeoutMs/1000)+'초');
+          if(error.code==='AI_TIMEOUT')task.stage(label+' · 전체 경과 '+Math.round((Date.now()-started)/1000)+'초 · 큐·재시도 대기 '+Math.round(timing.queueWaitMs/1000)+'초 · API 처리 '+Math.round(timing.requestMs/1000)+'초 · 시도 '+timing.attempts+'회 · 실행 제한 '+Math.ceil(options.timeoutMs/1000)+'초 (대기 별도)');
         }
         throw error;
       }finally{timers.forEach(clearTimeout);details.elapsedMs=Date.now()-started;}
@@ -75736,7 +75742,7 @@ const ta = (k, v, ph = '', h = '', x = '') => `<textarea data-bind="${esc(k)}" p
     else if(!isSuite&&u.error){label=u.serverWaiting?'서버 확인 후 정리':'다시 정리';action='unifiedRetry';}
     const status=isSuite?(modeMismatch?'⚠️ 이전 방식의 임시 정리가 남아 있어요. 정리 방식을 확인해 이어가세요.':cleanupBusy?'카드별 기억 정리 진행 중':autoOn?'자동 정리 켜짐':'자동 정리 꺼짐'):retryStatusText(u)||(autoOn?'자동 정리 켜짐':'자동 정리 꺼짐');
     const draftProgress=!isSuite?homeDraftProgress(u):null;
-    const cadenceRow=(label,pending,every,enabled,progress)=>`<div class="m3-memory-cadence-row"><span>${label} ${progress?`<b>${fmt(progress.processed)}/${fmt(progress.total)}턴</b> 임시 정리`:`<b>${fmt(pending)}턴</b> 미처리`}</span><span class="m3-cadence-target">${fmt(every)}턴${enabled?'마다 자동 정리':' 주기 · 자동 꺼짐'}</span></div>`;
+    const cadenceRow=(label,pending,every,enabled,progress)=>`<div class="m3-memory-cadence-row"><span>${label} ${progress?`<b>${fmt(progress.processed)}/${fmt(progress.total)}턴</b> 임시 정리`:`<b>${fmt(pending)}턴</b> 미처리`}</span><details data-key="cadence-${label}" data-open="cadence-${label}" class="m3-cadence-edit"${S.openSet.has('cadence-'+label)?' open':''}><summary class="m3-cadence-target" style="cursor:pointer">${fmt(every)}턴${enabled?'마다 자동 정리':' 주기 · 자동 꺼짐'}</summary><label style="display:block;margin-top:8px;font-size:12px">정리 주기 <input type="number" min="1" max="100" step="1" inputmode="numeric" data-bind="unified.${label==='기억'?'memoryEvery':'observeEvery'}" value="${Number(every)}" aria-label="${label} 자동 정리 주기" style="width:64px;padding:6px;border:1px solid var(--m3-line);border-radius:6px;background:var(--m3-card);color:var(--m3-fg)">턴</label><small>자동 저장 · 작업 중이면 종료 후 적용</small></details></div>`;
     const cadence=isSuite?`<p class="m3-muted">카드별 갱신 · 기억 ${fmt(s.memoryEvery||10)}턴 / 인물 ${fmt(s.peopleEvery||1)}턴 주기</p>`:
       `<div class="m3-memory-cadence">${cadenceRow('기억',u.memoryPending??V.memory.committed,u.memoryEvery||V.memory.target||10,u.enabled&&u.memoryEnabled,draftProgress?.memory)}${cadenceRow('인물',u.observePending||0,u.observeEvery||V.cog.every||1,u.enabled&&u.observeEnabled,draftProgress?.observe)}</div>`;
     const cadenceHelp=!isSuite&&u.serverWaiting&&!u.draft?`<p class="m3-memory-note">미처리 턴수는 마지막 확인 값입니다. 서버 조회가 성공하면 최신 값으로 갱신합니다.</p>`:!isSuite&&ready&&autoOn&&!busy&&!u.error&&!u.draft?`<p class="m3-memory-note">자동 정리가 켜진 항목은 설정한 턴수가 쌓이면 처리돼요. 미리 정리할 때만 ‘지금 정리’를 누르세요.</p>`:'';
@@ -80805,7 +80811,20 @@ A correction requires a supported contradiction, a materially relevant persisten
     setConnectionState(false);
   }
 
+  function syncRefinerTheme() {
+    const root=document.getElementById('wish-rp-root');
+    if(!root)return;
+    const computed=getComputedStyle(root),map={sheet:'sheet',bg:'bg',card:'card',card2:'card2',line:'line',line2:'line2',fg:'fg',fg2:'fg2',muted:'muted',accent:'accent','accent-ink':'accent-ink','accent-soft':'accent-soft','accent-line':'accent-line',glow:'glow',ok:'ok',warn:'warn',danger:'danger'};
+    const rules=[];
+    for(const [target,key] of Object.entries(map)){const value=computed.getPropertyValue('--m3-'+key).trim();if(value)rules.push('--rr-'+target+':'+value+'!important');}
+    if(!rules.length)return;
+    let style=document.getElementById('wish-refiner-palette-sync');
+    if(!style){style=document.createElement('style');style.id='wish-refiner-palette-sync';document.head.append(style);}
+    style.textContent='.wish-rpcore-refiner-ui{'+rules.join(';')+';color-scheme:'+computed.colorScheme+'!important}';
+  }
+
   function ensureThemeStyles() {
+    syncRefinerTheme();
     if (document.getElementById('wish-rpcore-refiner-theme-v121')) return;
     const style = document.createElement('style');
     style.id = 'wish-rpcore-refiner-theme-v121';
