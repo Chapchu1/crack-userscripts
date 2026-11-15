@@ -48913,7 +48913,9 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
         },error=>{
           if(job.done)return;const e=valid(job);if(e)return settle(job,e);
           const c=cool(job,error),wait=Math.max(0,(job.notBefore||0)-Date.now());
-          if(c.retry&&job.attempt<2&&job.deadline-Date.now()>wait+15000){
+          // Rate limits are scheduled by the caller, not retried at both layers.
+          if(c.kind==='rate'&&error&&typeof error==='object'){error.retryAfterMs=Math.max(Number(error.retryAfterMs)||0,wait);if(!c.retry)error.noAutoRetry=true;}
+          if(c.kind!=='rate'&&c.retry&&job.attempt<2&&job.deadline-Date.now()>wait+15000){
             job.requestMs+=Math.max(0,Date.now()-job.activeStartedAt);job.activeStartedAt=null;
             active=null;job.notBefore=(job.notBefore||Date.now())+Math.floor(Math.random()*650);pending.push(job);
             try{job.onStatus?.({phase:'backoff',attempt:job.attempt,waitMs:job.notBefore-Date.now()});}catch{}pump();
@@ -48933,7 +48935,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
       const cd=cooldowns.get(meta.key),remaining=(cd?.until||0)-Date.now();
       if(remaining>0){
         if(cd.kind==='auth')return Promise.reject(makeError('AI 인증 확인이 필요합니다. 연결 설정을 확인하고 '+Math.ceil(remaining/1000)+'초 뒤 연결 테스트를 한 번 실행하세요.','AI_AUTH_COOLDOWN',{retryAfterMs:remaining,noAutoRetry:true}));
-        if(!meta.waitForCooldown||(cd.kind==='rate'&&cd.retry===false))return Promise.reject(makeError('AI 연결이 잠시 쉬는 중입니다. '+Math.ceil(remaining/1000)+'초 뒤 다시 시도합니다.','AI_COOLDOWN',{retryAfterMs:remaining}));
+        if(!meta.waitForCooldown||(cd.kind==='rate'&&cd.retry===false))return Promise.reject(makeError('AI 연결이 잠시 쉬는 중입니다. '+Math.ceil(remaining/1000)+'초 뒤 다시 시도합니다.','AI_COOLDOWN',{retryAfterMs:remaining,...(cd.kind==='rate'&&cd.retry===false?{noAutoRetry:true}:{})}));
       }
       if(pending.length>=8)return Promise.reject(makeError('AI 작업이 이미 대기 중입니다. 진행 중인 작업이 끝난 뒤 다시 시도해 주세요.','AI_QUEUE_FULL'));
       const enqueuedAt=Date.now(),job={...meta,identity,work,enqueuedAt,deadline:enqueuedAt+timeoutMs,notBefore:0,attempt:0,requestMs:0,activeStartedAt:null,done:false};
@@ -58169,7 +58171,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       const repairByKind=pending.repairByKind?{person:0,...copy(pending.repairByKind)}:{shape:oldAttempts&&(!oldKind||oldKind==='shape')?oldAttempts:0,relationship:oldAttempts&&(!oldKind||oldKind==='relationship')?oldAttempts:0,person:oldKind==='person'?oldAttempts:0};
       const repairedThisCycle=new Set();
       const beforeRepair=async kind=>{
-        const transportAllowed=(!pending.lastRepairKind||pending.lastRepairKind===kind)&&Number(pending.repairTransportRetries||0)<2&&(pending.repairTransportFailure===true||savedTransportFailure&&Number(pending.repairAttempts)===1);
+        const transportAllowed=(!pending.lastRepairKind||pending.lastRepairKind===kind)&&Number(pending.repairTransportRetries||0)<2&&(pending.repairTransportFailure===true||pending.repairTransportFailure===undefined&&savedTransportFailure&&Number(pending.repairAttempts)===1);
         if(!['shape','relationship','person'].includes(kind)||repairedThisCycle.has(kind)||repairByKind[kind]>0&&force!=='retry'&&!transportAllowed)throw Object.assign(Error('저장된 후보의 해당 단계 자동 교정 1회를 마쳤습니다. 기존 기억과 완료 묶음은 유지했어요. 이어서 정리·검증을 누르면 해당 후보만 다시 교정합니다.'),{code:'WISH_REPAIR_BUDGET',repairKind:kind});
         assertBasis(cog,frame);repairedThisCycle.add(kind);repairByKind[kind]=Math.min(1000000,repairByKind[kind]+1);pending.repairByKind=copy(repairByKind);repairStarted=true;pending.repairTransportFailure=false;
         pending.repairAttempts=Math.min(1000000,Math.max(0,Number(pending.repairAttempts)||0)+1);pending.lastRepairKind=String(kind||'');
@@ -60522,7 +60524,9 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     if(error?.code==='WISH_BATCH_SPLIT')return Number(count)<6?Math.max(30000,wait):0;
     if(isHistoryReadChanged(error))return [1500,3000,5000,10000,15000][Math.min(4,Math.max(0,Number(count)||0))];
     if(isCrackAuthError(error))return Math.max(authIntervals[Math.min(5,Math.max(0,Number(count)||0))],Number(error?.authRetryAt||crackAuthState.retryAt)-Date.now());
-    const retry=transientError(error)?retryIntervals[Math.min(4,Math.max(0,Number(count)||0))]||0:0;
+    const rateLimited=Number(error?.diagnostic?.httpStatus||error?.status)===429||/\b429\b|resource[ _-]*exhausted|too many requests/i.test(String(error?.message||''));
+    const intervals=rateLimited?[30000,120000,300000,900000]:retryIntervals;
+    const retry=transientError(error)?intervals[Math.min(4,Math.max(0,Number(count)||0))]||0:0;
     return retry?Math.max(retry,wait):0;
   }
   function wake(room,reason='poll',sourceKey='',enqueue=true){
@@ -60736,7 +60740,24 @@ async function run(room,force='') {
         }
         const trajectoryOverflow=trajectoryOverflowFrom(stageError,staged);
         if(!trajectoryOverflow){staged.liveTidyPromotion=true;staged.room.unified.retry=null;checkpointLiveBatch(staged,batch);}
-        const {latestHistory,latest,manifest,checkManifest}=await recheckCleanupSource(room,frame,list,p,mutationMark,!!trajectoryOverflow);
+        let sourceRecheck;
+        try{sourceRecheck=await recheckCleanupSource(room,frame,list,p,mutationMark,!!trajectoryOverflow);}
+        catch(error){
+          // Keep a paid answer when only the post-answer server read failed.
+          // The existing draft path rechecks source/basis before any publication.
+          if(transientError(error)){
+            const currentPacks=visibleLorePacksForRoom(room).filter(item=>(room.activeLorePackIds||[]).includes(item.scopeId));
+            const currentCog=await bridge().snapshotRaw(apiChatIdOf(room));
+            if(epoch===localRestoreEpoch&&state.currentRoom===room&&!ExternalReplay.changed(apiChatIdOf(room),replayEpoch)&&settingsAtStart===JSON.stringify(loadAiSettings())&&guideStampAtStart===draftSettingsStamp()&&rawSignature({...room,slots:draftBasisSlots(room.slots)},currentCog,currentPacks)===signature){
+              const draft=seedTrajectoryDraft(room,currentCog,currentPacks,frame,batch,req,paidCandidate,paidRepairs,paidRejections);
+              draft.pendingBatch.repairByKind=copy(paidRepairByKind);
+              draft.pendingBatch.repairTransportFailure=false; // History failure is not a failed AI repair.
+              await persistDraft(room,draft);jobKind='all';
+            }
+          }
+          throw error;
+        }
+        const {latestHistory,latest,manifest,checkManifest}=sourceRecheck;
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return false;
         if(!sourceStillPresent(checkManifest,latest.stable))throw Object.assign(sourceError('요청 중 기준 대화가 수정·삭제되었습니다. 결과를 적용하지 않았습니다.','요청 중 재확인',manifest,latest,latest.stable,{path:'전체',host:String(latestHistory.wishReadHost||''),ageMs:0}),{wishEditedSource:{manifest,frame:latest}});
         const liveCog=await bridge().snapshotRaw(apiChatIdOf(room));
