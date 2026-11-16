@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽위시 RP Suite · 통합 매니저
 // @namespace    local.wish.rp.suite.personal
-// @version      0.5.106
+// @version      0.5.107
 // @description  위시 기반 기억·로어·요약 통합, 호칭·말투·복장·인지·관계·감정선 관리 및 상황별 주입. Firebase 공통 연결·인물별 변화 기록·모바일 통합 UI. 개인용 통합판.
 // @author       Original authors + personal integration
 // @license      All Rights Reserved
@@ -48416,6 +48416,7 @@ function managerFallbackAnchor() {
       const provider=settings.provider,model=settings.models?.[provider]||'';
       return {provider,model,models:(AI_SUMMARY_PROVIDER_MODELS[provider]||[]).map(row=>({...row})),ready:provider==='openai'||!!readAiSecret(provider)};
     },
+    automaticReviewBusy:()=>WSUITE.host?.refinerAutoBusy?.()===true,
     thinkingLevels:refinerThinkingLevels,
     async call(prompt,options={}){return WSUITE.host.refinerGenerate(prompt,options);},
     async readResponseMessages(chatId,limit=20){
@@ -48845,7 +48846,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
     }
     const makeError=(message,code,extra={})=>Object.assign(new Error(message),{code,...extra});
     const abortError=()=>makeError('작업을 중단했어요.','WISH_USER_ABORT');
-    const timeoutError=()=>makeError('대기 시간을 포함한 AI 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.','AI_TIMEOUT');
+    const timeoutError=job=>makeError('AI 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.',job?.activeStartedAt==null?'AI_QUEUE_TIMEOUT':'AI_TIMEOUT');
     function category(error){
       const text=String(error?.message||error||'')+'\n'+String(error?.diagnostic?.serverMessage||''),code=String(error?.code||''),status=Number(error?.diagnostic?.httpStatus||error?.status)||Number(text.match(/\b(400|401|403|404|408|422|429|500|502|503|504)\b/)?.[1])||0;
       if(/WISH_USER_ABORT|WISH_STALE|AbortError/.test(code)||error?.name==='AbortError')return {kind:'cancel',retry:false,delay:0};
@@ -48875,7 +48876,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
     function valid(job){
       if(job.signal?.aborted||job.abortContext?.aborted)return abortError();
       if(job.shouldRun){try{if(!job.shouldRun())return makeError('방이나 대상이 바뀌어 이전 AI 요청을 취소했습니다.','WISH_STALE');}catch{return makeError('AI 요청 대상을 다시 확인해 주세요.','WISH_STALE');}}
-      if(Date.now()>=job.deadline)return timeoutError();return null;
+      if(Date.now()>=job.deadline)return timeoutError(job);return null;
     }
     function requestTiming(job){
       const now=Date.now(),elapsedMs=Math.max(0,now-job.enqueuedAt);
@@ -48888,7 +48889,7 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
         if(error.code==='AI_NETWORK')error.noAutoRetry=true;
         const timing=requestTiming(job);
         error.diagnostic={...error.diagnostic,...timing};
-        if(error.code==='AI_TIMEOUT')error.message=job.activeStartedAt!=null?'AI 처리·응답을 기다리다 전체 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.':timing.attempts?'AI 재시도 순서를 기다리다 전체 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.':'다른 AI 작업의 순서를 기다리다 전체 요청 제한 시간을 넘었습니다. API 요청은 시작하지 않았고 기존 기록은 유지됩니다.';
+        if(['AI_TIMEOUT','AI_QUEUE_TIMEOUT'].includes(error.code))error.message=job.activeStartedAt!=null?'AI 처리·응답을 기다리다 전체 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.':timing.attempts?'AI 재시도 순서를 기다리다 전체 요청 제한 시간을 넘었습니다. 기존 기록은 유지됩니다.':'다른 AI 작업의 순서를 기다리다 전체 요청 제한 시간을 넘었습니다. API 요청은 시작하지 않았고 기존 기록은 유지됩니다.';
       }
       job.done=true;clearTimeout(job.deadlineTimer);clearInterval(job.guardTimer);
       job.signal?.removeEventListener?.('abort',job.onAbort);job.abortContext?.rejects?.delete(job.onAbort);
@@ -48900,15 +48901,16 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
     }
     function pump(){
       clearTimeout(wake);wake=0;if(active){publishStatus();return;}const now=Date.now();let earliest=Infinity;
-      for(const job of [...pending].sort((a,b)=>(Number(b.priority)||0)-(Number(a.priority)||0))){
+      for(const job of [...pending]){
         const error=valid(job);if(error){settle(job,error);return;}
         const ready=Math.max(job.notBefore||0,cooldowns.get(job.key)?.until||0);
         if(ready>now){earliest=Math.min(earliest,ready);continue;}
-        if(job.attempt===0){
-          // Queue waiting must not consume the actual provider execution budget.
-          job.deadline=now+job.timeoutMs;clearTimeout(job.deadlineTimer);
-          job.deadlineTimer=setTimeout(()=>settle(job,timeoutError()),job.timeoutMs);
-        }
+        // FIFO among ready requests: a new review cannot repeatedly bypass cleanup.
+        // Every attempt gets only its remaining execution budget; waiting is separate.
+        job.waitedMs+=Math.max(0,now-job.waitStartedAt);
+        const remainingMs=Math.max(1,job.timeoutMs-job.requestMs);
+        job.deadline=now+remainingMs;clearTimeout(job.deadlineTimer);
+        job.deadlineTimer=setTimeout(()=>settle(job,timeoutError(job)),remainingMs);
         pending.splice(pending.indexOf(job),1);active=job;job.controller=new AbortController();job.attempt++;job.activeStartedAt=now;
         try{job.onStatus?.({phase:job.attempt>1?'retry':'running',attempt:job.attempt,remainingMs:job.deadline-now});}catch{}
         publishStatus();
@@ -48920,8 +48922,12 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
           const c=cool(job,error),wait=Math.max(0,(job.notBefore||0)-Date.now());
           // Rate limits are scheduled by the caller, not retried at both layers.
           if(c.kind==='rate'&&error&&typeof error==='object'){error.retryAfterMs=Math.max(Number(error.retryAfterMs)||0,wait);if(!c.retry)error.noAutoRetry=true;}
-          if(c.kind!=='rate'&&c.retry&&job.attempt<2&&job.deadline-Date.now()>wait+15000){
+          if(c.kind!=='rate'&&c.retry&&job.attempt<2&&job.deadline-Date.now()>15000){
             job.requestMs+=Math.max(0,Date.now()-job.activeStartedAt);job.activeStartedAt=null;
+            job.waitStartedAt=Date.now();
+            const remainingWait=Math.max(0,1340000-job.waitedMs);
+            job.deadline=job.waitStartedAt+remainingWait;clearTimeout(job.deadlineTimer);
+            job.deadlineTimer=setTimeout(()=>settle(job,timeoutError(job)),remainingWait);
             active=null;job.notBefore=(job.notBefore||Date.now())+Math.floor(Math.random()*650);pending.push(job);
             try{job.onStatus?.({phase:'backoff',attempt:job.attempt,waitMs:job.notBefore-Date.now()});}catch{}pump();
           }else settle(job,error);
@@ -48944,10 +48950,10 @@ scene은 작품 현재 날짜·일차가 원문에 명시된 때만 반환한다
       }
       if(pending.length>=8)return Promise.reject(makeError('AI 작업이 이미 대기 중입니다. 진행 중인 작업이 끝난 뒤 다시 시도해 주세요.','AI_QUEUE_FULL'));
       const queueTimeoutMs=1340000; // Existing maximum supported job budget also bounds queue residence.
-      const enqueuedAt=Date.now(),job={...meta,timeoutMs,identity,work,enqueuedAt,deadline:enqueuedAt+queueTimeoutMs,notBefore:0,attempt:0,requestMs:0,activeStartedAt:null,done:false};
+      const enqueuedAt=Date.now(),job={...meta,timeoutMs,identity,work,enqueuedAt,deadline:enqueuedAt+queueTimeoutMs,notBefore:0,attempt:0,requestMs:0,waitedMs:0,waitStartedAt:enqueuedAt,activeStartedAt:null,done:false};
       job.promise=new Promise((resolve,reject)=>{job.resolve=resolve;job.reject=reject;});
       job.onAbort=()=>settle(job,abortError());job.signal?.addEventListener?.('abort',job.onAbort,{once:true});job.abortContext?.rejects?.add(job.onAbort);
-      job.deadlineTimer=setTimeout(()=>settle(job,timeoutError()),queueTimeoutMs);
+      job.deadlineTimer=setTimeout(()=>settle(job,timeoutError(job)),queueTimeoutMs);
       if(job.shouldRun)job.guardTimer=setInterval(()=>{const error=valid(job);if(error)settle(job,error);},500);
       if(identity)same.set(identity,job);pending.push(job);try{job.onStatus?.({phase:'queued',position:pending.length,waitMs:Math.max(0,remaining)});}catch{}pump();return job.promise;
     }
@@ -49990,7 +49996,7 @@ finally{clearTimeout(timer);channel?.removeEventListener(cancelName,cancel);}`;
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '0.5.106-suite';
+  const SCRIPT_VERSION = '0.5.107-suite';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
 const assertGmStorage = () => { if (typeof GM_setValue !== 'function' || typeof GM_getValue !== 'function') throw WLOG.tag(new Error('이 확장 앱(iOS Userscripts·Greasemonkey 등)은 설정 저장 기능을 지원하지 않아 API 키·연결 정보를 저장할 수 없습니다. Tampermonkey(아이폰은 Safari용 Tampermonkey 또는 Stay)로 설치해 주세요.'),'GM_STORAGE_MISSING'); };
@@ -53656,7 +53662,7 @@ async function callAiProvider(settings,systemPrompt,userPrompt,options={}){
         const timing=error?.diagnostic;
         if(timing&&Number.isFinite(timing.queueWaitMs)&&Number.isFinite(timing.requestMs)){
           Object.assign(details,{queueWaitMs:timing.queueWaitMs,requestMs:timing.requestMs,attempts:timing.attempts});
-          if(error.code==='AI_TIMEOUT')task.stage(label+' · 전체 경과 '+Math.round((Date.now()-started)/1000)+'초 · 큐·재시도 대기 '+Math.round(timing.queueWaitMs/1000)+'초 · API 처리 '+Math.round(timing.requestMs/1000)+'초 · 시도 '+timing.attempts+'회 · 실행 제한 '+Math.ceil(options.timeoutMs/1000)+'초 (대기 별도)');
+          if(['AI_TIMEOUT','AI_QUEUE_TIMEOUT'].includes(error.code))task.stage(label+' · 전체 경과 '+Math.round((Date.now()-started)/1000)+'초 · 큐·재시도 대기 '+Math.round(timing.queueWaitMs/1000)+'초 · API 처리 '+Math.round(timing.requestMs/1000)+'초 · 시도 '+timing.attempts+'회 · 실행 제한 '+Math.ceil(options.timeoutMs/1000)+'초 (대기 별도)');
         }
         throw error;
       }finally{timers.forEach(clearTimeout);details.elapsedMs=Date.now()-started;}
@@ -57724,7 +57730,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     return !same(d.baseRoom.slots,room.slots)&&same(draftBasisSlots(d.baseRoom.slots),draftBasisSlots(room.slots));
   }
   function draftPublishBusy(room){const id=String(apiChatIdOf(room));return generationPending(id)||sendPreparationQueues.has(id)||carrierOperations.has(id);}
-  function assertDraftPublishIdle(room){if(draftPublishBusy(room))throw Object.assign(Error('대화 전송·답변 생성이 끝난 뒤 검증된 기억을 반영합니다.'),{code:'WISH_STALE'});}
+  function assertDraftPublishIdle(room){if(draftPublishBusy(room))throw Object.assign(Error('대화 전송·답변 생성이 끝난 뒤 검증된 기억을 반영합니다.'),{code:'WISH_STALE',publicationDeferred:true});}
   function draftRemainingTurns(frame,cursor){const all=frame.messages||frame.stable,tail=turns({stable:all.slice(0,all.length-frame.stable.length)});return afterConfirmed(turns(frame),cursor,tail).length;}
   function mergeDraftPromotionRuntime(before,staged){
     const generated=staged.room,unified={...(before.unified||{})};
@@ -57900,6 +57906,11 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       if(u.lastErrorCode==='WISH_DRAFT_CHANGED'||flags.restartRequired)return false;
       await resumeStoredTrajectoryHistory(room,d);
       if(room!==state.currentRoom||u.userPaused||!automationEnabled(room))return false;
+      if(u.lastError&&['WISH_STATE_REPAIR','WISH_STATE_REPAIR_BUDGET'].includes(u.lastErrorCode)&&d.stateRepair?.phase==='pending'&&d.stateRepair.factContentRepair!==true&&d.stateRepair.issues?.some(issue=>issue.kind==='knowledge')){
+        checkDraftStateRepair(d); // Old audit/source contract must still match before routing the upgrade.
+        u.lastError='';u.lastErrorCode='';u.lastErrorNoAutoRetry=false;u.retry=null;u.failedKind='';
+        await saveRoom(room);if(room!==state.currentRoom)return false;
+      }
       if(u.lastError&&!hasPartialFailure(u)){wake(room,reason);return false;}
       checked.delete(room);schedule(room,100);return true;
     })();
@@ -57919,11 +57930,31 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     return run(room,'all');
   }
   function createDraft(room,cog,packs,frame,batch){
-    const goals=Object.fromEntries(Object.entries(batch.targets).map(([kind,id])=>[kind,{messageId:id}]));
-    const shadow=copy(room);delete shadow.unified.draft;delete shadow.unified.partialFailure;Object.assign(shadow.unified,{lastError:'',lastErrorCode:'',lastErrorNoAutoRetry:false,retry:null,failedKind:''});shadow.unified.catchup=copy(batch.targets);
+    const goals=Object.fromEntries(['memory','observe'].filter(kind=>batch.plan[kind]).map(kind=>[kind,{messageId:batch.plan[kind==='memory'?'mem':'obs'].at(-1).key}]));
+    const shadow=copy(room);delete shadow.unified.draft;delete shadow.unified.partialFailure;Object.assign(shadow.unified,{lastError:'',lastErrorCode:'',lastErrorNoAutoRetry:false,retry:null,failedKind:''});shadow.unified.catchup=Object.fromEntries(Object.entries(goals).map(([kind,goal])=>[kind,goal.messageId]));
     return {id:draftId(room),kind:'wish-unified-draft',version:1,chatId:String(room.chatId),rev:0,createdAt:Date.now(),phase:'collecting',settingsStamp:draftSettingsStamp(),
-      baseRoom:copy(room),baseCog:copy(cog),basePacks:copy(packs),room:shadow,cog:copy(cog),packs:copy(packs),goals,total:{memory:goals.memory?batch.total.memory:0,observe:goals.observe?batch.total.observe:0},
+      baseRoom:copy(room),baseCog:copy(cog),basePacks:copy(packs),room:shadow,cog:copy(cog),packs:copy(packs),goals,catchupAfter:copy(batch.targets),total:{memory:goals.memory?batch.plan.mem.length:0,observe:goals.observe?batch.plan.obs.length:0},
       sourceManifest:sourceManifestOf([...frame.stable].reverse()),deferredFailure:hasPartialFailure(room.unified)&&!goals[room.unified.partialFailure.kind]?copy(room.unified.partialFailure):null,notices:[],packets:[],changedPackIds:[],memoryChanged:false,observeChanged:false,reviewIndex:0,reviewSignature:''};
+  }
+  function restoreDraftCatchup(u,d){
+    if(!d.catchupAfter)return; // Existing drafts retain their original fixed goal.
+    const next={};
+    for(const [kind,target] of Object.entries(d.catchupAfter)){
+      if(!['memory','observe'].includes(kind)||typeof target!=='string'||!target||!d.sourceManifest?.some(row=>row.id===target&&row.role==='user'))throw draftChangedError(['남은 정리 목표']);
+      if(target!==String(u[kind+'Cursor']||''))next[kind]=target;
+    }
+    if(Object.keys(next).length)u.catchup=next;
+  }
+  async function retainLiveCandidate(room,candidate){
+    const d=seedTrajectoryDraft(room,candidate.cog,candidate.packs,candidate.frame,candidate.batch,candidate.request,candidate.data,candidate.repairAttempts,candidate.rejections);
+    d.pendingBatch.repairByKind=copy(candidate.repairByKind);
+    await persistDraft(room,d);return d;
+  }
+  async function retainDeferredLiveCandidate(room,error,candidate,replayEpoch){
+    if(error?.code!=='WISH_STALE'||!candidate||(!error.publicationDeferred&&!draftPublishBusy(room)))return false;
+    const currentCog=await bridge().snapshotRaw(apiChatIdOf(room));
+    if(state.currentRoom!==room||candidate.epoch!==localRestoreEpoch||ExternalReplay.changed(apiChatIdOf(room),replayEpoch)||candidate.settingsAtStart!==JSON.stringify(loadAiSettings())||candidate.guideStampAtStart!==draftSettingsStamp()||candidate.signature!==rawSignature({...room,slots:draftBasisSlots(room.slots)},currentCog,candidate.packs))return false;
+    await retainLiveCandidate(room,candidate);return true;
   }
   function checkRelationshipRejectionAudit(audit,sourceRows,remainingRows=null,expectedCount=null){
     const fail=()=>{throw draftChangedError(['관계 제안 철회 검증 기록']);};
@@ -58021,7 +58052,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     const record=d.stateRepair;if(record===undefined)return null;
     const fail=()=>{throw draftChangedError(['현재상태 자동 교정 기록']);};
     if(!record||record.version!==1||!Number.isInteger(record.attempts)||record.attempts<1||record.attempts>1000000||!['pending','applied'].includes(record.phase)||typeof record.originalError!=='string'||!record.originalError.trim())fail();
-    const plan=planStateReviewRepair(d,record.issues);
+    const plan=planStateReviewRepair(d,record.issues,{factContentRepair:record.factContentRepair===true});
     if(!plan||record.candidateSignature!==plan.candidateSignature||record.sourceKey!==plan.sourceKey)fail();
     return record;
   }
@@ -58044,6 +58075,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       candidate.slots.find(slot=>slot.id==='currentState').content=records[index].beforeText;
       if(records[index].beforeThreads!==undefined)candidate.threads=copy(records[index].beforeThreads);
       if(records[index].version>=3)candidateCog.state=copy(records[index].beforeCogState);
+      if(records[index].factContentRepair===true)candidateCog.facts=copy(records[index].beforeFacts);
       if(records[index].version===4)candidate.slots.find(slot=>slot.id==='logSummary').content=records[index].beforeLogText;
     }
     if(records.at(-1).afterCandidateSignature!==rawSignature(d.room,d.cog,d.packs))fail();
@@ -58278,7 +58310,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
       catch(error){
         if(repairStarted&&transientError(error)){
           pending.repairTransportFailure=true;
-          if(!['AI_COOLDOWN','AI_QUEUE_FULL'].includes(error?.code))pending.repairTransportRetries=Math.min(1000000,Math.max(0,Number(pending.repairTransportRetries)||0)+1);
+          if(!['AI_COOLDOWN','AI_QUEUE_FULL','AI_QUEUE_TIMEOUT'].includes(error?.code))pending.repairTransportRetries=Math.min(1000000,Math.max(0,Number(pending.repairTransportRetries)||0)+1);
           assertBasis(cog,frame);await savePending();
         }
         // A rejected paid candidate is reusable too. Normal successful batches
@@ -58297,17 +58329,18 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     const repairCurrentState=async(plan,errorMessage)=>{
       assertBasis(cog,frame);
       const attempts=stateRepair?.attempts||0;
-      if(attempts>0&&(stateRepairSpent||force!=='retry'&&stateRepairAlreadyAttempted(d,plan.issues))){
+      const contentUpgrade=plan.factContentRepair===true&&stateRepair?.factContentRepair!==true;
+      if(attempts>0&&(stateRepairSpent||!contentUpgrade&&force!=='retry'&&stateRepairAlreadyAttempted(d,plan.issues))){
         // Remember the validated failure without another paid final-review call
         // on the user's next retry. The corrected candidate stays uncommitted.
         if(stateRepair?.phase!=='pending'||stateRepair.candidateSignature!==plan.candidateSignature||JSON.stringify(stateRepair.issues)!==JSON.stringify(plan.issues)){
-          d={...d,stateRepair:{version:1,attempts,phase:'pending',candidateSignature:plan.candidateSignature,sourceKey:plan.sourceKey,issues:copy(plan.issues),originalError:errorMessage}};
+          d={...d,stateRepair:{version:1,factContentRepair:plan.factContentRepair===true,attempts,phase:'pending',candidateSignature:plan.candidateSignature,sourceKey:plan.sourceKey,issues:copy(plan.issues),originalError:errorMessage}};
           await persistDraft(room,d);assertBasis(cog,frame);stateRepair=d.stateRepair;
         }
         throw Object.assign(Error(errorMessage+' 자동 교정 1회를 마쳐 보류했습니다. 이어서 정리·검증을 누르면 저장된 후보만 다시 교정합니다.'),{code:'WISH_STATE_REPAIR_BUDGET',reviewIssues:copy(plan.issues)});
       }
       stateRepairSpent=true;
-      d={...d,stateRepair:{version:1,attempts:Math.min(1000000,attempts+1),phase:'pending',candidateSignature:plan.candidateSignature,sourceKey:plan.sourceKey,issues:copy(plan.issues),originalError:errorMessage}};
+      d={...d,stateRepair:{version:1,factContentRepair:plan.factContentRepair===true,attempts:Math.min(1000000,attempts+1),phase:'pending',candidateSignature:plan.candidateSignature,sourceKey:plan.sourceKey,issues:copy(plan.issues),originalError:errorMessage}};
       // Consume the call budget before provider work. A failed checkpoint stops
       // the call, and a failed provider reply leaves the paid source reusable.
       await persistDraft(room,d);assertBasis(cog,frame);stateRepair=d.stateRepair;
@@ -58352,7 +58385,7 @@ function afterConfirmed(list,cursor,unconfirmed=[]) {
     const latest=stableFrame([...(await fetchAllRoomMessages(apiChatIdOf(room)))].reverse()),liveCog=await bridge().snapshotRaw(apiChatIdOf(room));assertBasis(liveCog,latest);
     if(!sourceStillPresent(d.sourceManifest,latest.stable)){d={...d,phase:'waiting'};await persistDraft(room,d);return false;}
     assertDraftPublishIdle(room);
-    const finalRoom=copy(d.room);delete finalRoom.unified.draft;delete finalRoom.unified.catchup;delete finalRoom.unified.partialFailure;delete finalRoom.unified.batchRecovery;
+    const finalRoom=copy(d.room);delete finalRoom.unified.draft;delete finalRoom.unified.catchup;restoreDraftCatchup(finalRoom.unified,d);delete finalRoom.unified.partialFailure;delete finalRoom.unified.batchRecovery;
     Object.assign(finalRoom.unified,{lastError:'',lastErrorCode:'',lastErrorNoAutoRetry:false,failedKind:'',retry:null,status:'원문 대조 '+d.packets.length+'묶음 통과 · '+(d.memoryChanged?(d.observeChanged?'기억·인물':'기억'):'인물')+' 이번 목표 반영 완료',lastRunAt:Date.now()});
     restoreDeferredFailure(finalRoom.unified,d);if(d.deferredFailure)finalRoom.unified.status+=' · '+(d.deferredFailure.kind==='memory'?'기억':'인물')+' 검증은 계속 보류';
     const finalCog=d.observeChanged?{...copy(d.cog),rev:(Number(liveCog.rev)||0)+1}:null;
@@ -59966,9 +59999,9 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
   }
   // Only repair state text and thread decisions owned by this fixed memory draft. A
   // valid quotation is necessary, but never sufficient to bypass final review.
-  function planStateReviewRepair(d,issues){
+  function planStateReviewRepair(d,issues,options={}){
     if(!Array.isArray(d?.packets)||!Array.isArray(issues)||!issues.length||issues.length>12)return null;
-    const hasKnowledge=issues.some(issue=>issue?.kind==='knowledge'),needsMemory=issues.some(issue=>issue?.kind!=='knowledge');
+    const hasKnowledge=issues.some(issue=>issue?.kind==='knowledge'),factContentRepair=options.factContentRepair!==false&&hasKnowledge,needsMemory=issues.some(issue=>issue?.kind!=='knowledge');
     if(needsMemory&&(!d.goals?.memory||d.memoryChanged!==true)||hasKnowledge&&(!d.goals?.observe||d.observeChanged!==true))return null;
     const source=new Map(),rows=[],memoryRows=[],observeRows=[],memoryKeys=new Set(),observeKeys=new Set(),stateSourceKeys=new Set(),threadSourceKeys=new Set(),knowledgeSourceKeys=new Set(),eventSourceKeys=new Set();
     for(const packet of d.packets)for(const lane of ['memory','observe']){
@@ -60008,9 +60041,9 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
       // still supply exact lane-owned proof, then pass independent final review.
       if(issue.source_quote){const row=source.get(issue.source_turn_key);if(issue.source_quote.trim().length<2||!allowed.has(issue.source_turn_key)||!row||!row.userText.includes(issue.source_quote)&&!row.assistantText.includes(issue.source_quote))return null;}
     }
-    const sourceKey=hasKnowledge||extended?JSON.stringify({memoryRows,observeRows,stateSourceKeys:[...stateSourceKeys],threadSourceKeys:[...threadSourceKeys],knowledgeSourceKeys:[...knowledgeSourceKeys],...(extended?{eventSourceKeys:[...eventSourceKeys]}:{}),observeCursor}):JSON.stringify(rows);
+    const sourceKey=hasKnowledge||extended?JSON.stringify({memoryRows,observeRows,stateSourceKeys:[...stateSourceKeys],threadSourceKeys:[...threadSourceKeys],knowledgeSourceKeys:[...knowledgeSourceKeys],...(extended?{eventSourceKeys:[...eventSourceKeys]}:{}),...(factContentRepair?{factContentRepair:true}:{}),observeCursor}):JSON.stringify(rows);
     return {version:extended?4:hasKnowledge?3:hasThreads?2:1,candidateSignature:rawSignature(d.room,d.cog,d.packs),memoryCursor,sourceKey,sourceRows:copy(rows),issues:copy(issues),targetRefs:[...new Set(issues.filter(issue=>issue.kind==='current_state').map(issue=>issue.ref))],stateSections:copy(sections),
-      ...(hasKnowledge?{observeCursor,memorySourceKeys:[...stateSourceKeys],knowledgeSourceKeys:[...knowledgeSourceKeys],knowledgeRefs:[...new Set(issues.filter(issue=>issue.kind==='knowledge').map(issue=>issue.ref))],facts:copy(facts.filter(row=>issues.some(issue=>issue.kind==='knowledge'&&issue.ref===row.id))),people:copy(db.people),cognitionState:copy(d.cog.state)}:{}),
+      ...(hasKnowledge?{...(factContentRepair?{factContentRepair:true}:{}),observeCursor,memorySourceKeys:[...stateSourceKeys],knowledgeSourceKeys:[...knowledgeSourceKeys],knowledgeRefs:[...new Set(issues.filter(issue=>issue.kind==='knowledge').map(issue=>issue.ref))],facts:copy(facts.filter(row=>issues.some(issue=>issue.kind==='knowledge'&&issue.ref===row.id))),people:copy(db.people),cognitionState:copy(d.cog.state)}:{}),
       ...(hasThreads||extended?{threads:copy(threads),threadRefs:[...new Set(issues.filter(isThread).map(issue=>issue.ref))],threadSourceKeys:[...threadSourceKeys],memoryTurn:WishThreads.clock(d.room)}:{}),
       ...(extended?{eventRefs:[...new Set(issues.filter(issue=>issue.kind==='event').map(issue=>issue.ref))],events:copy(events),eventSourceKeys:[...eventSourceKeys],logText:d.room.slots.find(slot=>slot.id==='logSummary').content,promiseIssues:copy(missingPromises.map(({index,issue})=>({index,...issue}))),people:copy(db.people),memorySourceKeys:[...stateSourceKeys]}:{})};
   }
@@ -60041,13 +60074,14 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
   }
   function validateStateRepairAudit(d,audit){
     const fail=()=>{throw Object.assign(Error('현재상태 교정 원문·변경 기록이 일치하지 않습니다. 임시 결과는 유지했습니다.'),{code:'WISH_STATE_REPAIR'});};
-    if(!audit||![1,2,3,4].includes(audit.version)||audit.reviewRequired!==true||typeof audit.beforeText!=='string'||typeof audit.afterText!=='string'||typeof audit.candidateSignature!=='string'||typeof audit.afterCandidateSignature!=='string'||!Array.isArray(audit.sourceRows)||!Array.isArray(audit.issues)||!Array.isArray(audit.changes)||!audit.changes.length&&!audit.threadChanges?.length&&!(audit.version>=3&&audit.knowledgeChanges?.length)&&!audit.eventChanges?.length&&!audit.promiseChanges?.length)fail();
+    if(!audit||![1,2,3,4].includes(audit.version)||audit.reviewRequired!==true||typeof audit.beforeText!=='string'||typeof audit.afterText!=='string'||typeof audit.candidateSignature!=='string'||typeof audit.afterCandidateSignature!=='string'||!Array.isArray(audit.sourceRows)||!Array.isArray(audit.issues)||!Array.isArray(audit.changes)||!audit.changes.length&&!audit.threadChanges?.length&&!(audit.version>=3&&audit.knowledgeChanges?.length)&&!audit.eventChanges?.length&&!audit.promiseChanges?.length&&!audit.factChanges?.length)fail();
     const beforeCog=copy(d.cog);if(audit.version>=3){if(!audit.beforeCogState||!audit.afterCogState||!Array.isArray(audit.knowledgeChanges))fail();beforeCog.state=copy(audit.beforeCogState);}
+    if(audit.factContentRepair===true){if(!Array.isArray(audit.beforeFacts)||!Array.isArray(audit.afterFacts)||!Array.isArray(audit.factChanges))fail();beforeCog.facts=copy(audit.beforeFacts);}
     const beforeRoom=copy(d.room),slot=beforeRoom.slots?.find(row=>row.id==='currentState');if(!slot)fail();
     slot.content=audit.beforeText;
     if(audit.version===4){const log=beforeRoom.slots.find(row=>row.id==='logSummary');if(!log||typeof audit.beforeLogText!=='string'||typeof audit.afterLogText!=='string'||!Array.isArray(audit.eventChanges)||!Array.isArray(audit.promiseChanges))fail();log.content=audit.beforeLogText;}
     if(audit.version===2||audit.version>=3&&audit.beforeThreads!==undefined){if(!Array.isArray(audit.beforeThreads)||!Array.isArray(audit.afterThreads)||!Array.isArray(audit.threadChanges))fail();beforeRoom.threads=copy(audit.beforeThreads);}
-    const plan=planStateReviewRepair({...d,room:beforeRoom,cog:beforeCog},audit.issues);
+    const plan=planStateReviewRepair({...d,room:beforeRoom,cog:beforeCog},audit.issues,{factContentRepair:audit.factContentRepair===true});
     if(!plan||plan.version!==audit.version||plan.candidateSignature!==audit.candidateSignature||plan.memoryCursor!==audit.memoryCursor||plan.sourceKey!==audit.sourceKey||JSON.stringify(plan.sourceRows)!==JSON.stringify(audit.sourceRows))fail();
     // Reuse the same exact-span and quotation checks used before the initial
     // application. Historical entries are checked against their own beforeText;
@@ -60066,7 +60100,7 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
     const afterCog=copy(beforeCog);
     if(audit.version>=3&&plan.knowledgeRefs?.length){
       if(audit.observeCursor!==plan.observeCursor)fail();
-      const repaired=applyKnowledgeReviewEdits(plan,audit.knowledgeChanges.map(change=>change.update));
+      const repaired=applyKnowledgeReviewEdits(plan,audit.knowledgeChanges.map(change=>change.update),audit.factContentRepair===true?audit.factChanges.map(change=>change.ref):[]);
       if(JSON.stringify(repaired.changes)!==JSON.stringify(audit.knowledgeChanges)||JSON.stringify(repaired.state)!==JSON.stringify(audit.afterCogState))fail();
       afterCog.state=repaired.state;
     }
@@ -60077,6 +60111,11 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
       const promises=applyPromiseReviewAdditions({...plan,threads:afterRoom.threads},audit.promiseChanges.map(change=>change.update));
       if(JSON.stringify(promises.changes)!==JSON.stringify(audit.promiseChanges))fail();afterRoom.threads=promises.threads;
       if(JSON.stringify(afterRoom.threads)!==JSON.stringify(audit.afterThreads)||JSON.stringify(afterCog.state)!==JSON.stringify(audit.afterCogState))fail();
+    }
+    if(audit.factContentRepair===true){
+      const repaired=applyFactContentReviewEdits(plan,audit.factChanges.map(change=>({ref:change.ref,edits:change.edits})),beforeCog.facts);
+      if(JSON.stringify(repaired.changes)!==JSON.stringify(audit.factChanges)||JSON.stringify(repaired.facts)!==JSON.stringify(audit.afterFacts))fail();
+      afterCog.facts=repaired.facts;
     }
     if(afterText!==audit.afterText||afterText.length>APP.absoluteUiMax||JSON.stringify(inventory(afterRoom,afterCog,d.packs).stateSections)!==JSON.stringify(applied.sections)||rawSignature(afterRoom,afterCog,d.packs)!==audit.afterCandidateSignature)fail();
     return audit;
@@ -60108,9 +60147,28 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
     if(JSON.stringify(WishThreads.normalizeLoose(threads))!==JSON.stringify(threads))throw fail('서사 고리 교정이 저장 구조를 변경했습니다.');
     return {threads,changes};
   }
-  function applyKnowledgeReviewEdits(plan,updates){
-    const fail=message=>Object.assign(Error(message),{code:'WISH_STATE_REPAIR'}),targets=new Set(plan.knowledgeRefs),source=new Map(plan.sourceRows.map(row=>[row.key,row])),allowed=new Set(plan.knowledgeSourceKeys),seen=new Set(),covered=new Set(),state=copy(plan.cognitionState),changes=[];
-    if(!Array.isArray(updates)||!updates.length||updates.length>60)throw fail('인지 교정 대상·개수가 올바르지 않습니다.');
+  function applyFactContentReviewEdits(plan,updates,rawFacts){
+    const fail=message=>Object.assign(Error(message),{code:'WISH_STATE_REPAIR'}),seen=new Set(),changes=[],facts=copy(rawFacts);
+    if(plan.factContentRepair!==true||!Array.isArray(updates)||updates.length>plan.knowledgeRefs.length)throw fail('사실 본문 교정 범위를 확인하지 못했습니다.');
+    for(const update of updates){
+      if(!update||Object.keys(update).sort().join(',')!=='edits,ref'||!plan.knowledgeRefs.includes(update.ref)||seen.has(update.ref)||!Array.isArray(update.edits)||!update.edits.length)throw fail('사실 본문 교정 대상이 없거나 중복되었습니다.');
+      seen.add(update.ref);
+      const old=plan.facts.find(row=>row.id===update.ref),matches=facts.filter(row=>row.id===update.ref),raw=matches[0];
+      if(!old||old.manual||matches.length!==1||!raw.automatic||raw.archived||raw.content!==old.content||raw.label!==old.title)throw fail('수동 사실 또는 변경된 사실은 자동으로 교정하지 않습니다.');
+      for(const edit of update.edits){
+        const e=edit?.evidence;
+        if(!edit||Object.keys(edit).sort().join(',')!=='after,before,evidence'||typeof edit.before!=='string'||typeof edit.after!=='string'||!edit.after.trim()||!e||Object.keys(e).sort().join(',')!=='quote,role,source_turn_key'||!['USER','ASSISTANT'].includes(e.role)||typeof e.quote!=='string'||typeof e.source_turn_key!=='string')throw fail('사실 본문 교정 문구·원문 근거가 올바르지 않습니다.');
+      }
+      const patch=applyStateReviewEdits({targetRefs:[old.id],sourceRows:plan.sourceRows,memorySourceKeys:plan.knowledgeSourceKeys,stateSections:[{id:old.id,title:old.title,body:old.content}]},{updates:[update]});
+      const after=patch.sections[0].body;
+      if(after.length>APP.absoluteUiMax)throw fail('사실 본문 교정이 저장 한도를 넘습니다.');
+      raw.content=after;changes.push({ref:old.id,title:old.title,before:old.content,after,edits:copy(update.edits)});
+    }
+    return {facts,changes};
+  }
+  function applyKnowledgeReviewEdits(plan,updates,contentRefs=[]){
+    const fail=message=>Object.assign(Error(message),{code:'WISH_STATE_REPAIR'}),targets=new Set(plan.knowledgeRefs),source=new Map(plan.sourceRows.map(row=>[row.key,row])),allowed=new Set(plan.knowledgeSourceKeys),seen=new Set(),covered=new Set(contentRefs),state=copy(plan.cognitionState),changes=[];
+    if(!Array.isArray(updates)||!updates.length&&!contentRefs.length||updates.length>60||contentRefs.some(ref=>!targets.has(ref)))throw fail('인지 교정 대상·개수가 올바르지 않습니다.');
     for(const update of updates){
       if(!update||Object.keys(update).sort().join(',')!=='actor_ref,evidence,kind,note,ref'||!targets.has(update.ref))throw fail('인지 교정 대상·필드가 일치하지 않습니다.');
       const fact=plan.facts.find(row=>row.id===update.ref),actor=plan.people.find(row=>row.id===update.actor_ref),key=JSON.stringify([update.ref,update.actor_ref]);
@@ -60167,7 +60225,7 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
   }
   async function repairDraftCurrentState(d,plan){
     const fail=message=>Object.assign(Error(message),{code:'WISH_STATE_REPAIR'});
-    const fresh=planStateReviewRepair(d,plan?.issues);
+    const fresh=planStateReviewRepair(d,plan?.issues,{factContentRepair:plan?.factContentRepair===true});
     if(!fresh||JSON.stringify(fresh)!==JSON.stringify(plan))throw fail('현재상태 교정의 원문·임시 기억 기준이 달라졌습니다. 저장된 결과는 유지했습니다.');
     if(Array.isArray(plan.threadRefs)&&plan.threadRefs.some(ref=>plan.threads.find(thread=>thread.id===ref)?.status!=='open'))throw fail('이미 종료된 서사 고리의 재개방은 자동 교정 대상이 아닙니다. 기존 기억을 유지했습니다.');
     const textField={type:'string'},evidenceSchema={type:'object',additionalProperties:false,required:['source_turn_key','role','quote'],properties:{source_turn_key:textField,role:{type:'string',enum:['USER','ASSISTANT']},quote:textField}};
@@ -60176,6 +60234,7 @@ JSON만 출력한다. 출력 필드는 응답 스키마만 따른다.`;
     const schema={type:'object',additionalProperties:false,required:['status','reason','updates'],properties:{status:{type:'string',enum:['corrected','blocked']},reason:textField,updates:{type:'array',items:updateSchema}}};
     if(Array.isArray(plan.threadRefs)){schema.required.push('thread_updates');schema.properties.thread_updates={type:'array',items:{type:'object',additionalProperties:false,required:['ref','type','how','date','evidence','edits'],properties:{ref:textField,type:{type:'string',enum:[...WishThreads.CLOSE_TYPES,'keep_open']},how:textField,date:WishThreads.DELTA_SCHEMA.properties.close.items.properties.date,evidence:evidenceSchema,edits:{type:'array',items:editSchema}}}};}
     if(plan.knowledgeRefs?.length){schema.required.push('knowledge_updates');schema.properties.knowledge_updates={type:'array',items:{type:'object',additionalProperties:false,required:['ref','actor_ref','kind','note','evidence'],properties:{ref:textField,actor_ref:textField,kind:{type:'string',enum:WishKnow.STATES},note:textField,evidence:evidenceSchema}}};}
+    if(plan.factContentRepair===true){schema.required.push('fact_updates');schema.properties.fact_updates={type:'array',items:updateSchema};}
     if(plan.version===4){
       schema.required.push('event_updates','promise_additions');schema.properties.event_updates={type:'array',items:updateSchema};
       schema.properties.promise_additions={type:'array',items:{type:'object',additionalProperties:false,required:['issue_index','title','detail','who','due','date','evidence'],properties:{issue_index:{type:'integer'},title:textField,detail:textField,who:{type:'array',items:textField},due:textField,date:WishThreads.DELTA_SCHEMA.properties.upsert.items.properties.date,evidence:evidenceSchema}}};
@@ -60202,7 +60261,7 @@ JSON만 출력한다. 허용한 스키마 밖의 필드를 만들지 않는다.`
 `+WishThreads.RULES;
     if(plan.knowledgeRefs?.length)guide+=`\n[인지 부분 교정]
 - source_turns에는 기억과 인물 원문이 함께 있다. current_state의 근거는 memory_source_keys만, 인지의 근거는 knowledge_source_keys만 사용한다. 각 키 목록은 해당 작업의 오래된 순서이며 final_observe_cursor가 인지의 최종 기준이다. 뒤의 변경·번복·전달을 모두 확인한다.
-- knowledge_refs의 기존 사실만 knowledge_updates로 고친다. facts의 본문·제목, people의 이름·신분, 관계·은폐·현장 설정은 절대 바꾸지 않는다. 없는 인물·사실을 만들지 않는다.
+- knowledge_refs의 기존 사실만 knowledge_updates로 고친다. ${plan.factContentRepair?'facts의 본문은 아래 fact_updates 계약으로만 수정하고 제목은 유지한다.':'facts의 본문·제목은 절대 바꾸지 않는다.'} people의 이름·신분, 관계·은폐·현장 설정은 절대 바꾸지 않는다. 없는 인물·사실을 만들지 않는다.
 - 각 변경은 {ref,actor_ref,kind,note,evidence}다. ref는 facts.id, actor_ref는 people.id 그대로다. 해당 인물·사실 쌍의 상태만 변경하며 언급하지 않은 모든 인지는 그대로 보존한다. 필요한 변경만 출력하고 같은 쌍은 한 번만 쓴다.
 - knows=aware는 본문의 모든 구체적 사실을 실제로 아는 경우뿐이다. 일부 정보만 전달되었으면 knowsPart와 실제로 아는 부분을 note에 쓴다. misbelieves는 믿는 잘못된 내용을 note에 쓴다. 그 외 상태의 note는 빈 문자열이다. note는 300자 이내다. 목격·청취·보고·열람·명시된 기존 인지의 직접 근거 없이 가까운 관계·직업·동행·현장 존재만으로 앎을 추가하지 않는다. 대감이라는 호칭만으로 폐세자 신분까지 안다고 하지 않는다.
 - 수정 근거 evidence는 knowledge_source_keys 안의 한 메시지에서 정확한 role과 연속 원문을 인용한다. PC의 자발적 행동·내면·판단은 USER 직접 입력만 인정한다. 지적된 인물이 일부만 알거나 지적 자체가 잘못됐으면 검토기 주장대로 강제로 aware를 부여하지 않는다.
@@ -60214,6 +60273,14 @@ JSON만 출력한다. 허용한 스키마 밖의 필드를 만들지 않는다.`
 - who는 people.name의 정확한 이름이며 약속한 사람을 맨 앞에 둔다. PC가 약속한 경우 USER의 직접 입력을 인용해야 한다. NPC의 기대를 PC의 약속으로 만들지 않는다. 날짜는 실제 약속 시점이며 불명확하면 unknown/날짜 미상, due는 원문에 없으면 빈 문자열이다. 원문 역할·연속 인용을 포함한 evidence가 필수다.
 - 대상이 없는 배열은 []로 출력한다. 불확실하면 blocked와 모든 변경 배열=[]로 둔다. 이 변경도 전체 원문 독립 검증을 통과하기 전에는 실제 기억에 반영되지 않는다.
 `;
+    if(plan.factContentRepair===true)guide+=`
+[사실 본문 오류 부분 교정]
+- facts.content 자체가 원문과 다를 때만 fact_updates=[{ref,edits:[{before,after,evidence}]}]로 최소 구간을 고친다. ref는 knowledge_refs 안에 있어야 한다. 제목·ID·수동 사실·다른 사실·인물은 바꾸지 않는다. 본문 전체 재작성·삭제·새 사실 추가는 금지다.
+- before는 content에 정확히 한 번 있는 연속 원문이며 after는 빈 문자열이 아닌 교정문이다. evidence는 knowledge_source_keys의 한 메시지 원문/역할을 정확히 인용한다. 검토자의 주장 자체는 근거가 아니다. PC의 선택·행동·내면은 USER 직접 입력만 인정한다.
+- 인물의 말·주장과 객관적인 사실을 구별한다. 잘못 요약한 소속·관계·명단 등은 원문에 명시된 범위만 바로잡는다. 단순 정황에서 새 사실을 추측하지 않는다.
+- 본문 수정은 모든 인물에게 새 지식을 부여하는 것이 아니다. 수정된 본문을 기준으로 기존 knows/knowsPart/misbelieves 등 모든 인지와 은폐의 정합성을 확인하고, 필요한 쌍만 knowledge_updates로 함께 바로잡는다. 누구에게 전달됐는지 근거가 없으면 앎을 추가하지 않는다.
+- 인지 상태만 틀리면 fact_updates=[]다. 본문만 틀리고 기존 인지 상태는 정확하면 knowledge_updates=[]도 허용한다. 각 knowledge_refs의 지적은 적어도 한 배열에서 해결해야 한다. 근거가 부족하면 blocked다. 최종 검토가 모든 원문·인지·수정 본문을 다시 대조한 뒤에만 반영한다.
+`;
     const input={final_memory_cursor:plan.memoryCursor,source_turns:plan.sourceRows,issues:plan.issues,target_refs:plan.targetRefs,current_state:plan.stateSections,
       ...(Array.isArray(plan.threadRefs)?{threads:plan.threads.filter(thread=>plan.threadRefs.includes(thread.id)),thread_refs:plan.threadRefs,thread_source_keys:plan.threadSourceKeys}:{}),
       ...(plan.knowledgeRefs?.length?{final_observe_cursor:plan.observeCursor,memory_source_keys:plan.memorySourceKeys,knowledge_source_keys:plan.knowledgeSourceKeys,knowledge_refs:plan.knowledgeRefs,facts:plan.facts}:{}),
@@ -60224,11 +60291,11 @@ JSON만 출력한다. 허용한 스키마 밖의 필드를 만들지 않는다.`
     const settings=loadAiSettings();if(!isAiProviderReady(settings))throw fail('현재상태 교정을 위한 보조 AI 연결 설정이 필요합니다. 임시 결과는 유지했습니다.');
     unifiedStage='기억 원문 대조 · 지적된 부분 자동 교정';renderModalIfIdle();
     const result=await callAiProvider(settings,system,prompt,{taskKind:'extract',responseMimeType:'application/json',responseJsonSchema:schema,operationLabel:unifiedStage});
-    if(JSON.stringify(planStateReviewRepair(d,plan.issues))!==JSON.stringify(plan))throw fail('현재상태 교정 중 원문 또는 임시 기억이 바뀌었습니다. 교정 결과를 적용하지 않았습니다.');
+    if(JSON.stringify(planStateReviewRepair(d,plan.issues,{factContentRepair:plan.factContentRepair===true}))!==JSON.stringify(plan))throw fail('현재상태 교정 중 원문 또는 임시 기억이 바뀌었습니다. 교정 결과를 적용하지 않았습니다.');
     let response;
     try{response=normalizeReviewEnums(WLOG.parseJson(result.text,'현재상태 부분 자동 교정',result.diagnostic),schema);validateShape(response,schema);}catch(error){throw fail('현재상태 교정 응답 형식을 확인하지 못했습니다. '+String(error.message||error));}
     if(response.status==='blocked'){
-      if(response.updates.length||response.thread_updates?.length||response.knowledge_updates?.length||response.event_updates?.length||response.promise_additions?.length||!response.reason.trim())throw fail('현재상태 교정 보류 응답의 사유·변경분이 일치하지 않습니다.');
+      if(response.updates.length||response.thread_updates?.length||response.knowledge_updates?.length||response.event_updates?.length||response.promise_additions?.length||response.fact_updates?.length||!response.reason.trim())throw fail('현재상태 교정 보류 응답의 사유·변경분이 일치하지 않습니다.');
       throw fail('현재상태를 원문으로 확실하게 교정하지 못했습니다. '+response.reason.trim());
     }
     const {sections,changes}=applyStateReviewEdits(plan,response);
@@ -60239,8 +60306,12 @@ JSON만 출력한다. 허용한 스키마 밖의 필드를 만들지 않는다.`
     if(changes.length)room.aiAppliedContent={...room.aiAppliedContent,currentState:aiHashTiny(slot.content)};
     let threadAudit={};
     if(Array.isArray(plan.threadRefs)){const repaired=applyThreadReviewEdits(plan,response.thread_updates);room.threads=repaired.threads;threadAudit={beforeThreads:copy(plan.threads),afterThreads:copy(room.threads),threadChanges:repaired.changes};}
-    const cog=copy(d.cog);let knowledgeAudit={};
-    if(plan.knowledgeRefs?.length){const repaired=applyKnowledgeReviewEdits(plan,response.knowledge_updates);cog.state=repaired.state;knowledgeAudit={observeCursor:plan.observeCursor,beforeCogState:copy(d.cog.state),afterCogState:copy(cog.state),knowledgeChanges:repaired.changes};}
+    const cog=copy(d.cog);let knowledgeAudit={},factAudit={};
+    if(plan.factContentRepair===true){
+      const repaired=applyFactContentReviewEdits(plan,response.fact_updates,cog.facts);cog.facts=repaired.facts;
+      factAudit={factContentRepair:true,beforeFacts:copy(d.cog.facts),afterFacts:copy(cog.facts),factChanges:repaired.changes};
+    }
+    if(plan.knowledgeRefs?.length){const repaired=applyKnowledgeReviewEdits(plan,response.knowledge_updates,factAudit.factChanges?.map(change=>change.ref)||[]);cog.state=repaired.state;knowledgeAudit={observeCursor:plan.observeCursor,beforeCogState:copy(d.cog.state),afterCogState:copy(cog.state),knowledgeChanges:repaired.changes};}
     let extendedAudit={};
     if(plan.version===4){
       const events=applyEventReviewEdits(plan,response.event_updates);room.slots.find(row=>row.id==='logSummary').content=events.text;
@@ -60250,7 +60321,7 @@ JSON만 출력한다. 허용한 스키마 밖의 필드를 만들지 않는다.`
       if(events.changes.length)room.aiAppliedContent={...room.aiAppliedContent,logSummary:aiHashTiny(events.text)};
       extendedAudit={beforeLogText:plan.logText,afterLogText:events.text,eventChanges:events.changes,promiseChanges:promises.changes,beforeThreads:copy(plan.threads),afterThreads:copy(room.threads),threadChanges:threadAudit.threadChanges||[],beforeCogState:copy(d.cog.state),afterCogState:copy(cog.state),knowledgeChanges:knowledgeAudit.knowledgeChanges||[]};
     }
-    return {room,cog,audit:{version:plan.version,candidateSignature:plan.candidateSignature,afterCandidateSignature:rawSignature(room,cog,d.packs),sourceKey:plan.sourceKey,sourceRows:copy(plan.sourceRows),memoryCursor:plan.memoryCursor,issues:copy(plan.issues),changes,beforeText,afterText:slot.content,...threadAudit,...knowledgeAudit,...extendedAudit,reviewRequired:true}};
+    return {room,cog,audit:{version:plan.version,candidateSignature:plan.candidateSignature,afterCandidateSignature:rawSignature(room,cog,d.packs),sourceKey:plan.sourceKey,sourceRows:copy(plan.sourceRows),memoryCursor:plan.memoryCursor,issues:copy(plan.issues),changes,beforeText,afterText:slot.content,...threadAudit,...knowledgeAudit,...extendedAudit,...factAudit,reviewRequired:true}};
   }
 
   function threadReviewContext(d){
@@ -60503,7 +60574,7 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     const before=copy(original),expectedRev=original._rev,expectedEpoch=original._epoch;
     const signatureOf=()=>rawSignature((staged.draftPromotion||staged.liveTidyPromotion)?{...original,slots:draftBasisSlots(original.slots)}:original,cog,packs);
     const signature=signatureOf(),restoreEpoch=localRestoreEpoch,replay=ExternalReplay.revision(apiChatIdOf(original));
-    const unchanged=()=>!((staged.draftPromotion||staged.liveTidyPromotion)&&draftPublishBusy(original))&&restoreEpoch===localRestoreEpoch&&!ExternalReplay.changed(apiChatIdOf(original),replay)&&original._rev===expectedRev&&original._epoch===expectedEpoch&&signatureOf()===signature;
+    const unchanged=()=>restoreEpoch===localRestoreEpoch&&!ExternalReplay.changed(apiChatIdOf(original),replay)&&original._rev===expectedRev&&original._epoch===expectedEpoch&&signatureOf()===signature;
     const next={...before,unified:staged.room.unified};
     if(staged.memoryChanged||staged.room.unified.memoryCursor!==original.unified.memoryCursor){
       for(const key of ['slots','activeLorePackIds','aiUpdateCursors','aiAppliedContent','aiSourceManifests','autoMemory','autoLogPinnedKeys','autoLogExcludedKeys','manualLogSelectedKeys','memoryBranchBlocked'])next[key]=staged.room[key];
@@ -60518,11 +60589,12 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     await new Promise((resolve,reject)=>{
       const stores=[APP.storeName,'cognitionRooms','characterLibraries'];if(staged.relationshipBackup||hasAdds||staged.draftRecord||staged.relationshipRejectionAudit||staged.trajectoryArchives?.length||staged.stateRepairAudit)stores.push(APP.runtimeStoreName);
       const tx=state.db.transaction(stores,'readwrite'),storedPacks=new Map();let error,sidecar=null,liveCog=null;goneHeld=[];
-      const fail=message=>{error=Error(message);tx.abort();};
+      const fail=message=>{error=message instanceof Error?message:Error(message);tx.abort();};
       const created=staged.packs.filter(p=>!packs.some(old=>old.scopeId===p.scopeId));
       let left=2+packs.length+created.length+(hasAdds?1:0)+(staged.draftRecord?1:0);
       const finish=()=>{if(--left)return;try{
         if(!unchanged())return fail('저장 중 기억·설정이 바뀌어 AI 결과를 적용하지 않았습니다.');
+        if(staged.draftPromotion||staged.liveTidyPromotion)assertDraftPublishIdle(original);
         if(staged.cog){
           const a=WishHeld.partition('A',before.relationshipHeld||[],heldAdds.A,before.relationshipHeldResolved||[],sidecar?.queue?.A||[],{rows:next.relationships||[]});
           const ar=WishHeld.resolve(before.relationshipHeldResolved||[],a.settled,'auto-matched',Date.now());
@@ -60547,7 +60619,7 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
       }catch(e){error=e;tx.abort();}};
       if(staged.draftRecord){const q=tx.objectStore(APP.runtimeStoreName).get(staged.draftRecord.id);q.onsuccess=()=>{if(q.result?.rev!==staged.draftRecord.rev)return fail('검증된 임시 정리가 다른 탭에서 바뀌었습니다.');finish();};}
       if(hasAdds)WishHeld.txSidecar(tx,original,v=>{sidecar=v;finish();});
-      const q=tx.objectStore(APP.storeName).get(original.chatId);q.onsuccess=()=>{if(q.result?._rev!==expectedRev||q.result?._epoch!==expectedEpoch||!unchanged())return fail('저장 전 방 데이터가 바뀌었습니다.');finish();};
+      const q=tx.objectStore(APP.storeName).get(original.chatId);q.onsuccess=()=>{if(q.result?._rev!==expectedRev||q.result?._epoch!==expectedEpoch||!unchanged())return fail('저장 전 방 데이터가 바뀌었습니다.');try{if(staged.draftPromotion||staged.liveTidyPromotion)assertDraftPublishIdle(original);}catch(e){return fail(e);}finish();};
       const c=tx.objectStore('cognitionRooms').get(String(apiChatIdOf(original)));c.onsuccess=()=>{const same=(c.result?.rev||0)===(cog.rev||0)||(!!c.result&&WishHeld.restSig(c.result)===WishHeld.restSig(cog));if(!same)return fail('저장 전 인지가 수정되었습니다.');liveCog=c.result||null;finish();};
       for(const pack of packs){const q=tx.objectStore('characterLibraries').get(pack.scopeId);q.onsuccess=()=>{if(!q.result||autoLoreContentFingerprint(q.result)!==autoLoreContentFingerprint(pack))return fail('저장 전 자료가 수정되었습니다.');storedPacks.set(String(pack.scopeId),q.result);finish();};}
       for(const pack of created){const q=tx.objectStore('characterLibraries').get(pack.scopeId);q.onsuccess=()=>{if(q.result)return fail('새 자료집의 저장 ID가 이미 존재합니다.');finish();};}
@@ -60586,7 +60658,7 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     if(error?.noAutoRetry||/^(?:AI_AUTH_COOLDOWN|FIREBASE_APPCHECK_(?:REQUIRED|INACTIVE|REPLAY|REJECTED|UNKNOWN))$/.test(error?.code||''))return false;
     if(['WISH_RESPONSE_SHAPE','WISH_RESPONSE_SHAPE_REPAIR','WISH_RELATION_EVIDENCE','WISH_RELATION_ACTION','WISH_RELATION_FIELDS','WISH_RELATION_CONTEXT','WISH_RELATION_REPAIR','WISH_REPAIR_BUDGET','WISH_RELATION_TRAJECTORY','WISH_TRAJECTORY_REPAIR','WISH_TRAJECTORY_REVIEW','WISH_TRAJECTORY_CHANGED','WISH_TRAJECTORY_BUDGET','WISH_SEMANTIC_REVIEW','WISH_STATE_REPAIR','WISH_STATE_REPAIR_BUDGET','WISH_USER_ABORT','WISH_STALE','WISH_DRAFT_CHANGED','WISH_BATCH_MINIMUM','AI_OUTPUT_LIMIT','AI_JSON_TRUNCATED','CRACK_SECURITY_CHALLENGE'].includes(error?.code))return false;
     if(error?.code==='MEM_SOURCE_CHANGED')return true;
-    if(['AI_COOLDOWN','AI_QUEUE_FULL','AI_TIMEOUT','CRACK_HTTP_BACKOFF','WISH_BATCH_SPLIT','FIREBASE_APPCHECK_RATE','FIREBASE_APPCHECK_NETWORK'].includes(error?.code))return true;
+    if(['AI_COOLDOWN','AI_QUEUE_FULL','AI_QUEUE_TIMEOUT','AI_TIMEOUT','CRACK_HTTP_BACKOFF','WISH_BATCH_SPLIT','FIREBASE_APPCHECK_RATE','FIREBASE_APPCHECK_NETWORK'].includes(error?.code))return true;
     if(isCrackAuthError(error)||isHistoryReadChanged(error)||patchedHistoryError(error)||patchedRelationshipContextError(error))return true;
     const text=String(error?.message||error||'');
     return /\b(?:429|500|502|503|504|529)\b|resource\s*exhausted|too\s*many\s*requests|overload|try\s*again\s*later|failed to fetch|network(?:error| error| request failed)|fetch failed|load failed|네트워크 오류|응답 시간 초과|timeout|timed out/i.test(text);
@@ -60615,7 +60687,7 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     const hinted=Number(error?.retryAfterMs||error?.diagnostic?.retryAfterMs)||0;
     const wait=Number.isFinite(hinted)?Math.max(0,hinted):0;
     if(error?.code==='AI_COOLDOWN'||error?.code==='CRACK_HTTP_BACKOFF')return Math.max(1000,wait);
-    if(error?.code==='AI_QUEUE_FULL')return Math.max(15000,wait);
+    if(['AI_QUEUE_FULL','AI_QUEUE_TIMEOUT'].includes(error?.code))return Math.max(15000,wait);
     if(error?.code==='WISH_BATCH_SPLIT')return Number(count)<6?Math.max(30000,wait):0;
     if(isHistoryReadChanged(error))return [1500,3000,5000,10000,15000][Math.min(4,Math.max(0,Number(count)||0))];
     if(isCrackAuthError(error))return Math.max(authIntervals[Math.min(5,Math.max(0,Number(count)||0))],Number(error?.authRetryAt||crackAuthState.retryAt)-Date.now());
@@ -60624,12 +60696,16 @@ rejected_relationship_proposals는 앞 AI가 원문에 새 PC 관계 변화가 �
     const retry=transientError(error)?intervals[Math.min(4,Math.max(0,Number(count)||0))]||0:0;
     return retry?Math.max(retry,wait):0;
   }
+  function migrateQueueWaitFailure(u){
+    if(u?.lastErrorCode!=='AI_TIMEOUT'||! /^(?:AI 재시도 순서를|다른 AI 작업의 순서를) 기다리다 전체 요청 제한 시간을 넘었습니다\./.test(String(u.lastError||'')))return false;
+    u.lastErrorCode='AI_QUEUE_TIMEOUT';u.lastErrorNoAutoRetry=false;u.retry=null;return true;
+  }
   function wake(room,reason='poll',sourceKey='',enqueue=true){
     if(!room||room!==state.currentRoom||WSUITE.host?.automation(room)==='suite'||!automationEnabled(room)||room.unified?.userPaused||navigator.onLine===false||running.has(room.chatId))return;
     // An executing run owns its next timer; external wake events may enqueue.
     const queue=delay=>{if(enqueue)schedule(room,delay);};
-    const u=room.unified;if(!u?.lastError){if(u?.draft&&draftCanContinue(room)){checked.delete(room);queue(100);}return;}if(!transientError({code:u.lastErrorCode,message:u.lastError,noAutoRetry:u.lastErrorNoAutoRetry===true}))return;
-    let r=u.retry,changed=false;
+    const u=room.unified,migrated=migrateQueueWaitFailure(u);if(!u?.lastError){if(u?.draft&&draftCanContinue(room)){checked.delete(room);queue(100);}return;}if(!transientError({code:u.lastErrorCode,message:u.lastError,noAutoRetry:u.lastErrorNoAutoRetry===true}))return;
+    let r=u.retry,changed=migrated;
     // Only known implementation failures repaired by the installed code resume automatically.
     // Keep the failure record and all source cursors until a verified run succeeds.
     if(patchedHistoryError({code:u.lastErrorCode,message:u.lastError})||patchedRelationshipContextError({code:u.lastErrorCode,message:u.lastError})){
@@ -60737,13 +60813,14 @@ async function run(room,force='') {
     const retry=room.unified?.retry,retrying=!force&&room.unified?.lastError&&Number(retry?.at)>0;
     if(!force&&room.unified?.lastError&&!retrying&&!hasPartialFailure(room.unified)&&!isUnifiedSourceBlock(room.unified.lastError))return false;
     if(retrying&&Date.now()<retry.at){schedule(room,retry.at-Date.now());return false;}
-    const busy=()=>localRestoreInProgress()||aiUpdateRunning||memoryImportRunning||backgroundWorkPending(apiChatIdOf(room));
+    const busy=()=>localRestoreInProgress()||aiUpdateRunning||memoryImportRunning||(!room.unified?.draft&&backgroundWorkPending(apiChatIdOf(room)));
     if(busy()){if(force)throw Error('진행 중인 생성·AI 작업이 끝난 뒤 실행해 주세요.');schedule(room,3000);return false;}
     let cancelledByUser=false;
     if(editRerunRooms.delete(room.chatId))editRerunActive.add(room);
     const job=withRoomExclusive('ai:'+apiChatIdOf(room),async()=>{
       if(busy()||state.currentRoom!==room){if(state.currentRoom===room&&!force)schedule(room,3000);return false;}
       let jobKind=force==='retry'||retrying?room.unified?.failedKind||'':'',jobSourceKey='';const replayEpoch=ExternalReplay.revision(apiChatIdOf(room));
+      let paidLiveCandidate=null;
       quietCheck=true;unifiedStage='확정 대화 다시 확인 중';aiUpdateRunning=true;
       try {
         if(!bridge()?.snapshotRaw)throw Error('인지 저장소가 아직 준비되지 않았습니다.');
@@ -60825,7 +60902,7 @@ async function run(room,force='') {
               const currentCog=await bridge().snapshotRaw(apiChatIdOf(room));
               if(epoch!==localRestoreEpoch||state.currentRoom!==room||ExternalReplay.changed(apiChatIdOf(room),replayEpoch)||settingsAtStart!==JSON.stringify(loadAiSettings())||guideStampAtStart!==draftSettingsStamp()||rawSignature({...room,slots:draftBasisSlots(room.slots)},currentCog,currentPacks)!==signature)throw draftChangedError(['저장된 정리 후보 기준']);
               const draft=seedTrajectoryDraft(room,currentCog,currentPacks,frame,batch,req,paidCandidate,paidRepairs,paidRejections);draft.pendingBatch.repairByKind=copy(paidRepairByKind);
-              if(transientError(error)){draft.pendingBatch.repairTransportFailure=true;draft.pendingBatch.repairTransportRetries=['AI_COOLDOWN','AI_QUEUE_FULL'].includes(error?.code)?0:1;}
+              if(transientError(error)){draft.pendingBatch.repairTransportFailure=true;draft.pendingBatch.repairTransportRetries=['AI_COOLDOWN','AI_QUEUE_FULL','AI_QUEUE_TIMEOUT'].includes(error?.code)?0:1;}
               await persistDraft(room,draft);jobKind='all';
               if(error?.code==='WISH_PERSON_REF')return await runDraftCycle(room,currentCog,frame,list,draft,force);
             }
@@ -60834,6 +60911,7 @@ async function run(room,force='') {
           stageError=error;
         }
         const trajectoryOverflow=trajectoryOverflowFrom(stageError,staged);
+        paidLiveCandidate={cog,packs,frame,batch,request:req,data:paidCandidate,repairAttempts:paidRepairs,repairByKind:paidRepairByKind,rejections:paidRejections,epoch,signature,settingsAtStart,guideStampAtStart};
         if(!trajectoryOverflow){staged.liveTidyPromotion=true;staged.room.unified.retry=null;checkpointLiveBatch(staged,batch);}
         let sourceRecheck;
         try{sourceRecheck=await recheckCleanupSource(room,frame,list,p,mutationMark,!!trajectoryOverflow);}
@@ -60893,11 +60971,12 @@ async function run(room,force='') {
         else if(hasPartialFailure(room.unified)||!automationEnabled(room)||!['memory','observe'].some(kind=>settings(room)[kind+'Enabled']&&hasCatchup(room.unified,kind)))notify(hasPartialFailure(room.unified)?room.unified.status:tidyCompletionText(staged.completed.memory,staged.completed.observe),hasPartialFailure(room.unified)?'warn':'success',4500);return true;
       }catch(e){
         if(state.currentRoom!==room)return false;
+        await retainDeferredLiveCandidate(room,e,paidLiveCandidate,replayEpoch);
         if(e?.wishEditedSource){try{if(await offerEditedSourceRerun(room,force,e.wishEditedSource))return false;}catch(rerunError){e=rerunError;}}
         if(state.currentRoom!==room)return false;
         if(await handleCancelledAttempt(room,e)){cancelledByUser=e?.code==='WISH_USER_ABORT';return false;}
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch)&&!isHistoryReadChanged(e))return false;
-        const serverWait=e?.code==='CRACK_HTTP_BACKOFF',queueWaiting=['AI_COOLDOWN','AI_QUEUE_FULL'].includes(e?.code)||serverWait;
+        const serverWait=e?.code==='CRACK_HTTP_BACKOFF',queueWaiting=['AI_COOLDOWN','AI_QUEUE_FULL','AI_QUEUE_TIMEOUT'].includes(e?.code)||serverWait;
         if(!isHistoryReadChanged(e)&&!serverWait)WLOG.fail('기억·인물 통합 정리',e,{stage:e?.diagnostic?.stage||unifiedStage||'확정 대화 확인',level:queueWaiting?'warn':'error'});
         if(state.currentRoom===room&&room.unified&&!localRestoreInProgress()){
           delete room.unified.partialFailure;
@@ -77466,7 +77545,7 @@ secondaryManage(d){
 repairRecords(d){
       const side=d.draft.side==='before'?'before':'after',rows=[];
       for(const group of d.groups||[])for(const record of group.records||[]){
-        for(const change of [...(record.changes||[]),...(record.threadChanges||[]),...(record.knowledgeChanges||[]),...(record.eventChanges||[]),...(record.promiseChanges||[]).map(item=>({...item,title:item.after.title,before:'누락되어 있던 약속'}))]){
+        for(const change of [...(record.changes||[]),...(record.threadChanges||[]),...(record.knowledgeChanges||[]),...(record.factChanges||[]),...(record.eventChanges||[]),...(record.promiseChanges||[]).map(item=>({...item,title:item.after.title,before:'누락되어 있던 약속'}))]){
           const evidence=change.update?[change.update.evidence,...(change.update.edits||[]).map(edit=>edit.evidence)]:(change.edits||[]).map(edit=>edit.evidence),seen=new Set();
           const original=evidence.filter(e=>e&&!seen.has(e.source_turn_key+'|'+e.role)&&seen.add(e.source_turn_key+'|'+e.role)).map(e=>{
             const source=(record.sourceRows||[]).find(row=>row.key===e.source_turn_key),text=e.role==='USER'?source?.userText:source?.assistantText;
@@ -79735,6 +79814,7 @@ Object.assign(WSUITE.host, {
       state.routeEpoch, localRestoreEpoch, this.refinerTimeline()]);
   },
   refinerGenerating:() => generationPending(getChatIdFromPath()),
+  refinerAutoBusy:() => generationPending(getChatIdFromPath())||aiUpdateRunning||SuiteIntegration.busy||memoryImportRunning||localRestoreInProgress(),
   refinerCleanText(value) {
     return stripSessionSetupBlock(stripOurContextBlock(String(value || '')).text).text
       .replace(/<ooc_lore_context>[\s\S]*?<\/ooc_lore_context>/gi, '')
@@ -80723,6 +80803,7 @@ A correction requires a supported contradiction, a materially relevant persisten
   let debounceTimer = null;
   let baselineFingerprint = '';
   let lastAutoAssistantKey = '';
+  let autoQuietCandidate=null;
   let autoBaselineReady = false;
   let autoPrimeEpoch = 0;
   let autoScanBusy = false;
@@ -81645,7 +81726,7 @@ A correction requires a supported contradiction, a materially relevant persisten
       if(row.fingerprint!==messageFingerprint({id,content:text}))return false;
       // Optional review transport failure does not change the RP. Once it becomes
       // historical, original stable text may enter memory without claiming PASS.
-      return row.status==='settled'||(!isLast&&row.status==='unreviewed');
+      return row.status==='settled'||(!isLast&&['unreviewed','queued'].includes(row.status));
     }
     // Existing historical turns predate this review session. New tail responses
     // must wait for automatic or explicit review, even before its debounce runs.
@@ -83799,7 +83880,7 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
     // Application/readback/site-auth failures and unresolved correction proposals
     // remain blocked. Only a failed optional AI transport is eligible.
     if(/CRACK_AUTH|RESPONSE_READBACK|STALE|WISH_USER_ABORT|ABORTED|REVIEW_OUTPUT|SCHEMA|VALIDATION/i.test(code))return false;
-    if(/^(?:AI_COOLDOWN|AI_QUEUE_FULL|AI_TIMEOUT|AI_NETWORK|AI_RATE_LIMIT)$/.test(code))return true;
+    if(/^(?:AI_COOLDOWN|AI_QUEUE_FULL|AI_QUEUE_TIMEOUT|AI_TIMEOUT|AI_NETWORK|AI_RATE_LIMIT)$/.test(code))return true;
     const status=Number(error?.status||error?.diagnostic?.httpStatus||error?.diagnostic?.status||error?.response?.status||0);
     const message=String(error?.message||'');
     return status===429||status>=500&&status<=599||/Failed to fetch|NetworkError|network error|fetch-error|Resource exhausted|Too Many Requests|\b429\b|AI.{0,20}(?:시간 초과|응답 제한)|요청 시간 초과/i.test(message);
@@ -83863,7 +83944,9 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
       const referenceStarted=Date.now();
       const latest=targetOverride?await findLastAssistant():target;
       const historical=!!latest&&String(latest.id)!==String(target.id);
-      target.refinerHistorical=historical||!!targetOverride;
+      // Only explicit manual review may patch a historical answer. Auto targets
+      // must remain latest at every host beforeWrite check, including after awaits.
+      target.refinerHistorical=!!force&&(historical||!!targetOverride);
       const recent = prepareReviewMessages(await fetchRecentMessages(historical?50:truncationOnly()?Math.min(8,Math.max(4,2*Math.min(2,settings.contextTurns)+2)):Math.max(24,2*settings.contextTurns+8)),target);
       const core = await buildReviewReference(recent,target,{historical});
       assertScope(requestScope);
@@ -83898,6 +83981,15 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
       reviewTiming.inputTokens=response.usage?.inputTokens||0;reviewTiming.outputTokens=response.usage?.outputTokens||0;
       if(/MAX_TOKENS|LENGTH|BUDGET_EXCEEDED|TOKEN_LIMIT|INCOMPLETE/i.test(String(response.finishReason||'')))throw reviewOutputLimitError(response,{maxOutputTokens});
       assertScope(requestScope);
+      if(!force){
+        const latestAutomatic=await findLastAssistant();assertScope(requestScope);
+        if(!latestAutomatic||isPendingResponse(latestAutomatic)||messageFingerprint(latestAutomatic)!==messageFingerprint(target)){
+          const priorBlocked=priorReviewGate&&priorReviewGate.fingerprint===messageFingerprint(target)&&!['queued','unreviewed','settled'].includes(priorReviewGate.status);
+          setReviewGate(target,priorBlocked?priorReviewGate.status:'unreviewed');
+          addProcessHistory('자동 교정 미적용','새 대화가 이어져 이전 응답을 자동으로 바꾸지 않았습니다. 필요하면 해당 응답을 직접 검수할 수 있습니다.',{target});
+          setStatus('새 대화 유지 · 최신 응답 검수 대기');autoCheckQueued=true;return;
+        }
+      }
       // 최신 응답을 검수하는 동안 Crack 네이티브 수정창에서 사용자가 직접 편집했으면
       // 수정 전 원문 기준 제안은 폐기합니다. 과거 응답 수동 검수는 기존 source fingerprint 검증만 사용합니다.
       if(!historical&&!targetOverride){
@@ -84190,6 +84282,13 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
   }
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+  function automaticReviewDelay(target){
+    if(!target||isPendingResponse(target)){autoQuietCandidate=null;return 15000;}
+    const key=chatStateKey()+':'+messageAutoKey(target),now=Date.now();
+    if(!autoQuietCandidate||autoQuietCandidate.key!==key)autoQuietCandidate={key,since:now};
+    if(window.__WISH_RP_MANAGER_AI_BRIDGE__?.automaticReviewBusy?.())return 3000;
+    return Math.max(0,15000-(now-autoQuietCandidate.since));
+  }
   function scheduleAutoCheck(delay=1200) {
     if (!settings.enabled || !autoBaselineReady) return;
     autoCheckQueued=true;
@@ -84207,11 +84306,14 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
         if(!latestKey||latestKey===lastAutoAssistantKey)return;
         if(latest.openingGreeting){lastAutoAssistantKey=latestKey;return;}
         if(isProcessed(latest)){lastAutoAssistantKey=latestKey;return;}
+        const idleDelay=automaticReviewDelay(latest);
+        if(idleDelay){setStatus('자동 교정 · 대화·정리 완료 후 검수 대기');scheduleAutoCheck(idleDelay);return;}
         const target = await waitStableAssistant();
         if(epoch!==autoPrimeEpoch||roomKey!==chatStateKey())return;
         if (!target){retry=++autoCheckWaits<=6;return;}
         const autoKey = messageAutoKey(target);
         if (!autoKey || autoKey === lastAutoAssistantKey) return;
+        const targetDelay=automaticReviewDelay(target);if(targetDelay){scheduleAutoCheck(targetDelay);return;}
         autoCheckWaits=0;
         // 검수 시작 표시는 runRefiner가 실제 대상 검수를 시작할 때만 기록합니다.
         // 대기/진행 중에 발견된 다음 응답은 큐에 남겨 조용해진 뒤에도 확인합니다.
@@ -84227,6 +84329,7 @@ Coverage: ${result.stats.coverageNotes.join(' / ')||'No retrieval limitation det
   }
 
   async function primeBaseline() {
+    autoQuietCandidate=null;
     if(!settings.enabled){autoPrimeEpoch++;autoBaselineReady=true;autoCheckQueued=false;clearTimeout(debounceTimer);debounceTimer=null;return;}
     const epoch = ++autoPrimeEpoch;
     autoBaselineReady = false;
